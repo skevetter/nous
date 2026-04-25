@@ -76,17 +76,9 @@ where
 }
 
 fn default_key_path() -> PathBuf {
-    dirs_next_or_fallback().join("nous").join("db.key")
-}
-
-fn dirs_next_or_fallback() -> PathBuf {
-    std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".config"))
-                .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        })
+    crate::xdg::config_dir()
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .join("db.key")
 }
 
 pub fn resolve_key() -> Result<String> {
