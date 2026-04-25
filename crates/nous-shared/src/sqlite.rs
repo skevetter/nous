@@ -135,3 +135,59 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     s
 }
+
+pub fn rotate_key(db_path: &Path, current_key: &str, new_key: &str) -> Result<()> {
+    let db_str = db_path
+        .to_str()
+        .ok_or_else(|| NousError::Config("non-UTF-8 database path".into()))?;
+
+    let backup_path = db_path.with_extension(format!(
+        "{}.bak",
+        db_path
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("")
+    ));
+
+    // Verify current key works before making any changes
+    {
+        let conn = open_connection(db_str, Some(current_key))?;
+        drop(conn);
+    }
+
+    std::fs::copy(db_path, &backup_path)?;
+
+    let rekey_result = (|| -> Result<()> {
+        let conn = open_connection(db_str, Some(current_key))?;
+        conn.pragma_update(None, "rekey", new_key)?;
+        drop(conn);
+
+        let conn = open_connection(db_str, Some(new_key))?;
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| NousError::Encryption(e.to_string()))?;
+        if integrity != "ok" {
+            return Err(NousError::Encryption(format!(
+                "integrity check failed after rekey: {integrity}"
+            )));
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = rekey_result {
+        std::fs::copy(&backup_path, db_path)?;
+        return Err(e);
+    }
+
+    let key_path = default_key_path();
+    if key_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&key_path) {
+            if contents.trim() == current_key {
+                std::fs::write(&key_path, new_key)?;
+            }
+        }
+    }
+
+    Ok(())
+}
