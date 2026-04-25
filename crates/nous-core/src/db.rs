@@ -1,6 +1,11 @@
 use nous_shared::Result;
+use nous_shared::ids::MemoryId;
 use nous_shared::sqlite::{open_connection, run_migrations};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
+
+use crate::types::{
+    Category, Memory, MemoryPatch, MemoryWithRelations, NewMemory, RelationType, Relationship,
+};
 
 const MIGRATIONS: &[&str] = &[
     // models
@@ -130,6 +135,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag_id)",
     "CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)",
     "CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_unique ON relationships(source_id, target_id, relation_type)",
     "CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory ON memory_chunks(memory_id)",
 ];
 
@@ -147,6 +153,366 @@ impl MemoryDb {
 
     pub fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    pub fn store(&self, memory: &NewMemory) -> Result<MemoryId> {
+        let id = MemoryId::new();
+        let tx = self.conn.unchecked_transaction()?;
+
+        let workspace_id: Option<i64> = if let Some(ref path) = memory.workspace_path {
+            tx.execute(
+                "INSERT OR IGNORE INTO workspaces (path) VALUES (?1)",
+                params![path],
+            )?;
+            Some(tx.query_row(
+                "SELECT id FROM workspaces WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )?)
+        } else {
+            None
+        };
+
+        tx.execute(
+            "INSERT INTO memories (id, title, content, memory_type, source, importance, confidence,
+                workspace_id, session_id, trace_id, agent_id, agent_model, valid_from, archived, category_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                id.to_string(),
+                memory.title,
+                memory.content,
+                memory.memory_type.to_string(),
+                memory.source,
+                memory.importance.to_string(),
+                memory.confidence.to_string(),
+                workspace_id,
+                memory.session_id,
+                memory.trace_id,
+                memory.agent_id,
+                memory.agent_model,
+                memory.valid_from,
+                0,
+                memory.category_id,
+            ],
+        )?;
+
+        for tag_name in &memory.tags {
+            tx.execute(
+                "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+                params![tag_name],
+            )?;
+            let tag_id: i64 = tx.query_row(
+                "SELECT id FROM tags WHERE name = ?1",
+                params![tag_name],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?1, ?2)",
+                params![id.to_string(), tag_id],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn recall(&self, id: &MemoryId) -> Result<Option<MemoryWithRelations>> {
+        let id_str = id.to_string();
+
+        let memory = match self.conn.query_row(
+            "SELECT id, title, content, memory_type, source, importance, confidence,
+                    workspace_id, session_id, trace_id, agent_id, agent_model,
+                    valid_from, valid_until, archived, category_id, created_at, updated_at
+             FROM memories WHERE id = ?1",
+            params![id_str],
+            |row| {
+                Ok(Memory {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    content: row.get(2)?,
+                    memory_type: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    source: row.get(4)?,
+                    importance: row.get::<_, String>(5)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    confidence: row.get::<_, String>(6)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    workspace_id: row.get(7)?,
+                    session_id: row.get(8)?,
+                    trace_id: row.get(9)?,
+                    agent_id: row.get(10)?,
+                    agent_model: row.get(11)?,
+                    valid_from: row.get(12)?,
+                    valid_until: row.get(13)?,
+                    archived: row.get::<_, i64>(14)? != 0,
+                    category_id: row.get(15)?,
+                    created_at: row.get(16)?,
+                    updated_at: row.get(17)?,
+                })
+            },
+        ) {
+            Ok(m) => m,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        self.conn.execute(
+            "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'recall')",
+            params![id_str],
+        )?;
+
+        let tags = self.load_tags(&id_str)?;
+        let relationships = self.load_relationships(&id_str)?;
+        let category = self.load_category(memory.category_id)?;
+        let access_count = self.count_access(&id_str)?;
+
+        Ok(Some(MemoryWithRelations {
+            memory,
+            tags,
+            relationships,
+            category,
+            access_count,
+        }))
+    }
+
+    pub fn update(&self, id: &MemoryId, patch: &MemoryPatch) -> Result<bool> {
+        let id_str = id.to_string();
+        let tx = self.conn.unchecked_transaction()?;
+
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
+            params![id_str],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+
+        let mut sets = vec!["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')".to_owned()];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref title) = patch.title {
+            sets.push(format!("title = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(title.clone()));
+        }
+        if let Some(ref content) = patch.content {
+            sets.push(format!("content = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(content.clone()));
+        }
+        if let Some(ref importance) = patch.importance {
+            sets.push(format!("importance = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(importance.to_string()));
+        }
+        if let Some(ref confidence) = patch.confidence {
+            sets.push(format!("confidence = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(confidence.to_string()));
+        }
+        if let Some(ref valid_until) = patch.valid_until {
+            sets.push(format!("valid_until = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(valid_until.clone()));
+        }
+
+        let idx = param_values.len() + 1;
+        param_values.push(Box::new(id_str.clone()));
+
+        let sql = format!(
+            "UPDATE memories SET {} WHERE id = ?{}",
+            sets.join(", "),
+            idx
+        );
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        tx.execute(&sql, params_ref.as_slice())?;
+
+        if let Some(ref new_tags) = patch.tags {
+            tx.execute(
+                "DELETE FROM memory_tags WHERE memory_id = ?1",
+                params![id_str],
+            )?;
+            for tag_name in new_tags {
+                tx.execute(
+                    "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+                    params![tag_name],
+                )?;
+                let tag_id: i64 = tx.query_row(
+                    "SELECT id FROM tags WHERE name = ?1",
+                    params![tag_name],
+                    |row| row.get(0),
+                )?;
+                tx.execute(
+                    "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?1, ?2)",
+                    params![id_str, tag_id],
+                )?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn forget(&self, id: &MemoryId, hard: bool) -> Result<bool> {
+        let id_str = id.to_string();
+
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
+            params![id_str],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+
+        if hard {
+            self.conn
+                .execute("DELETE FROM memories WHERE id = ?1", params![id_str])?;
+        } else {
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute(
+                "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
+                params![id_str],
+            )?;
+            tx.execute(
+                "DELETE FROM memory_chunks WHERE memory_id = ?1",
+                params![id_str],
+            )?;
+            tx.execute(
+                "UPDATE memories SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1",
+                params![id_str],
+            )?;
+            tx.commit()?;
+        }
+
+        Ok(true)
+    }
+
+    pub fn unarchive(&self, id: &MemoryId) -> Result<bool> {
+        let id_str = id.to_string();
+        let changed = self.conn.execute(
+            "UPDATE memories SET archived = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1 AND archived = 1",
+            params![id_str],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn relate(&self, from: &MemoryId, to: &MemoryId, relation: RelationType) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type)
+             VALUES (?1, ?2, ?3)",
+            params![from.to_string(), to.to_string(), relation.to_string()],
+        )?;
+
+        if relation == RelationType::Supersedes && tx.changes() > 0 {
+            tx.execute(
+                "UPDATE memories SET valid_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1",
+                params![to.to_string()],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn unrelate(&self, from: &MemoryId, to: &MemoryId, relation: RelationType) -> Result<bool> {
+        let changed = self.conn.execute(
+            "DELETE FROM relationships WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
+            params![from.to_string(), to.to_string(), relation.to_string()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn load_tags(&self, memory_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.name FROM tags t
+             JOIN memory_tags mt ON mt.tag_id = t.id
+             WHERE mt.memory_id = ?1
+             ORDER BY t.name",
+        )?;
+        let tags = stmt
+            .query_map(params![memory_id], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(tags)
+    }
+
+    fn load_relationships(&self, memory_id: &str) -> Result<Vec<Relationship>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_id, target_id, relation_type, created_at
+             FROM relationships
+             WHERE source_id = ?1 OR target_id = ?1",
+        )?;
+        let rels = stmt
+            .query_map(params![memory_id], |row| {
+                Ok(Relationship {
+                    id: row.get(0)?,
+                    source_id: row.get(1)?,
+                    target_id: row.get(2)?,
+                    relation_type: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rels)
+    }
+
+    fn load_category(&self, category_id: Option<i64>) -> Result<Option<Category>> {
+        let Some(cat_id) = category_id else {
+            return Ok(None);
+        };
+        match self.conn.query_row(
+            "SELECT id, name, parent_id, source, created_at FROM categories WHERE id = ?1",
+            params![cat_id],
+            |row| {
+                Ok(Category {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    parent_id: row.get(2)?,
+                    source: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    created_at: row.get(4)?,
+                })
+            },
+        ) {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn count_access(&self, memory_id: &str) -> Result<u64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM access_log WHERE memory_id = ?1",
+            params![memory_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
     }
 }
 
