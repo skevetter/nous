@@ -200,6 +200,10 @@ pub struct Model {
     pub name: String,
     pub dimensions: i64,
     pub max_tokens: i64,
+    pub variant: Option<String>,
+    pub chunk_size: i64,
+    pub chunk_overlap: i64,
+    pub active: bool,
     pub created_at: String,
 }
 

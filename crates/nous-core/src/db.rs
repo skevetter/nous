@@ -147,6 +147,7 @@ impl MemoryDb {
     pub fn open(path: &str, key: Option<&str>) -> Result<Self> {
         let conn = open_connection(path, key)?;
         run_migrations(&conn, MIGRATIONS)?;
+        migrate_models_columns(&conn)?;
         seed_categories(&conn)?;
         Ok(Self { conn })
     }
@@ -514,6 +515,39 @@ impl MemoryDb {
         )?;
         Ok(count as u64)
     }
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .any(|r| r.as_deref() == Ok(column))
+}
+
+fn migrate_models_columns(conn: &Connection) -> Result<()> {
+    let alters: &[(&str, &str)] = &[
+        ("variant", "ALTER TABLE models ADD COLUMN variant TEXT"),
+        (
+            "chunk_size",
+            "ALTER TABLE models ADD COLUMN chunk_size INTEGER NOT NULL DEFAULT 512",
+        ),
+        (
+            "chunk_overlap",
+            "ALTER TABLE models ADD COLUMN chunk_overlap INTEGER NOT NULL DEFAULT 64",
+        ),
+        (
+            "active",
+            "ALTER TABLE models ADD COLUMN active INTEGER NOT NULL DEFAULT 0",
+        ),
+    ];
+    for (col, sql) in alters {
+        if !has_column(conn, "models", col) {
+            conn.execute_batch(sql)?;
+        }
+    }
+    Ok(())
 }
 
 fn seed_categories(conn: &Connection) -> Result<()> {
