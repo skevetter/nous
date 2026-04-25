@@ -1703,9 +1703,11 @@ dependencies = [
 name = "nous-shared"
 version = "0.1.0"
 dependencies = [
+ "rand 0.9.4",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
