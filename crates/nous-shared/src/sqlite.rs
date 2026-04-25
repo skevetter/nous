@@ -176,7 +176,11 @@ pub fn rotate_key(db_path: &Path, current_key: &str, new_key: &str) -> Result<()
     })();
 
     if let Err(e) = rekey_result {
-        std::fs::copy(&backup_path, db_path)?;
+        if let Err(restore_err) = std::fs::copy(&backup_path, db_path) {
+            return Err(NousError::Internal(format!(
+                "rekey failed: {e}; backup restore also failed: {restore_err}"
+            )));
+        }
         return Err(e);
     }
 
