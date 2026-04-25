@@ -30,7 +30,7 @@ Phase 5: Integration   (cross-crate, E2E)
 **Implement**: Shared `NousError` enum via `thiserror`. Variants: `Sqlite(rusqlite::Error)`, `Io(std::io::Error)`, `Config(String)`, `Encryption(String)`, `Embedding(String)`. Re-export as `pub type Result<T> = std::result::Result<T, NousError>`.
 
 **TDD sequence**:
-1. **Red**: Write `tests/error_tests.rs` — construct each variant, verify `Display` output contains expected substring, verify `From<rusqlite::Error>` conversion compiles
+1. **Red**: Write `crates/nous-shared/tests/error_tests.rs` — construct each variant, verify `Display` output contains expected substring, verify `From<rusqlite::Error>` conversion compiles
 2. **Green**: Implement `NousError` with `#[derive(thiserror::Error)]`, add `From` impls
 3. **Refactor**: Ensure all variants use `#[from]` where possible, remove manual `From` impls
 
@@ -101,6 +101,8 @@ Phase 5: Integration   (cross-crate, E2E)
 
 **Complexity**: S
 
+**Note — Spec Deviations**: `error.rs` and `MemoryId` are placed in `nous-shared` rather than in `nous-core` as implied by the spec layout. This is intentional: `nous-otlp` depends on `nous-shared` but not `nous-core`, and needs access to `NousError` and `MemoryId`. Placing them in the shared crate avoids a circular or heavyweight dependency.
+
 ---
 
 ## Phase 2: nous-core
@@ -120,7 +122,7 @@ Phase 5: Integration   (cross-crate, E2E)
 
 **Acceptance**:
 - All structs round-trip through `serde_json`
-- Enum variants match the SQL CHECK constraints from the spec
+- Enum variants match the spec field reference (type: decision, convention, bugfix, architecture, fact, observation)
 - Types are importable from `nous_core::types`
 
 **Complexity**: M
@@ -174,7 +176,7 @@ Phase 5: Integration   (cross-crate, E2E)
 **Implement**: `MemoryDb::store(memory: &NewMemory) -> Result<MemoryId>`. `NewMemory` is the input struct (no `id`, `created_at`, `updated_at`). Generates `MemoryId::new()`, inserts into `memories` table. Handles tags: find-or-create in `tags` table, insert into `memory_tags`. Handles workspace: find-or-create by path hash in `workspaces` table. Returns the generated ID. All within a single transaction.
 
 **TDD sequence**:
-1. **Red**: Store a memory with title/content/type, recall by ID, assert all fields match. Store with tags `["rust", "testing"]`, query `memory_tags`, assert 2 rows. Store two memories with same tag, assert tag table has 1 row for that tag. Assert FTS5 trigger fires: `SELECT * FROM memories_fts WHERE memories_fts MATCH 'title_word'` returns the stored memory
+1. **Red**: Store a memory with title/content/type, recall by ID, assert all fields match. Store a memory with ALL optional fields populated (importance, confidence, session_id, trace_id, agent_id, agent_model, valid_from), recall by ID, assert each optional field matches. Store with tags `["rust", "testing"]`, query `memory_tags`, assert 2 rows. Store two memories with same tag, assert tag table has 1 row for that tag. Assert FTS5 trigger fires: `SELECT * FROM memories_fts WHERE memories_fts MATCH 'title_word'` returns the stored memory
 2. **Green**: Implement `store` with `INSERT INTO memories`, tag upsert loop, workspace upsert
 3. **Refactor**: Extract tag upsert into `ensure_tags(conn, tags) -> Result<Vec<i64>>`
 
@@ -182,6 +184,8 @@ Phase 5: Integration   (cross-crate, E2E)
 - Stored memory gets a valid UUID v7 ID
 - Tags are deduplicated across memories
 - FTS5 index is populated via trigger
+- Hash is SHA-256 of the absolute path, truncated to first 32 hex characters
+- If workspace path doesn't match any hash, check aliases arrays before creating a new workspace
 
 **Complexity**: M
 
@@ -376,6 +380,7 @@ Also implement `MockEmbedding` for tests: returns deterministic vectors based on
 - Chunks and embeddings stored atomically
 - Deletion removes both chunks and embeddings
 - Fallback BLOB path works when sqlite-vec is unavailable
+- chunk_id follows format {memory_id}:{chunk_idx} per spec
 
 **Complexity**: M
 
@@ -583,12 +588,12 @@ Also implement `MockEmbedding` for tests: returns deterministic vectors based on
 
 #### Task 2I.1: Encryption Key Management
 
-**Files**: `crates/nous-core/src/db.rs`, `crates/nous-shared/src/sqlite.rs`
+**Files**: `crates/nous-shared/src/sqlite.rs` (or new `crates/nous-shared/src/key.rs`)
 
-**Implement**: Key resolution: (1) `NOUS_DB_KEY` env var, (2) `db_key_file` from config.toml, (3) `~/.config/nous/db.key`. `resolve_key() -> Result<Option<String>>`. On first run with no key source, generate 32-byte random key, write to `~/.config/nous/db.key` with mode 0600. Extend `open_connection` to apply `PRAGMA key = ?` before any other pragma. Detect wrong key: catch `SQLITE_NOTADB` on first query, return `NousError::Encryption("database key is incorrect or database is not encrypted")`.
+**Implement**: Key resolution: (1) `NOUS_DB_KEY` env var, (2) `~/.config/nous/db.key` default path. `resolve_key() -> Result<Option<String>>`. The `db_key_file` config.toml override is deferred to Phase 3 when the config system exists. On first run with no key source, generate 32-byte random key, write to `~/.config/nous/db.key` with mode 0600. Extend `open_connection` to apply `PRAGMA key = ?` before any other pragma. Detect wrong key: catch `SQLITE_NOTADB` on first query, return `NousError::Encryption("database key is incorrect or database is not encrypted")`.
 
 **TDD sequence**:
-1. **Red**: In a temp dir, create an encrypted DB with a known key. Reopen with the same key, assert data readable. Reopen with a wrong key, assert `NousError::Encryption` returned. Set `NOUS_DB_KEY` env var, assert `resolve_key()` returns it. Unset, create a key file, assert `resolve_key()` reads it. No key anywhere + first run: assert key file created at expected path with 0600 permissions
+1. **Red**: In a temp dir, create an encrypted DB with a known key. Reopen with the same key, assert data readable. Reopen with a wrong key, assert `NousError::Encryption` returned. Set `NOUS_DB_KEY` env var, assert `resolve_key()` returns it. Unset env var, create `~/.config/nous/db.key`, assert `resolve_key()` reads it. No key anywhere + first run: assert key file created at `~/.config/nous/db.key` with 0600 permissions
 2. **Green**: Implement key resolution chain. Modify `open_connection` to accept `Option<String>` key. After `PRAGMA key`, execute `SELECT count(*) FROM sqlite_master` as a canary query to detect wrong key
 3. **Refactor**: Extract key file I/O into `KeyManager` struct for testability (inject paths instead of hardcoding)
 
@@ -603,19 +608,19 @@ Also implement `MockEmbedding` for tests: returns deterministic vectors based on
 
 #### Task 2I.2: Key Rotation
 
-**Files**: `crates/nous-core/src/db.rs`
+**Files**: `crates/nous-shared/src/sqlite.rs` (or `crates/nous-shared/src/key.rs`)
 
-**Implement**: `MemoryDb::rotate_key(new_key: &str) -> Result<()>`. Creates a backup of the DB file first (`memory.db.bak`). Opens with current key, executes `PRAGMA rekey = ?` with the new key. Updates the key file if key was sourced from file. Verifies the rotated DB by reopening with the new key and running integrity check.
+**Implement**: `rotate_key(db_path: &Path, current_key: &str, new_key: &str) -> Result<()>`. Applies to BOTH `memory.db` and `otlp.db`. Creates a backup of the DB file first (e.g., `memory.db.bak`, `otlp.db.bak`). Opens with current key, executes `PRAGMA rekey = ?` with the new key. Updates the key file if key was sourced from file. Verifies each rotated DB by reopening with the new key and running integrity check.
 
 **TDD sequence**:
-1. **Red**: Create encrypted DB with key "old". Rotate to "new". Reopen with "new", assert data intact. Reopen with "old", assert `NousError::Encryption`. Assert backup file exists. Attempt rotation with wrong current key, assert error before any modification. Assert `PRAGMA integrity_check` passes after rotation
-2. **Green**: Implement backup via `std::fs::copy`. Open with current key, `PRAGMA rekey`. Close, reopen with new key, `PRAGMA integrity_check`
-3. **Refactor**: Add rollback: if post-rotation verification fails, restore from backup
+1. **Red**: Create two encrypted DBs (memory.db, otlp.db) with key "old". Rotate both to "new". Reopen each with "new", assert data intact. Reopen each with "old", assert `NousError::Encryption`. Assert backup files exist for both. Attempt rotation with wrong current key, assert error before any modification. Assert `PRAGMA integrity_check` passes on both after rotation
+2. **Green**: Implement backup via `std::fs::copy`. For each DB: open with current key, `PRAGMA rekey`. Close, reopen with new key, `PRAGMA integrity_check`
+3. **Refactor**: Add rollback: if post-rotation verification fails on either DB, restore both from backup
 
 **Acceptance**:
-- Backup created before rotation
-- New key works, old key rejected after rotation
-- Integrity check passes post-rotation
+- Backup created before rotation for both memory.db and otlp.db
+- New key works, old key rejected after rotation on both databases
+- Integrity check passes post-rotation on both databases
 
 **Complexity**: M
 
@@ -717,6 +722,7 @@ Parse `Transport` enum: `Stdio`, `Http`. Each subcommand dispatches to the appro
 - All spec config fields are supported
 - Env vars override file values
 - Missing config file is auto-created with defaults
+- When config is loaded, `encryption.db_key_file` is passed to `resolve_key()` as an additional override between `NOUS_DB_KEY` env var and the `~/.config/nous/db.key` default (deferred from Phase 2 Task 2I.1)
 
 **Complexity**: S
 
@@ -729,13 +735,13 @@ Parse `Transport` enum: `Stdio`, `Http`. Each subcommand dispatches to the appro
 **Implement**: `NousServer` struct holding `WriteChannel`, `ReadPool`, `EmbeddingBackend`, `CategoryClassifier`, `Config`. Implements `rmcp::ServerHandler` with tool registration. `NousServer::start(config: Config) -> Result<()>`: opens DB, runs migrations, initializes embedding backend, builds classifier, creates write channel + read pool, registers MCP tools, starts serving on configured transport (stdio or HTTP via streamable-http-server).
 
 **TDD sequence**:
-1. **Red**: Construct `NousServer` with in-memory DB and `MockEmbedding`. Assert it implements `rmcp::ServerHandler`. Call `list_tools()`, assert all expected tool names present (memory_store, memory_recall, memory_search, etc.). Assert tool count matches spec (13 tools)
+1. **Red**: Construct `NousServer` with in-memory DB and `MockEmbedding`. Assert it implements `rmcp::ServerHandler`. Call `list_tools()`, assert all expected tool names present (memory_store, memory_recall, memory_search, memory_context, memory_forget, memory_unarchive, memory_update, memory_relate, memory_unrelate, memory_category_suggest, memory_workspaces, memory_tags, memory_stats, memory_schema, memory_sql). Assert tool count matches spec (15 tools)
 2. **Green**: Implement `NousServer` struct, derive or impl `ServerHandler`, register tools via `rmcp` macros. Stub tool handlers to return `NotImplemented` (filled in Task 3B)
 3. **Refactor**: Group related tools into sub-modules (lifecycle, search, taxonomy, introspection)
 
 **Acceptance**:
 - Server starts without errors on both stdio and HTTP transports
-- All 13 MCP tools from the spec are registered
+- All 15 MCP tools from the spec are registered
 - Server accepts `MockEmbedding` for testing
 
 **Complexity**: M
@@ -788,7 +794,7 @@ Parse `Transport` enum: `Stdio`, `Http`. Each subcommand dispatches to the appro
 
 **Files**: `crates/nous-mcp/src/tools.rs`
 
-**Implement**: `memory_relate`, `memory_unrelate`, `memory_category_suggest`, `memory_workspaces`, `memory_tags`, `memory_stats`, `memory_schema`, `memory_sql`. `memory_sql` validates input: only `SELECT`, `EXPLAIN`, `PRAGMA` (read-only), and read-only `WITH` allowed. Rejects `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `ATTACH`.
+**Implement**: `memory_relate`, `memory_unrelate`, `memory_category_suggest`, `memory_workspaces`, `memory_tags`, `memory_stats`, `memory_schema`, `memory_sql`. `memory_workspaces` lists all workspaces with memory counts; workspaces are auto-created on first `memory_store` for a given path, no explicit creation needed. `memory_tags` lists all tags with usage counts, ordered by frequency. `memory_sql` validates input: only `SELECT`, `EXPLAIN`, `PRAGMA` (read-only), and read-only `WITH` allowed. Rejects `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `ATTACH`.
 
 **TDD sequence**:
 1. **Red**: Store two memories, call `memory_relate` with `supersedes`, assert target's `valid_until` is set. Call `memory_unrelate`, assert relationship removed. Call `memory_category_suggest` with a new category name and memory ID, assert category created and assigned. Call `memory_workspaces`, assert workspace listed with memory count. Call `memory_tags`, assert tags listed with usage counts. Call `memory_stats`, assert counts are correct. Call `memory_schema`, assert returns SQL text. Call `memory_sql` with `SELECT count(*) FROM memories`, assert returns count. Call `memory_sql` with `DELETE FROM memories`, assert rejected
@@ -810,7 +816,7 @@ Parse `Transport` enum: `Stdio`, `Http`. Each subcommand dispatches to the appro
 
 **Implement**: `re-embed`, `re-classify`, `category list/add`, `export`, `import`, `rotate-key`, `status`. These run as one-shot CLI commands (not MCP tools).
 
-`re-embed`: Download new model, register + activate in model registry, drop + recreate vec table, delete all chunks, recompute category embeddings, walk all non-archived memories, chunk + embed + store. Report summary.
+`re-embed`: Download new model, register + activate in model registry, update `[embedding]` section in `~/.config/nous/config.toml` with new model and variant, drop + recreate vec table, delete all chunks, recompute category embeddings, walk all non-archived memories, chunk + embed + store. Report summary.
 
 `export`: Serialize all memories (with tags, relationships, categories) as JSON to stdout or file.
 
