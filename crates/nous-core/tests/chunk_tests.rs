@@ -150,3 +150,28 @@ fn chunk_indices_are_sequential() {
         assert_eq!(chunk.idx, i);
     }
 }
+
+#[test]
+#[should_panic(expected = "chunk_size must be at least 1")]
+fn chunk_size_zero_panics() {
+    Chunker::new(0, 0);
+}
+
+#[test]
+#[should_panic(expected = "chunk_overlap")]
+fn overlap_equals_chunk_size_panics() {
+    Chunker::new(10, 10);
+}
+
+#[test]
+#[should_panic(expected = "chunk_overlap")]
+fn overlap_exceeds_chunk_size_panics() {
+    Chunker::new(5, 10);
+}
+
+#[test]
+fn whitespace_only_returns_empty_vec() {
+    let chunker = Chunker::new(100, 10);
+    let chunks = chunker.chunk("   \t\n  ");
+    assert!(chunks.is_empty());
+}

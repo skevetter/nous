@@ -1,3 +1,6 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Chunk {
     pub idx: usize,
     pub start_char: usize,
@@ -5,6 +8,7 @@ pub struct Chunk {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Chunker {
     pub chunk_size: usize,
     pub chunk_overlap: usize,
@@ -12,7 +16,15 @@ pub struct Chunker {
 }
 
 impl Chunker {
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0 or `chunk_overlap` >= `chunk_size`.
     pub fn new(chunk_size: usize, chunk_overlap: usize) -> Self {
+        assert!(chunk_size >= 1, "chunk_size must be at least 1");
+        assert!(
+            chunk_overlap < chunk_size,
+            "chunk_overlap ({chunk_overlap}) must be less than chunk_size ({chunk_size})"
+        );
         Self {
             chunk_size,
             chunk_overlap,
