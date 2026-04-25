@@ -392,6 +392,49 @@ fn category_tree_roundtrip_json() {
 }
 
 #[test]
+fn new_memory_roundtrip_json() {
+    let nm = NewMemory {
+        title: "use uv for packages".into(),
+        content: "always use uv, not pip".into(),
+        memory_type: MemoryType::Convention,
+        source: Some("agent".into()),
+        importance: Importance::High,
+        confidence: Confidence::Moderate,
+        tags: vec!["python".into(), "tooling".into()],
+        workspace_path: Some("/home/user/project".into()),
+        session_id: Some("sess-1".into()),
+        trace_id: None,
+        agent_id: Some("claude".into()),
+        agent_model: Some("opus".into()),
+        valid_from: Some("2025-01-01".into()),
+        category_id: Some(5),
+    };
+    let json = serde_json::to_string(&nm).unwrap();
+    let back: NewMemory = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, nm);
+}
+
+#[test]
+fn search_filters_roundtrip_json() {
+    let sf = SearchFilters {
+        memory_type: Some(MemoryType::Decision),
+        category_id: Some(3),
+        workspace_id: Some(1),
+        importance: Some(Importance::High),
+        confidence: Some(Confidence::Low),
+        tags: Some(vec!["rust".into()]),
+        archived: Some(false),
+        since: Some("2025-01-01".into()),
+        until: Some("2025-12-31".into()),
+        valid_only: Some(true),
+        limit: Some(10),
+    };
+    let json = serde_json::to_string(&sf).unwrap();
+    let back: SearchFilters = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, sf);
+}
+
+#[test]
 fn enum_serde_lowercase() {
     let val = serde_json::to_value(MemoryType::Bugfix).unwrap();
     assert_eq!(val, "bugfix");

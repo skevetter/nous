@@ -27,6 +27,7 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         UNIQUE(name, parent_id)
     )",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name_root ON categories(name) WHERE parent_id IS NULL",
     // memories
     "CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,

@@ -190,18 +190,20 @@ fn seed_categories_parent_links_correct() {
 
 #[test]
 fn seed_categories_idempotent() {
-    let db = open_test_db();
-    let conn = db.connection();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.db");
+    let path_str = path.to_str().unwrap();
 
-    let count_before: i64 = conn
+    let db = MemoryDb::open(path_str, None).unwrap();
+    let count_before: i64 = db
+        .connection()
         .query_row("SELECT count(*) FROM categories", [], |row| row.get(0))
         .unwrap();
-
     drop(db);
-    let db2 = open_test_db();
-    let conn2 = db2.connection();
 
-    let count_after: i64 = conn2
+    let db2 = MemoryDb::open(path_str, None).unwrap();
+    let count_after: i64 = db2
+        .connection()
         .query_row("SELECT count(*) FROM categories", [], |row| row.get(0))
         .unwrap();
 

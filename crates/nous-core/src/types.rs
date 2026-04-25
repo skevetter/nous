@@ -214,7 +214,7 @@ pub struct MemoryChunk {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewMemory {
     pub title: String,
     pub content: String,
@@ -261,7 +261,7 @@ pub struct SearchResult {
     pub rank: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchFilters {
     pub memory_type: Option<MemoryType>,
     pub category_id: Option<i64>,
