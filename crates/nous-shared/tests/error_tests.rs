@@ -40,6 +40,16 @@ fn encryption_variant_display() {
 }
 
 #[test]
+fn internal_variant_display() {
+    let err = NousError::Internal("task panicked".into());
+    let msg = err.to_string();
+    assert!(
+        msg.contains("task panicked"),
+        "expected 'task panicked' in: {msg}"
+    );
+}
+
+#[test]
 fn embedding_variant_display() {
     let err = NousError::Embedding("model not found".into());
     let msg = err.to_string();
