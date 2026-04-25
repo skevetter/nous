@@ -81,7 +81,10 @@ async fn spawn_blocking_returns_value() {
 #[tokio::test]
 async fn spawn_blocking_propagates_panic() {
     let result: Result<()> = sqlite::spawn_blocking(|| panic!("boom")).await;
-    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        nous_shared::NousError::Internal(_)
+    ));
 }
 
 #[test]
