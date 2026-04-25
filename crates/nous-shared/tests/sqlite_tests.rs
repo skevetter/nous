@@ -91,7 +91,7 @@ fn resolve_key_from_env_var() {
         std::env::set_var("NOUS_DB_KEY", "env-secret-key");
     }
     let key = sqlite::resolve_key().unwrap();
-    assert_eq!(key, Some("env-secret-key".to_string()));
+    assert_eq!(key, "env-secret-key");
     unsafe {
         std::env::remove_var("NOUS_DB_KEY");
     }
@@ -109,7 +109,7 @@ fn resolve_key_from_file() {
     std::fs::write(&key_path, "  file-secret-key  \n").unwrap();
 
     let key = sqlite::resolve_key_with_path(&key_path).unwrap();
-    assert_eq!(key, Some("file-secret-key".to_string()));
+    assert_eq!(key, "file-secret-key");
 }
 
 #[test]
@@ -123,9 +123,7 @@ fn resolve_key_auto_generates() {
     let key_path = tmp.path().join("nous").join("db.key");
 
     let key = sqlite::resolve_key_with_path(&key_path).unwrap();
-    assert!(key.is_some());
-    let key_val = key.unwrap();
-    assert_eq!(key_val.len(), 64); // 32 bytes hex = 64 chars
+    assert_eq!(key.len(), 64); // 32 bytes hex = 64 chars
 
     #[cfg(unix)]
     {
@@ -135,7 +133,7 @@ fn resolve_key_auto_generates() {
     }
 
     let key2 = sqlite::resolve_key_with_path(&key_path).unwrap();
-    assert_eq!(key2, Some(key_val));
+    assert_eq!(key2, key);
 }
 
 #[test]

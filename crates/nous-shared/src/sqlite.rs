@@ -72,7 +72,7 @@ where
 {
     tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| NousError::Config(format!("task panicked: {e}")))?
+        .map_err(|e| NousError::Internal(format!("task panicked: {e}")))?
 }
 
 fn default_key_path() -> PathBuf {
@@ -89,19 +89,19 @@ fn dirs_next_or_fallback() -> PathBuf {
         })
 }
 
-pub fn resolve_key() -> Result<Option<String>> {
+pub fn resolve_key() -> Result<String> {
     if let Ok(val) = std::env::var("NOUS_DB_KEY") {
         if !val.is_empty() {
-            return Ok(Some(val));
+            return Ok(val);
         }
     }
     resolve_key_with_path(&default_key_path())
 }
 
-pub fn resolve_key_with_path(key_path: &Path) -> Result<Option<String>> {
+pub fn resolve_key_with_path(key_path: &Path) -> Result<String> {
     if let Ok(val) = std::env::var("NOUS_DB_KEY") {
         if !val.is_empty() {
-            return Ok(Some(val));
+            return Ok(val);
         }
     }
 
@@ -109,7 +109,7 @@ pub fn resolve_key_with_path(key_path: &Path) -> Result<Option<String>> {
         let contents = std::fs::read_to_string(key_path)?;
         let trimmed = contents.trim().to_string();
         if !trimmed.is_empty() {
-            return Ok(Some(trimmed));
+            return Ok(trimmed);
         }
     }
 
@@ -126,7 +126,7 @@ pub fn resolve_key_with_path(key_path: &Path) -> Result<Option<String>> {
         std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600))?;
     }
 
-    Ok(Some(key))
+    Ok(key)
 }
 
 fn generate_hex_key() -> String {

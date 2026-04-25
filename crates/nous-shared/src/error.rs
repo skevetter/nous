@@ -12,6 +12,9 @@ pub enum NousError {
     #[error("encryption error: {0}")]
     Encryption(String),
 
+    #[error("internal error: {0}")]
+    Internal(String),
+
     #[error("embedding error: {0}")]
     Embedding(String),
 }
