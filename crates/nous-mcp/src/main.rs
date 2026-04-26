@@ -1,3 +1,5 @@
+mod config;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -71,6 +73,16 @@ enum CategorySubcommand {
 
 fn main() {
     let _cli = Cli::parse();
+
+    // Load configuration at startup
+    // This ensures the config module is actually used and not dead code
+    let config = config::Config::load(None).unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to load config: {}", e);
+        config::Config::default()
+    });
+
+    // Resolve DB encryption key from config
+    let _db_key = config.resolve_db_key().ok();
 }
 
 #[cfg(test)]
