@@ -163,39 +163,46 @@ impl MemoryDb {
         filters: &SearchFilters,
     ) -> Result<Vec<SearchResult>> {
         let limit = filters.limit.unwrap_or(20);
+        let knn_k = (limit * 5) as i64;
+
+        let query_blob: Vec<u8> = query_embedding
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
 
         let mut stmt = self.connection().prepare(
-            "SELECT mc.memory_id, mc.id AS chunk_id, me.embedding
-             FROM memory_chunks mc
-             JOIN memory_embeddings me ON me.chunk_id = mc.id",
+            "SELECT chunk_id, distance
+             FROM memory_embeddings
+             WHERE embedding MATCH ?1 AND k = ?2
+             ORDER BY distance",
         )?;
 
         let chunk_rows = stmt
-            .query_map([], |row| {
-                let memory_id: String = row.get(0)?;
-                let chunk_id: String = row.get(1)?;
-                let embedding_blob: Vec<u8> = row.get(2)?;
-                Ok((memory_id, chunk_id, embedding_blob))
+            .query_map(params![query_blob, knn_k], |row| {
+                let chunk_id: String = row.get(0)?;
+                let distance: f64 = row.get(1)?;
+                Ok((chunk_id, distance))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let mut best_scores: HashMap<String, f64> = HashMap::new();
-        for (memory_id, _chunk_id, blob) in &chunk_rows {
-            let embedding = blob_to_f32(blob);
-            let similarity = dot_product(query_embedding, &embedding);
-            let entry = best_scores
-                .entry(memory_id.clone())
-                .or_insert(f64::NEG_INFINITY);
-            if similarity > *entry {
-                *entry = similarity;
+        let mut best_distances: HashMap<String, f64> = HashMap::new();
+        for (chunk_id, distance) in &chunk_rows {
+            let memory_id: String = self.connection().query_row(
+                "SELECT memory_id FROM memory_chunks WHERE id = ?1",
+                params![chunk_id],
+                |row| row.get(0),
+            )?;
+            let entry = best_distances.entry(memory_id).or_insert(f64::INFINITY);
+            if *distance < *entry {
+                *entry = *distance;
             }
         }
 
-        let mut scored: Vec<(String, f64)> = best_scores.into_iter().collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut scored: Vec<(String, f64)> = best_distances.into_iter().collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut results = Vec::new();
-        for (memory_id, score) in scored {
+        for (memory_id, distance) in scored {
             if results.len() >= limit {
                 break;
             }
@@ -210,7 +217,7 @@ impl MemoryDb {
             }
 
             let tags = load_tags_for(self.connection(), &memory_id)?;
-            let rank = score * importance_weight(&memory.importance);
+            let rank = (1.0 / (1.0 + distance)) * importance_weight(&memory.importance);
             results.push(SearchResult { memory, tags, rank });
         }
 
@@ -495,17 +502,4 @@ impl MemoryDb {
         }
         Ok(())
     }
-}
-
-fn blob_to_f32(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
-
-fn dot_product(a: &[f32], b: &[f32]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x as f64) * (*y as f64))
-        .sum()
 }

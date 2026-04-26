@@ -37,9 +37,11 @@ fn make_chunks(n: usize) -> Vec<Chunk> {
         .collect()
 }
 
-fn make_embeddings(n: usize, dims: usize) -> Vec<Vec<f32>> {
+const VEC_DIMS: usize = 384;
+
+fn make_embeddings(n: usize) -> Vec<Vec<f32>> {
     (0..n)
-        .map(|i| (0..dims).map(|d| (i * dims + d) as f32).collect())
+        .map(|i| (0..VEC_DIMS).map(|d| (i * VEC_DIMS + d) as f32).collect())
         .collect()
 }
 
@@ -49,7 +51,7 @@ fn store_chunks_inserts_correct_rows() {
     let db = open_test_db();
     let memory_id = db.store(&minimal_memory()).unwrap();
     let chunks = make_chunks(3);
-    let embeddings = make_embeddings(3, 4);
+    let embeddings = make_embeddings(3);
 
     db.store_chunks(&memory_id, &chunks, &embeddings).unwrap();
 
@@ -74,29 +76,27 @@ fn store_chunks_inserts_correct_rows() {
     }
 }
 
-// 2. Assert memory_embeddings has 3 rows with correct chunk_ids
+// 2. Assert memory_embeddings has rows for each chunk_id via point lookup
 #[test]
 fn store_chunks_inserts_embeddings() {
     let db = open_test_db();
     let memory_id = db.store(&minimal_memory()).unwrap();
     let chunks = make_chunks(3);
-    let embeddings = make_embeddings(3, 4);
+    let embeddings = make_embeddings(3);
 
     db.store_chunks(&memory_id, &chunks, &embeddings).unwrap();
 
-    let mut stmt = db
-        .connection()
-        .prepare("SELECT chunk_id FROM memory_embeddings ORDER BY chunk_id")
-        .unwrap();
-    let chunk_ids: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-
-    assert_eq!(chunk_ids.len(), 3);
-    for (i, chunk_id) in chunk_ids.iter().enumerate().take(3) {
-        assert_eq!(*chunk_id, format!("{}:{}", memory_id, i));
+    for i in 0..3 {
+        let chunk_id = format!("{}:{}", memory_id, i);
+        let exists: bool = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM memory_embeddings WHERE chunk_id = ?1",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists, "embedding missing for chunk {chunk_id}");
     }
 }
 
@@ -106,7 +106,7 @@ fn delete_chunks_removes_all() {
     let db = open_test_db();
     let memory_id = db.store(&minimal_memory()).unwrap();
     let chunks = make_chunks(3);
-    let embeddings = make_embeddings(3, 4);
+    let embeddings = make_embeddings(3);
 
     db.store_chunks(&memory_id, &chunks, &embeddings).unwrap();
     db.delete_chunks(&memory_id).unwrap();
@@ -121,15 +121,18 @@ fn delete_chunks_removes_all() {
         .unwrap();
     assert_eq!(chunk_count, 0);
 
-    let emb_count: i64 = db
-        .connection()
-        .query_row(
-            "SELECT COUNT(*) FROM memory_embeddings WHERE chunk_id LIKE ?1",
-            params![format!("{}:%", memory_id)],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(emb_count, 0);
+    for i in 0..3 {
+        let chunk_id = format!("{}:{}", memory_id, i);
+        let exists: bool = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM memory_embeddings WHERE chunk_id = ?1",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!exists, "embedding for {chunk_id} should be deleted");
+    }
 }
 
 // 4. Store chunks for two memories, delete one, assert other's chunks intact
@@ -142,7 +145,7 @@ fn delete_chunks_isolated_per_memory() {
     let id2 = db.store(&mem2).unwrap();
 
     let chunks = make_chunks(2);
-    let embeddings = make_embeddings(2, 4);
+    let embeddings = make_embeddings(2);
 
     db.store_chunks(&id1, &chunks, &embeddings).unwrap();
     db.store_chunks(&id2, &chunks, &embeddings).unwrap();
@@ -169,15 +172,18 @@ fn delete_chunks_isolated_per_memory() {
         .unwrap();
     assert_eq!(count2, 2);
 
-    let emb_count2: i64 = db
-        .connection()
-        .query_row(
-            "SELECT COUNT(*) FROM memory_embeddings WHERE chunk_id LIKE ?1",
-            params![format!("{}:%", id2)],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(emb_count2, 2);
+    for i in 0..2 {
+        let chunk_id = format!("{}:{}", id2, i);
+        let exists: bool = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM memory_embeddings WHERE chunk_id = ?1",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists, "embedding for {chunk_id} should still exist");
+    }
 }
 
 // 5. Embedding BLOB round-trips correctly
@@ -186,7 +192,11 @@ fn embedding_blob_roundtrips() {
     let db = open_test_db();
     let memory_id = db.store(&minimal_memory()).unwrap();
     let chunks = make_chunks(1);
-    let original: Vec<f32> = vec![1.0, 2.5, -3.15, 0.0, f32::MAX, f32::MIN];
+    let mut original: Vec<f32> = (0..VEC_DIMS).map(|i| (i as f32) * 0.01).collect();
+    original[0] = 1.0;
+    original[1] = 2.5;
+    original[2] = -3.15;
+    original[3] = 0.0;
     let embeddings = vec![original.clone()];
 
     db.store_chunks(&memory_id, &chunks, &embeddings).unwrap();

@@ -448,7 +448,19 @@ pub fn run_re_embed(
     db.activate_model(model_id)?;
 
     let conn = db.connection();
-    conn.execute("DELETE FROM memory_embeddings", [])?;
+    {
+        let chunk_ids: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM memory_chunks")?;
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for chunk_id in &chunk_ids {
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE chunk_id = ?1",
+                rusqlite::params![chunk_id],
+            )?;
+        }
+    }
     conn.execute("DELETE FROM memory_chunks", [])?;
 
     let _classifier = CategoryClassifier::new(&db, embedding)?;
@@ -914,7 +926,22 @@ mod tests {
             .unwrap();
         assert!(before > 0);
 
-        conn.execute("DELETE FROM memory_embeddings", []).unwrap();
+        {
+            let chunk_ids: Vec<String> = {
+                let mut stmt = conn.prepare("SELECT id FROM memory_chunks").unwrap();
+                stmt.query_map([], |row| row.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap()
+            };
+            for chunk_id in &chunk_ids {
+                conn.execute(
+                    "DELETE FROM memory_embeddings WHERE chunk_id = ?1",
+                    rusqlite::params![chunk_id],
+                )
+                .unwrap();
+            }
+        }
         conn.execute("DELETE FROM memory_chunks", []).unwrap();
 
         let after_delete: i64 = conn
