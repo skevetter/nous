@@ -6,6 +6,54 @@ use rusqlite::params;
 use crate::db::MemoryDb;
 use crate::types::{ContextEntry, Importance, Memory, SearchFilters, SearchMode, SearchResult};
 
+fn now_iso8601() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+    let h = day_secs / 3600;
+    let m = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+
+    let mut y = 1970i64;
+    let mut remaining = days as i64;
+    loop {
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let year_days: i64 = if leap { 366 } else { 365 };
+        if remaining < year_days {
+            break;
+        }
+        remaining -= year_days;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days: [i64; 12] = if leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    let mut mo = 0usize;
+    for (i, &md) in month_days.iter().enumerate() {
+        if remaining < md {
+            mo = i;
+            break;
+        }
+        remaining -= md;
+    }
+    let d = remaining + 1;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
+        y,
+        mo + 1,
+        d,
+        h,
+        m,
+        s
+    )
+}
+
 fn importance_weight(importance: &Importance) -> f64 {
     match importance {
         Importance::High => 3.0,
@@ -57,7 +105,11 @@ fn load_tags_for(conn: &rusqlite::Connection, memory_id: &str) -> Result<Vec<Str
 }
 
 impl MemoryDb {
-    pub fn search_fts(&self, query: &str, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
+    pub(crate) fn search_fts(
+        &self,
+        query: &str,
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>> {
         let mut conditions = vec!["memories_fts MATCH ?1".to_owned()];
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(query.to_owned())];
@@ -105,7 +157,7 @@ impl MemoryDb {
         Ok(search_results)
     }
 
-    pub fn search_semantic(
+    pub(crate) fn search_semantic(
         &self,
         query_embedding: &[f32],
         filters: &SearchFilters,
@@ -223,6 +275,13 @@ impl MemoryDb {
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        for entry in &entries {
+            self.connection().execute(
+                "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'context')",
+                params![entry.id],
+            )?;
+        }
 
         Ok(entries)
     }
@@ -363,7 +422,10 @@ impl MemoryDb {
         if filters.valid_only == Some(true) {
             if let Some(ref valid_until) = memory.valid_until {
                 if !valid_until.is_empty() {
-                    return Ok(false);
+                    let now = now_iso8601();
+                    if *valid_until < now {
+                        return Ok(false);
+                    }
                 }
             }
         }

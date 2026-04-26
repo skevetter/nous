@@ -87,7 +87,9 @@ fn fts_search_ranks_matching_memory_first() {
         .unwrap();
 
     let filters = SearchFilters::default();
-    let results = db.search_fts("xylophone", &filters).unwrap();
+    let results = db
+        .search("xylophone", &[], &filters, SearchMode::Fts)
+        .unwrap();
 
     assert!(!results.is_empty());
     assert!(results[0].memory.title.contains("beta"));
@@ -111,7 +113,9 @@ fn fts_search_filters_by_memory_type() {
         memory_type: Some(MemoryType::Bugfix),
         ..SearchFilters::default()
     };
-    let results = db.search_fts("ownership", &filters).unwrap();
+    let results = db
+        .search("ownership", &[], &filters, SearchMode::Fts)
+        .unwrap();
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].memory.memory_type, MemoryType::Bugfix);
@@ -133,7 +137,9 @@ fn fts_search_filters_by_tags() {
         tags: Some(vec!["k8s".into()]),
         ..SearchFilters::default()
     };
-    let results = db.search_fts("kubernetes", &filters).unwrap();
+    let results = db
+        .search("kubernetes", &[], &filters, SearchMode::Fts)
+        .unwrap();
 
     assert_eq!(results.len(), 1);
     assert!(results[0].memory.title.contains("tagged"));
@@ -160,7 +166,9 @@ fn fts_search_valid_only_excludes_expired() {
         valid_only: Some(true),
         ..SearchFilters::default()
     };
-    let results = db.search_fts("database", &filters).unwrap();
+    let results = db
+        .search("database", &[], &filters, SearchMode::Fts)
+        .unwrap();
 
     assert_eq!(results.len(), 1);
     assert!(results[0].memory.title.contains("current"));
@@ -208,7 +216,12 @@ fn semantic_search_ranks_closest_first() {
 
     let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
     let results = db
-        .search_semantic(&query_emb, &SearchFilters::default())
+        .search(
+            "",
+            &query_emb,
+            &SearchFilters::default(),
+            SearchMode::Semantic,
+        )
         .unwrap();
 
     assert!(results.len() >= 2);
@@ -262,7 +275,12 @@ fn semantic_search_deduplicates_multi_chunk_memory() {
 
     let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
     let results = db
-        .search_semantic(&query_emb, &SearchFilters::default())
+        .search(
+            "",
+            &query_emb,
+            &SearchFilters::default(),
+            SearchMode::Semantic,
+        )
         .unwrap();
 
     let matching: Vec<_> = results
