@@ -15,16 +15,14 @@ use crate::tools::*;
 
 pub struct NousServer {
     pub write_channel: WriteChannel,
-    #[allow(dead_code)]
-    write_handle: tokio::task::JoinHandle<()>,
+    _write_handle: tokio::task::JoinHandle<()>,
     pub read_pool: ReadPool,
     pub embedding: Arc<dyn EmbeddingBackend>,
     pub classifier: CategoryClassifier,
     pub chunker: Chunker,
     pub config: Config,
     pub db_path: String,
-    #[allow(dead_code)]
-    tool_router: ToolRouter<Self>,
+    _tool_router: ToolRouter<Self>,
 }
 
 impl NousServer {
@@ -42,14 +40,14 @@ impl NousServer {
 
         Ok(Self {
             write_channel,
-            write_handle,
+            _write_handle: write_handle,
             read_pool,
             embedding,
             classifier,
             chunker,
             config,
             db_path: db_path.to_owned(),
-            tool_router: Self::tool_router(),
+            _tool_router: Self::tool_router(),
         })
     }
 }
@@ -154,17 +152,17 @@ impl NousServer {
     )]
     async fn memory_workspaces(
         &self,
-        _params: Parameters<MemoryWorkspacesParams>,
+        params: Parameters<MemoryWorkspacesParams>,
     ) -> CallToolResult {
-        handle_workspaces(&self.read_pool).await
+        handle_workspaces(&self.read_pool, params.0.source).await
     }
 
     #[tool(
         name = "memory_tags",
         description = "List all tags with usage counts ordered by frequency"
     )]
-    async fn memory_tags(&self, _params: Parameters<MemoryTagsParams>) -> CallToolResult {
-        handle_tags(&self.read_pool).await
+    async fn memory_tags(&self, params: Parameters<MemoryTagsParams>) -> CallToolResult {
+        handle_tags(&self.read_pool, params.0.prefix).await
     }
 
     #[tool(
@@ -1043,7 +1041,7 @@ mod tests {
         store_test_memory_simple(&server, "WS memory 2", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let result = handle_workspaces(&server.read_pool).await;
+        let result = handle_workspaces(&server.read_pool, None).await;
         assert!(is_success(&result));
         let json = extract_json(&result);
         let workspaces = json["workspaces"].as_array().unwrap();
@@ -1064,7 +1062,7 @@ mod tests {
         store_test_memory_simple(&server, "Tagged 2", vec!["alpha".into(), "gamma".into()]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let result = handle_tags(&server.read_pool).await;
+        let result = handle_tags(&server.read_pool, None).await;
         assert!(is_success(&result));
         let json = extract_json(&result);
         let tags = json["tags"].as_array().unwrap();
@@ -1610,6 +1608,114 @@ mod tests {
                 .unwrap()
                 .contains("high importance")
         );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn workspaces_filter_by_source_returns_matching() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "ws-a mem",
+            "content a",
+            "fact",
+            None,
+            Some("/tmp/test-ws-a"),
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "ws-b mem",
+            "content b",
+            "fact",
+            None,
+            Some("/tmp/other-workspace"),
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_workspaces(&server.read_pool, Some("test-ws".into())).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let workspaces = json["workspaces"].as_array().unwrap();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0]["path"], "/tmp/test-ws-a");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn workspaces_filter_none_returns_all() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "ws-a mem",
+            "content a",
+            "fact",
+            None,
+            Some("/tmp/test-ws-a"),
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "ws-b mem",
+            "content b",
+            "fact",
+            None,
+            Some("/tmp/other-workspace"),
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_workspaces(&server.read_pool, None).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let workspaces = json["workspaces"].as_array().unwrap();
+        assert_eq!(workspaces.len(), 2);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn tags_filter_by_prefix_returns_matching() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory_simple(&server, "T1", vec!["bug-123".into(), "bug-456".into()]).await;
+        store_test_memory_simple(&server, "T2", vec!["feature-x".into()]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_tags(&server.read_pool, Some("bug".into())).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let tags = json["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(
+            tags.iter()
+                .all(|t| t["tag"].as_str().unwrap().starts_with("bug"))
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn tags_filter_none_returns_all() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory_simple(&server, "T1", vec!["bug-123".into(), "feature-x".into()]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_tags(&server.read_pool, None).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let tags = json["tags"].as_array().unwrap();
+        assert!(tags.len() >= 2);
 
         let _ = std::fs::remove_file(&db_path);
     }
