@@ -81,7 +81,7 @@ fn main() {
     let cli = Cli::parse();
 
     let config = config::Config::load(None).unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to load config: {}", e);
+        eprintln!("Warning: Failed to load config: {e}");
         config::Config::default()
     });
 
