@@ -124,8 +124,6 @@ impl OnnxBackendBuilder {
             ModelArch::Decoder
         };
 
-        let hidden_states_idx = find_hidden_states_output(&session)?;
-
         let pad_direction = match arch {
             ModelArch::Encoder => PaddingDirection::Right,
             ModelArch::Decoder => PaddingDirection::Left,
@@ -135,8 +133,6 @@ impl OnnxBackendBuilder {
             direction: pad_direction,
             ..Default::default()
         }));
-
-        // TODO: register/activate model in db at startup
 
         Ok(OnnxBackend {
             model_id: model_repo,
