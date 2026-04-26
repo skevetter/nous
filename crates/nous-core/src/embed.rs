@@ -92,7 +92,8 @@ impl OnnxBackendBuilder {
             .commit_from_file(&model_path)
             .map_err(|e| NousError::Embedding(format!("load ONNX model: {e}")))?;
 
-        let dimensions = detect_dimensions(&session, &model_path)?;
+        let hidden_states_idx = find_hidden_states_output(&session)?;
+        let dimensions = detect_dimensions(&session, &model_path, hidden_states_idx)?;
 
         let needs_token_type_ids = session
             .inputs()
@@ -123,8 +124,6 @@ impl OnnxBackendBuilder {
             ModelArch::Decoder
         };
 
-        let hidden_states_idx = find_hidden_states_output(&session)?;
-
         let pad_direction = match arch {
             ModelArch::Encoder => PaddingDirection::Right,
             ModelArch::Decoder => PaddingDirection::Left,
@@ -134,8 +133,6 @@ impl OnnxBackendBuilder {
             direction: pad_direction,
             ..Default::default()
         }));
-
-        // TODO: register/activate model in db at startup
 
         Ok(OnnxBackend {
             model_id: model_repo,
@@ -164,9 +161,13 @@ fn detect_max_tokens(tokenizer_path: &Path) -> nous_shared::Result<usize> {
         .unwrap_or(8192))
 }
 
-fn detect_dimensions(session: &Session, model_path: &Path) -> nous_shared::Result<usize> {
+fn detect_dimensions(
+    session: &Session,
+    model_path: &Path,
+    output_idx: usize,
+) -> nous_shared::Result<usize> {
     let outputs = session.outputs();
-    if let Some(output) = outputs.first()
+    if let Some(output) = outputs.get(output_idx)
         && let ort::value::ValueType::Tensor { shape, .. } = output.dtype()
         && let Some(&dim) = shape.last()
         && dim > 0

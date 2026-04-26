@@ -22,6 +22,7 @@ fn register_model_defaults_inactive() {
     assert_eq!(model.name, "all-MiniLM-L6-v2");
     assert_eq!(model.variant.as_deref(), Some("fp16"));
     assert_eq!(model.dimensions, 384);
+    assert_eq!(model.max_tokens, 256);
     assert_eq!(model.chunk_size, 512);
     assert_eq!(model.chunk_overlap, 64);
 }
