@@ -442,6 +442,7 @@ pub fn run_re_embed(
         embedding.model_id(),
         None,
         embedding.dimensions() as i64,
+        embedding.max_tokens() as i64,
         chunker.chunk_size as i64,
         chunker.chunk_overlap as i64,
     )?;
