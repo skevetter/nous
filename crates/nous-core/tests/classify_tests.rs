@@ -147,7 +147,12 @@ fn category_suggest_creates_agent_category_and_assigns() {
         .unwrap();
 
     let cat_id = db
-        .category_suggest("suggested-cat", "an agent-suggested category", &mem_id)
+        .category_suggest(
+            "suggested-cat",
+            Some("an agent-suggested category"),
+            None,
+            &mem_id,
+        )
         .unwrap();
 
     let recalled = db.recall(&mem_id).unwrap().unwrap();

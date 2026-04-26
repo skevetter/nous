@@ -125,60 +125,72 @@ impl NousServer {
 
     #[tool(
         name = "memory_relate",
-        description = "Create a relationship between two memories"
+        description = "Create a typed relationship between two memories (related, supersedes, contradicts, depends_on). supersedes auto-sets valid_until on target."
     )]
-    async fn memory_relate(&self, _params: Parameters<MemoryRelateParams>) -> CallToolResult {
-        not_implemented()
+    async fn memory_relate(&self, params: Parameters<MemoryRelateParams>) -> CallToolResult {
+        handle_relate(params.0, &self.write_channel).await
     }
 
     #[tool(
         name = "memory_unrelate",
         description = "Remove a relationship between two memories"
     )]
-    async fn memory_unrelate(&self, _params: Parameters<MemoryUnrelateParams>) -> CallToolResult {
-        not_implemented()
+    async fn memory_unrelate(&self, params: Parameters<MemoryUnrelateParams>) -> CallToolResult {
+        handle_unrelate(params.0, &self.write_channel).await
     }
 
     #[tool(
         name = "memory_category_suggest",
-        description = "Suggest a new category for a memory"
+        description = "Suggest a new category, compute its embedding, and assign it to a memory"
     )]
     async fn memory_category_suggest(
         &self,
-        _params: Parameters<MemoryCategorySuggestParams>,
+        params: Parameters<MemoryCategorySuggestParams>,
     ) -> CallToolResult {
-        not_implemented()
+        handle_category_suggest(params.0, &self.write_channel, &self.embedding).await
     }
 
-    #[tool(name = "memory_workspaces", description = "List known workspaces")]
+    #[tool(
+        name = "memory_workspaces",
+        description = "List all workspaces with memory counts"
+    )]
     async fn memory_workspaces(
         &self,
         _params: Parameters<MemoryWorkspacesParams>,
     ) -> CallToolResult {
-        not_implemented()
+        handle_workspaces(&self.read_pool).await
     }
 
-    #[tool(name = "memory_tags", description = "List known tags")]
+    #[tool(
+        name = "memory_tags",
+        description = "List all tags with usage counts ordered by frequency"
+    )]
     async fn memory_tags(&self, _params: Parameters<MemoryTagsParams>) -> CallToolResult {
-        not_implemented()
+        handle_tags(&self.read_pool).await
     }
 
-    #[tool(name = "memory_stats", description = "Get memory database statistics")]
+    #[tool(
+        name = "memory_stats",
+        description = "Get memory database statistics: counts by type, category, importance, workspace, top tags, access frequency"
+    )]
     async fn memory_stats(&self) -> CallToolResult {
-        not_implemented()
+        handle_stats(&self.read_pool).await
     }
 
-    #[tool(name = "memory_schema", description = "Get the memory database schema")]
+    #[tool(
+        name = "memory_schema",
+        description = "Return the current database schema SQL text"
+    )]
     async fn memory_schema(&self) -> CallToolResult {
-        not_implemented()
+        handle_schema(&self.read_pool).await
     }
 
     #[tool(
         name = "memory_sql",
-        description = "Execute a read-only SQL query against the memory database"
+        description = "Execute a read-only SQL query against the memory database. Only SELECT, EXPLAIN, read-only PRAGMA, and read-only WITH are allowed."
     )]
-    async fn memory_sql(&self, _params: Parameters<MemorySqlParams>) -> CallToolResult {
-        not_implemented()
+    async fn memory_sql(&self, params: Parameters<MemorySqlParams>) -> CallToolResult {
+        handle_sql(params.0, &self.read_pool).await
     }
 }
 
@@ -824,6 +836,364 @@ mod tests {
         assert_eq!(
             recall_json["content"],
             "Completely new content for re-embedding"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    async fn store_test_memory(server: &NousServer, title: &str, tags: Vec<String>) -> String {
+        let result = handle_store(
+            MemoryStoreParams {
+                title: title.into(),
+                content: format!("Content for {title}"),
+                memory_type: "decision".into(),
+                tags,
+                source: Some("test".into()),
+                importance: None,
+                confidence: None,
+                workspace_path: Some("/tmp/test-workspace".into()),
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        assert!(is_success(&result));
+        extract_json(&result)["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn relate_supersedes_sets_valid_until() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let id1 = store_test_memory(&server, "Original decision", vec![]).await;
+        let id2 = store_test_memory(&server, "Updated decision", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_relate(
+            MemoryRelateParams {
+                source_id: id2.clone(),
+                target_id: id1.clone(),
+                relation_type: "supersedes".into(),
+            },
+            &server.write_channel,
+        )
+        .await;
+        assert!(is_success(&result));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let recall = handle_recall(
+            MemoryRecallParams { id: id1.clone() },
+            &server.read_pool,
+            &server.write_channel,
+        )
+        .await;
+        let json = extract_json(&recall);
+        assert!(
+            json["valid_until"].as_str().is_some(),
+            "supersedes should set valid_until on target"
+        );
+
+        let rels = json["relationships"].as_array().unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0]["relation_type"], "supersedes");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn unrelate_removes_relationship() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let id1 = store_test_memory(&server, "Memory A", vec![]).await;
+        let id2 = store_test_memory(&server, "Memory B", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        handle_relate(
+            MemoryRelateParams {
+                source_id: id1.clone(),
+                target_id: id2.clone(),
+                relation_type: "related".into(),
+            },
+            &server.write_channel,
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_unrelate(
+            MemoryUnrelateParams {
+                source_id: id1.clone(),
+                target_id: id2.clone(),
+                relation_type: "related".into(),
+            },
+            &server.write_channel,
+        )
+        .await;
+        assert!(is_success(&result));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let recall = handle_recall(
+            MemoryRecallParams { id: id1 },
+            &server.read_pool,
+            &server.write_channel,
+        )
+        .await;
+        let json = extract_json(&recall);
+        assert_eq!(json["relationships"].as_array().unwrap().len(), 0);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn category_suggest_creates_and_assigns() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let id = store_test_memory(&server, "Uncategorized memory", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_category_suggest(
+            MemoryCategorySuggestParams {
+                memory_id: id.clone(),
+                name: "custom-category".into(),
+                description: Some("A test category".into()),
+                parent_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+        )
+        .await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert!(json["category_id"].as_i64().is_some());
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let recall = handle_recall(
+            MemoryRecallParams { id },
+            &server.read_pool,
+            &server.write_channel,
+        )
+        .await;
+        let recall_json = extract_json(&recall);
+        assert!(recall_json["category_id"].as_i64().is_some());
+        assert_eq!(recall_json["category"]["name"], "custom-category");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn workspaces_lists_with_counts() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "WS memory 1", vec![]).await;
+        store_test_memory(&server, "WS memory 2", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_workspaces(&server.read_pool).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let workspaces = json["workspaces"].as_array().unwrap();
+        assert!(!workspaces.is_empty());
+        let ws = &workspaces[0];
+        assert_eq!(ws["path"], "/tmp/test-workspace");
+        assert_eq!(ws["memory_count"], 2);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn tags_lists_with_usage_counts() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "Tagged 1", vec!["alpha".into(), "beta".into()]).await;
+        store_test_memory(&server, "Tagged 2", vec!["alpha".into(), "gamma".into()]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_tags(&server.read_pool).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let tags = json["tags"].as_array().unwrap();
+        assert!(tags.len() >= 3);
+
+        let alpha = tags.iter().find(|t| t["tag"] == "alpha").unwrap();
+        assert_eq!(alpha["count"], 2);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn stats_returns_counts() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "Stats test", vec!["stat-tag".into()]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_stats(&server.read_pool).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert!(json["total"].as_i64().unwrap() >= 1);
+        assert!(json["by_type"].is_object());
+        assert!(json["by_importance"].is_object());
+        assert!(json["by_workspace"].is_object());
+        assert!(json["by_category"].is_object());
+        assert!(json["top_tags"].is_array());
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn schema_returns_sql() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let result = handle_schema(&server.read_pool).await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let schema = json["schema"].as_str().unwrap();
+        assert!(schema.contains("CREATE TABLE"));
+        assert!(schema.contains("memories"));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn sql_select_works() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "SQL test", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "SELECT count(*) as cnt FROM memories".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["columns"][0], "cnt");
+        assert!(json["rows"][0][0].as_i64().unwrap() >= 1);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn sql_rejects_write_operations() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let write_queries = vec![
+            "DELETE FROM memories",
+            "INSERT INTO memories (id, title, content, memory_type) VALUES ('x','x','x','fact')",
+            "UPDATE memories SET title = 'hacked'",
+            "DROP TABLE memories",
+            "ALTER TABLE memories ADD COLUMN evil TEXT",
+            "CREATE TABLE evil (id INTEGER)",
+            "ATTACH DATABASE '/tmp/evil.db' AS evil",
+        ];
+
+        for query in write_queries {
+            let result = handle_sql(
+                MemorySqlParams {
+                    query: query.into(),
+                },
+                &server.read_pool,
+            )
+            .await;
+            assert_eq!(
+                result.is_error,
+                Some(true),
+                "should reject write query: {query}"
+            );
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn sql_allows_explain_and_pragma() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "EXPLAIN SELECT * FROM memories".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert!(is_success(&result));
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "PRAGMA table_info(memories)".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert!(is_success(&result));
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "PRAGMA journal_mode = WAL".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "should reject PRAGMA with assignment"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn sql_allows_readonly_with() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "CTE test", vec![]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "WITH recent AS (SELECT * FROM memories ORDER BY created_at DESC LIMIT 5) SELECT count(*) as cnt FROM recent".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert!(is_success(&result));
+
+        let result = handle_sql(
+            MemorySqlParams {
+                query: "WITH t AS (SELECT 1) INSERT INTO memories (id) VALUES ('x')".into(),
+            },
+            &server.read_pool,
+        )
+        .await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "should reject WITH containing INSERT"
         );
 
         let _ = std::fs::remove_file(&db_path);
