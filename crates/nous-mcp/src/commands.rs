@@ -228,12 +228,50 @@ pub fn import_data(
     embedding: &dyn EmbeddingBackend,
     chunker: &Chunker,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut id_map = std::collections::HashMap::new();
+    use std::collections::HashMap;
+
+    let mut cat_id_map: HashMap<i64, i64> = HashMap::new();
+
+    // Import categories first (parents before children)
+    let mut sorted_cats: Vec<&ExportCategory> = data.categories.iter().collect();
+    sorted_cats.sort_by_key(|c| (c.parent_id.is_some(), c.id));
+
+    for cat in &sorted_cats {
+        let source: CategorySource = cat.source.parse().map_err(|e: String| e)?;
+        let remapped_parent = cat.parent_id.and_then(|pid| cat_id_map.get(&pid).copied());
+
+        match db.category_add(
+            &cat.name,
+            remapped_parent,
+            cat.description.as_deref(),
+            source,
+        ) {
+            Ok(new_cat_id) => {
+                cat_id_map.insert(cat.id, new_cat_id);
+            }
+            Err(_) => {
+                // Category may already exist (e.g. seed categories) — look up its ID
+                if let Ok(existing_id) = db.connection().query_row(
+                    "SELECT id FROM categories WHERE name = ?1 AND parent_id IS ?2",
+                    rusqlite::params![cat.name, remapped_parent],
+                    |row| row.get::<_, i64>(0),
+                ) {
+                    cat_id_map.insert(cat.id, existing_id);
+                }
+            }
+        }
+    }
+
+    let mut id_map: HashMap<String, MemoryId> = HashMap::new();
 
     for memory in &data.memories {
         let memory_type = memory.memory_type.parse().map_err(|e: String| e)?;
         let importance = memory.importance.parse().map_err(|e: String| e)?;
         let confidence = memory.confidence.parse().map_err(|e: String| e)?;
+
+        let remapped_category = memory
+            .category_id
+            .and_then(|old_id| cat_id_map.get(&old_id).copied());
 
         let new_memory = NewMemory {
             title: memory.title.clone(),
@@ -249,7 +287,7 @@ pub fn import_data(
             agent_id: memory.agent_id.clone(),
             agent_model: memory.agent_model.clone(),
             valid_from: memory.valid_from.clone(),
-            category_id: memory.category_id,
+            category_id: remapped_category,
         };
 
         let new_id = db.store(&new_memory)?;
@@ -496,10 +534,13 @@ pub fn run_rotate_key(
 
     let new_key = match new_key_file {
         Some(path) => std::fs::read_to_string(path)?.trim().to_string(),
-        None => {
-            std::env::var("NOUS_DB_KEY").map_err(|_| "no --new-key-file and NOUS_DB_KEY not set")?
-        }
+        None => std::env::var("NOUS_NEW_DB_KEY")
+            .map_err(|_| "no --new-key-file and NOUS_NEW_DB_KEY not set")?,
     };
+
+    if current_key == new_key {
+        return Err("new key must differ from current key".into());
+    }
 
     let db_path = std::path::Path::new(&config.memory.db_path);
     nous_shared::sqlite::rotate_key(db_path, &current_key, &new_key)?;
@@ -630,6 +671,82 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_chunks", [], |r| r.get(0))
             .unwrap();
         assert!(chunk_count > 0, "imported memories should have chunks");
+    }
+
+    #[test]
+    fn import_remaps_categories() {
+        let src_db = test_db();
+        let embedding = mock_embedding();
+        let chunker = Chunker::new(512, 64);
+
+        let user_cat_id = src_db
+            .category_add(
+                "my-custom-cat",
+                None,
+                Some("A user category"),
+                CategorySource::User,
+            )
+            .unwrap();
+
+        let memory = NewMemory {
+            title: "Categorized".into(),
+            content: "Memory with user category".into(),
+            memory_type: nous_core::types::MemoryType::Fact,
+            source: None,
+            importance: nous_core::types::Importance::Moderate,
+            confidence: nous_core::types::Confidence::Moderate,
+            tags: vec![],
+            workspace_path: None,
+            session_id: None,
+            trace_id: None,
+            agent_id: None,
+            agent_model: None,
+            valid_from: None,
+            category_id: Some(user_cat_id),
+        };
+        src_db.store(&memory).unwrap();
+
+        let export_data = build_export_data(&src_db).unwrap();
+        let exported_mem = &export_data.memories[0];
+        assert_eq!(exported_mem.category_id, Some(user_cat_id));
+
+        let has_custom = export_data
+            .categories
+            .iter()
+            .any(|c| c.name == "my-custom-cat");
+        assert!(has_custom, "export should include user-created category");
+
+        let dest_db = test_db();
+        import_data(&dest_db, &export_data, &embedding, &chunker).unwrap();
+
+        let dest_has_custom: bool = dest_db
+            .connection()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM categories WHERE name = 'my-custom-cat')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(dest_has_custom, "imported DB should have user category");
+
+        let dest_cat_id: Option<i64> = dest_db
+            .connection()
+            .query_row("SELECT category_id FROM memories LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            dest_cat_id.is_some(),
+            "imported memory should have a remapped category_id"
+        );
+
+        let dest_cat_name: String = dest_db
+            .connection()
+            .query_row(
+                "SELECT c.name FROM categories c JOIN memories m ON m.category_id = c.id LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dest_cat_name, "my-custom-cat");
     }
 
     #[test]

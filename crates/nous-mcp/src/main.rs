@@ -97,16 +97,22 @@ fn main() {
             rt.block_on(run_serve(config, transport, port))
                 .expect("server error");
         }
-        Command::ReEmbed {
-            model: _,
-            variant: _,
-        } => {
+        Command::ReEmbed { model, variant } => {
+            eprintln!(
+                "Warning: real embedding not yet implemented, using mock. \
+                 --model {model}{} ignored.",
+                variant
+                    .as_ref()
+                    .map(|v| format!(" --variant {v}"))
+                    .unwrap_or_default()
+            );
             let embedding: Box<dyn nous_core::embed::EmbeddingBackend> =
                 Box::new(nous_core::embed::MockEmbedding::new(384));
             commands::run_re_embed(&config, embedding.as_ref())
                 .unwrap_or_else(|e| eprintln!("re-embed failed: {e}"));
         }
         Command::ReClassify { since } => {
+            eprintln!("Warning: real embedding not yet implemented, using mock");
             let embedding = nous_core::embed::MockEmbedding::new(384);
             commands::run_re_classify(&config, since.as_deref(), &embedding)
                 .unwrap_or_else(|e| eprintln!("re-classify failed: {e}"));
@@ -121,6 +127,7 @@ fn main() {
                 parent,
                 description,
             } => {
+                eprintln!("Warning: real embedding not yet implemented, using mock");
                 let embedding = nous_core::embed::MockEmbedding::new(384);
                 commands::run_category_add(
                     &config,
@@ -136,6 +143,7 @@ fn main() {
             commands::run_export(&config).unwrap_or_else(|e| eprintln!("export failed: {e}"));
         }
         Command::Import { file } => {
+            eprintln!("Warning: real embedding not yet implemented, using mock");
             let embedding = nous_core::embed::MockEmbedding::new(384);
             commands::run_import(&config, &file, &embedding)
                 .unwrap_or_else(|e| eprintln!("import failed: {e}"));
