@@ -1697,4 +1697,242 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
     }
+
+    #[tokio::test]
+    async fn search_filters_by_tags() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        handle_store(
+            MemoryStoreParams {
+                title: "tagged memory".into(),
+                content: "kubernetes deployment strategy".into(),
+                memory_type: "fact".into(),
+                tags: vec!["k8s".into(), "infra".into()],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        handle_store(
+            MemoryStoreParams {
+                title: "untagged memory".into(),
+                content: "kubernetes pod scheduling".into(),
+                memory_type: "fact".into(),
+                tags: vec!["other".into()],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "kubernetes".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: Some(vec!["k8s".into()]),
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("tagged")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        for i in 0..5 {
+            store_test_memory(
+                &server,
+                &format!("memory {i}"),
+                &format!("searchable content number {i}"),
+                "fact",
+                None,
+                None,
+            )
+            .await;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "searchable".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: Some(2),
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(json["count"], 2);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_creates_access_log_entries() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "access log test",
+            "content for access log verification",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "access".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert!(!json["results"].as_array().unwrap().is_empty());
+
+        let db = MemoryDb::open(&db_path, None).unwrap();
+        let count: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM access_log WHERE access_type = 'search'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(count > 0, "search should create access log entries");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn context_creates_access_log_entries() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "context access test",
+            "content for context access log",
+            "fact",
+            None,
+            Some("/tmp/test-ws-access-log"),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_context(
+            MemoryContextParams {
+                workspace_path: "/tmp/test-ws-access-log".into(),
+                summary: false,
+            },
+            &db_path,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert!(!json["entries"].as_array().unwrap().is_empty());
+
+        let db = MemoryDb::open(&db_path, None).unwrap();
+        let count: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM access_log WHERE access_type = 'context'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(count > 0, "context should create access log entries");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
 }

@@ -789,17 +789,14 @@ pub async fn handle_context(params: MemoryContextParams, db_path: &str) -> CallT
     let entries = match nous_shared::sqlite::spawn_blocking(move || {
         let db = MemoryDb::open(&db_path, None)?;
 
-        let ws_id: Option<i64> = db
-            .connection()
-            .query_row(
-                "SELECT id FROM workspaces WHERE path = ?1",
-                rusqlite::params![workspace_path],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let Some(ws_id) = ws_id else {
-            return Ok(vec![]);
+        let ws_id: i64 = match db.connection().query_row(
+            "SELECT id FROM workspaces WHERE path = ?1",
+            rusqlite::params![workspace_path],
+            |row| row.get(0),
+        ) {
+            Ok(id) => id,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
         };
 
         db.context(ws_id, summary)
