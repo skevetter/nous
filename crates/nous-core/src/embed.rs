@@ -5,7 +5,13 @@ use nous_shared::NousError;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
-use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
+use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModelArch {
+    Encoder,
+    Decoder,
+}
 
 pub trait EmbeddingBackend: Send + Sync {
     fn model_id(&self) -> &str;
@@ -59,14 +65,17 @@ impl OnnxBackendBuilder {
             .get("tokenizer.json")
             .map_err(|e| NousError::Embedding(format!("download tokenizer: {e}")))?;
 
+        let max_tokens = detect_max_tokens(&tokenizer_path)?;
+
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| NousError::Embedding(format!("load tokenizer: {e}")))?;
 
-        tokenizer.with_padding(Some(PaddingParams {
-            strategy: PaddingStrategy::BatchLongest,
-            direction: PaddingDirection::Left,
-            ..Default::default()
-        }));
+        tokenizer
+            .with_truncation(Some(TruncationParams {
+                max_length: max_tokens,
+                ..Default::default()
+            }))
+            .map_err(|e| NousError::Embedding(format!("set truncation: {e}")))?;
 
         let session = Session::builder()
             .map_err(|e| NousError::Embedding(format!("session builder: {e}")))?
@@ -82,16 +91,49 @@ impl OnnxBackendBuilder {
             .iter()
             .any(|i| i.name() == "token_type_ids");
 
+        let arch = if session
+            .inputs()
+            .iter()
+            .any(|i| i.name().starts_with("past_key_values"))
+        {
+            ModelArch::Decoder
+        } else {
+            ModelArch::Encoder
+        };
+
+        let pad_direction = match arch {
+            ModelArch::Encoder => PaddingDirection::Right,
+            ModelArch::Decoder => PaddingDirection::Left,
+        };
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            direction: pad_direction,
+            ..Default::default()
+        }));
+
         Ok(OnnxBackend {
             model_id: model_repo,
             dimensions,
-            max_tokens: 8192,
+            max_tokens,
             batch_size: self.batch_size,
             needs_token_type_ids,
+            arch,
             tokenizer,
             session: Mutex::new(session),
         })
     }
+}
+
+fn detect_max_tokens(tokenizer_path: &Path) -> nous_shared::Result<usize> {
+    let raw = std::fs::read_to_string(tokenizer_path)
+        .map_err(|e| NousError::Embedding(format!("read tokenizer.json: {e}")))?;
+    let json: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| NousError::Embedding(format!("parse tokenizer.json: {e}")))?;
+    Ok(json
+        .get("model_max_length")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(8192))
 }
 
 fn detect_dimensions(session: &Session, model_path: &Path) -> nous_shared::Result<usize> {
@@ -115,6 +157,7 @@ pub struct OnnxBackend {
     max_tokens: usize,
     batch_size: usize,
     needs_token_type_ids: bool,
+    arch: ModelArch,
     tokenizer: Tokenizer,
     session: Mutex<Session>,
 }
@@ -184,8 +227,7 @@ impl OnnxBackend {
 
         let dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
 
-        let results = if dims.len() == 3 {
-            // [batch, seq_len, hidden] — last-token pooling
+        let results = if dims.len() == 3 && self.arch == ModelArch::Decoder {
             let hidden = dims[2];
             (0..batch_size)
                 .map(|i| {
@@ -194,6 +236,11 @@ impl OnnxBackend {
                     let vec = data[offset..offset + hidden].to_vec();
                     l2_normalize(vec)
                 })
+                .collect()
+        } else if dims.len() == 3 {
+            mean_pool(&encodings, data, &dims)
+                .into_iter()
+                .map(l2_normalize)
                 .collect()
         } else if dims.len() == 2 {
             // [batch, hidden] — already pooled
@@ -220,6 +267,36 @@ fn last_real_token(encoding: &tokenizers::Encoding) -> usize {
     mask.iter()
         .rposition(|&m| m == 1)
         .unwrap_or(mask.len().saturating_sub(1))
+}
+
+fn mean_pool(encodings: &[tokenizers::Encoding], data: &[f32], dims: &[usize]) -> Vec<Vec<f32>> {
+    let seq_len = dims[1];
+    let hidden = dims[2];
+    encodings
+        .iter()
+        .enumerate()
+        .map(|(i, enc)| {
+            let mask = enc.get_attention_mask();
+            let mut sum = vec![0.0f32; hidden];
+            let mut count = 0usize;
+            for t in 0..seq_len {
+                if mask.get(t).copied().unwrap_or(0) == 1 {
+                    let off = i * seq_len * hidden + t * hidden;
+                    for d in 0..hidden {
+                        sum[d] += data[off + d];
+                    }
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let c = count as f32;
+                for v in &mut sum {
+                    *v /= c;
+                }
+            }
+            sum
+        })
+        .collect()
 }
 
 fn l2_normalize(mut vec: Vec<f32>) -> Vec<f32> {
