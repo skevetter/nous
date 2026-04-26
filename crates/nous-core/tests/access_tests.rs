@@ -1,5 +1,5 @@
 use nous_core::db::MemoryDb;
-use nous_core::types::{MemoryType, NewMemory, RelationType};
+use nous_core::types::{MemoryPatch, MemoryType, NewMemory, RelationType};
 use rusqlite::params;
 
 fn open_test_db() -> MemoryDb {
@@ -162,4 +162,27 @@ fn build_validity_clause_true() {
 fn build_validity_clause_none() {
     assert!(nous_core::db::build_validity_clause(None).is_none());
     assert!(nous_core::db::build_validity_clause(Some(false)).is_none());
+}
+
+// 8. Explicit valid_until via update() independent of relationships
+#[test]
+fn update_sets_valid_until_independently() {
+    let db = open_test_db();
+    let id = db.store(&minimal_memory()).unwrap();
+
+    let patch = MemoryPatch {
+        title: None,
+        content: None,
+        tags: None,
+        importance: None,
+        confidence: None,
+        valid_until: Some("2020-01-01T00:00:00.000Z".into()),
+    };
+    assert!(db.update(&id, &patch).unwrap());
+
+    let result = db.recall(&id).unwrap().unwrap();
+    assert_eq!(
+        result.memory.valid_until.as_deref(),
+        Some("2020-01-01T00:00:00.000Z")
+    );
 }

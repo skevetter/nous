@@ -137,6 +137,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_unique ON relationships(source_id, target_id, relation_type)",
     "CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory ON memory_chunks(memory_id)",
+    "CREATE INDEX IF NOT EXISTS idx_access_log_time ON access_log(accessed_at)",
 ];
 
 pub struct MemoryDb {
