@@ -9,7 +9,7 @@ use nous_core::types::{Category, CategorySource, CategoryTree, Memory, NewMemory
 use nous_shared::ids::MemoryId;
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use nous_mcp::config::Config;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportData {

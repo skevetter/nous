@@ -1,18 +1,14 @@
 mod commands;
-mod config;
-pub mod server;
-#[allow(dead_code)]
-mod tools;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use nous_mcp::config;
+use nous_mcp::server::NousServer;
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-
-use crate::server::NousServer;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Transport {
