@@ -556,10 +556,7 @@ impl MemoryDb {
         Ok(tags)
     }
 
-    pub fn load_relationships_on(
-        conn: &Connection,
-        memory_id: &str,
-    ) -> Result<Vec<Relationship>> {
+    pub fn load_relationships_on(conn: &Connection, memory_id: &str) -> Result<Vec<Relationship>> {
         let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, created_at
              FROM relationships
