@@ -182,6 +182,9 @@ pub struct Category {
     pub name: String,
     pub parent_id: Option<i64>,
     pub source: CategorySource,
+    pub description: Option<String>,
+    #[serde(skip)]
+    pub embedding: Option<Vec<u8>>,
     pub created_at: String,
 }
 

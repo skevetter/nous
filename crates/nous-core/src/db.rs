@@ -5,7 +5,8 @@ use rusqlite::{Connection, params};
 
 use crate::chunk::Chunk;
 use crate::types::{
-    Category, Memory, MemoryPatch, MemoryWithRelations, NewMemory, RelationType, Relationship,
+    Category, CategorySource, CategoryTree, Memory, MemoryPatch, MemoryWithRelations, NewMemory,
+    RelationType, Relationship,
 };
 
 const MIGRATIONS: &[&str] = &[
@@ -151,6 +152,7 @@ impl MemoryDb {
         run_migrations(&conn, MIGRATIONS)?;
         migrate_models_columns(&conn)?;
         seed_placeholder_model(&conn)?;
+        migrate_categories_columns(&conn)?;
         seed_categories(&conn)?;
         Ok(Self { conn })
     }
@@ -442,6 +444,72 @@ impl MemoryDb {
         Ok(changed > 0)
     }
 
+    pub fn category_add(
+        &self,
+        name: &str,
+        parent_id: Option<i64>,
+        description: Option<&str>,
+        source: CategorySource,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO categories (name, parent_id, description, source) VALUES (?1, ?2, ?3, ?4)",
+            params![name, parent_id, description, source.to_string()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn category_list(
+        &self,
+        source_filter: Option<CategorySource>,
+    ) -> Result<Vec<CategoryTree>> {
+        let categories = match source_filter {
+            Some(ref src) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories WHERE source = ?1",
+                )?;
+                stmt.query_map(params![src.to_string()], Self::row_to_category)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            None => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories",
+                )?;
+                stmt.query_map([], Self::row_to_category)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+        };
+
+        Ok(build_tree(categories))
+    }
+
+    pub fn category_suggest(
+        &self,
+        name: &str,
+        description: &str,
+        memory_id: &MemoryId,
+    ) -> Result<i64> {
+        let id = self.category_add(name, None, Some(description), CategorySource::Agent)?;
+        self.conn.execute(
+            "UPDATE memories SET category_id = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?2",
+            params![id, memory_id.to_string()],
+        )?;
+        Ok(id)
+    }
+
+    fn row_to_category(row: &rusqlite::Row<'_>) -> rusqlite::Result<Category> {
+        Ok(Category {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            parent_id: row.get(2)?,
+            source: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+                rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, e.into())
+            })?,
+            description: row.get(4)?,
+            embedding: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    }
+
     fn load_tags(&self, memory_id: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.name FROM tags t
@@ -486,7 +554,7 @@ impl MemoryDb {
             return Ok(None);
         };
         match self.conn.query_row(
-            "SELECT id, name, parent_id, source, created_at FROM categories WHERE id = ?1",
+            "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories WHERE id = ?1",
             params![cat_id],
             |row| {
                 Ok(Category {
@@ -500,7 +568,9 @@ impl MemoryDb {
                             e.into(),
                         )
                     })?,
-                    created_at: row.get(4)?,
+                    description: row.get(4)?,
+                    embedding: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             },
         ) {
@@ -621,6 +691,34 @@ pub fn build_validity_clause(valid_only: Option<bool>) -> Option<String> {
     }
 }
 
+fn build_tree(categories: Vec<Category>) -> Vec<CategoryTree> {
+    use std::collections::HashMap;
+
+    let mut children_map: HashMap<Option<i64>, Vec<Category>> = HashMap::new();
+    for cat in categories {
+        children_map.entry(cat.parent_id).or_default().push(cat);
+    }
+
+    fn build_children(
+        parent_id: Option<i64>,
+        children_map: &mut HashMap<Option<i64>, Vec<Category>>,
+    ) -> Vec<CategoryTree> {
+        let cats = children_map.remove(&parent_id).unwrap_or_default();
+        cats.into_iter()
+            .map(|cat| {
+                let id = cat.id;
+                let children = build_children(Some(id), children_map);
+                CategoryTree {
+                    category: cat,
+                    children,
+                }
+            })
+            .collect()
+    }
+
+    build_children(None, &mut children_map)
+}
+
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let found = stmt
@@ -658,6 +756,25 @@ fn seed_placeholder_model(conn: &Connection) -> Result<()> {
         "INSERT OR IGNORE INTO models (name, dimensions, max_tokens) VALUES ('placeholder', 0, 0)",
         [],
     )?;
+    Ok(())
+}
+
+fn migrate_categories_columns(conn: &Connection) -> Result<()> {
+    let alters: &[(&str, &str)] = &[
+        (
+            "description",
+            "ALTER TABLE categories ADD COLUMN description TEXT",
+        ),
+        (
+            "embedding",
+            "ALTER TABLE categories ADD COLUMN embedding BLOB",
+        ),
+    ];
+    for (col, sql) in alters {
+        if !has_column(conn, "categories", col)? {
+            conn.execute_batch(sql)?;
+        }
+    }
     Ok(())
 }
 
