@@ -82,3 +82,96 @@ For HTTP transport instead:
 ```bash
 nous-mcp serve --transport http --port 8377
 ```
+
+## Configuration
+
+`nous-mcp` reads `~/.config/nous/config.toml` on startup. If the file does not exist, it creates one with default values.
+
+```toml
+[memory]
+db_path = "~/.cache/nous/memory.db"
+
+[embedding]
+model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+variant = "model_q4f16.onnx"
+chunk_size = 512
+chunk_overlap = 64
+
+[otlp]
+db_path = "~/.cache/nous/otlp.db"
+port = 4318
+
+[classification]
+confidence_threshold = 0.3
+
+[encryption]
+db_key_file = "~/.config/nous/db.key"
+```
+
+| Section | Key | Default | Purpose |
+|---------|-----|---------|---------|
+| `memory` | `db_path` | `~/.cache/nous/memory.db` | SQLCipher database for memories |
+| `embedding` | `model` | `onnx-community/Qwen3-Embedding-0.6B-ONNX` | ONNX embedding model from Hugging Face |
+| `embedding` | `variant` | `model_q4f16.onnx` | Quantized ONNX variant |
+| `embedding` | `chunk_size` | `512` | Token window per text chunk |
+| `embedding` | `chunk_overlap` | `64` | Overlapping tokens between adjacent chunks |
+| `otlp` | `db_path` | `~/.cache/nous/otlp.db` | SQLite database for ingested telemetry |
+| `otlp` | `port` | `4318` | OTLP HTTP receiver port |
+| `classification` | `confidence_threshold` | `0.3` | Minimum score to assign a category |
+| `encryption` | `db_key_file` | `~/.config/nous/db.key` | SQLCipher key file (auto-generated if missing) |
+
+### Environment variable overrides
+
+Environment variables take precedence over `config.toml`:
+
+| Variable | Overrides |
+|----------|-----------|
+| `NOUS_MEMORY_DB` | `memory.db_path` |
+| `NOUS_OTLP_DB` | `otlp.db_path` |
+| `NOUS_DB_KEY_FILE` | `encryption.db_key_file` |
+
+```bash
+NOUS_MEMORY_DB=/tmp/test.db nous-mcp serve
+```
+
+## Telemetry Setup (OTLP)
+
+`nous-otlp` runs a standalone HTTP server that accepts OpenTelemetry data in protobuf format and stores it in a local SQLite database.
+
+### Endpoints
+
+| Method | Path | Accepts |
+|--------|------|---------|
+| POST | `/v1/logs` | `ExportLogsServiceRequest` (protobuf) |
+| POST | `/v1/traces` | `ExportTraceServiceRequest` (protobuf) |
+| POST | `/v1/metrics` | `ExportMetricsServiceRequest` (protobuf) |
+
+All endpoints require `Content-Type: application/x-protobuf`. Requests with other content types return HTTP 415.
+
+### Storage
+
+Ingested data lands in `~/.cache/nous/otlp.db` (override with `--db` flag or `[otlp]` config section). Three tables — `log_events`, `spans`, `metrics` — with indexes on `trace_id`, `session_id`, `timestamp`, and `name`.
+
+### CLI
+
+```bash
+nous-otlp serve                 # Start on default port 4318
+nous-otlp serve --port 9318     # Custom port
+nous-otlp serve --db /tmp/t.db  # Custom database path
+nous-otlp status                # Show record counts per table
+nous-otlp status --db /tmp/t.db # Status for a specific database
+```
+
+### Claude Code integration
+
+Claude Code emits OTLP telemetry when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Point it at the `nous-otlp` receiver:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+`nous-otlp` only accepts protobuf encoding. If Claude Code defaults to JSON (`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`), override it:
+
+```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
