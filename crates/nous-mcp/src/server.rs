@@ -54,10 +54,6 @@ impl NousServer {
     }
 }
 
-fn not_implemented() -> CallToolResult {
-    CallToolResult::error(vec![rmcp::model::Content::text("not implemented")])
-}
-
 #[tool_router]
 impl NousServer {
     #[tool(name = "memory_store", description = "Store a new memory")]
