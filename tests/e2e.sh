@@ -1,26 +1,22 @@
 #!/usr/bin/env bash
 # End-to-end test for nous-mcp and nous-otlp services.
 # Manual test — excluded from CI. Run after `cargo build --release`.
-# Requires: sqlite3, curl
+# Requires: curl, python3
 set -euo pipefail
 
 TMPDIR_E2E="$(mktemp -d /tmp/nous-e2e.XXXXXX)"
 MCP_DB="${TMPDIR_E2E}/memory.db"
 OTLP_DB="${TMPDIR_E2E}/otlp.db"
 KEY_FILE="${TMPDIR_E2E}/db.key"
-CONFIG_FILE="${TMPDIR_E2E}/config.toml"
 IMPORT_FILE="${TMPDIR_E2E}/import.json"
-MCP_PID=""
 OTLP_PID=""
 OTLP_PORT=0
 PASS=0
 FAIL=0
 
 cleanup() {
-    [ -n "$MCP_PID" ] && kill "$MCP_PID" 2>/dev/null || true
     [ -n "$OTLP_PID" ] && kill "$OTLP_PID" 2>/dev/null || true
-    wait "$MCP_PID" 2>/dev/null || true
-    wait "$OTLP_PID" 2>/dev/null || true
+    [ -n "$OTLP_PID" ] && wait "$OTLP_PID" 2>/dev/null || true
     rm -rf "$TMPDIR_E2E"
 }
 trap cleanup EXIT
@@ -67,29 +63,8 @@ echo "=== nous e2e test ==="
 echo "binaries: ${BIN_DIR}"
 echo "tmpdir:   ${TMPDIR_E2E}"
 
-# --- Setup: encryption key and config ---
+# --- Setup: encryption key ---
 echo "test-e2e-key-do-not-use" > "$KEY_FILE"
-
-cat > "$CONFIG_FILE" <<EOF
-[memory]
-db_path = "${MCP_DB}"
-
-[embedding]
-model = "mock"
-variant = "mock"
-chunk_size = 512
-chunk_overlap = 64
-
-[otlp]
-db_path = "${OTLP_DB}"
-port = 4318
-
-[classification]
-confidence_threshold = 0.3
-
-[encryption]
-db_key_file = "${KEY_FILE}"
-EOF
 
 # --- Start nous-otlp serve ---
 echo ""
@@ -103,18 +78,25 @@ NOUS_DB_KEY="test-e2e-key-do-not-use" \
 OTLP_PID=$!
 
 # Wait for OTLP to be ready
+OTLP_READY=0
 for i in $(seq 1 30); do
-    if curl -sf "http://127.0.0.1:${OTLP_PORT}/v1/logs" -X POST \
-        -H "content-type: application/x-protobuf" -d "" 2>/dev/null; then
-        break
+    if ! kill -0 "$OTLP_PID" 2>/dev/null; then
+        echo "ERROR: nous-otlp process died during startup"
+        exit 1
     fi
-    # 400 also means the server is up (rejects empty body)
-    if curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:${OTLP_PORT}/v1/logs" \
-        -X POST -H "content-type: application/x-protobuf" -d "" 2>/dev/null | grep -qE '(200|400)'; then
+    HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+        "http://127.0.0.1:${OTLP_PORT}/v1/logs" \
+        -X POST -H "content-type: application/x-protobuf" -d "" 2>/dev/null || true)
+    if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "400" ]; then
+        OTLP_READY=1
         break
     fi
     sleep 0.5
 done
+if [ "$OTLP_READY" -eq 0 ]; then
+    echo "ERROR: nous-otlp server did not become ready"
+    exit 1
+fi
 echo "nous-otlp listening on port ${OTLP_PORT} (pid ${OTLP_PID})"
 
 # --- Store a memory via nous-mcp import ---
