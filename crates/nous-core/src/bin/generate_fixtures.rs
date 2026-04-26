@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use nous_core::embed::{EmbeddingBackend, OnnxBackend};
 use serde::Serialize;
 
-const MODEL: &str = "onnx-community/Qwen3-Embedding-0.6B-ONNX";
-const VARIANT: &str = "model_q4f16.onnx";
+const MODEL: &str = "sentence-transformers/all-MiniLM-L6-v2";
+const VARIANT: &str = "onnx/model.onnx";
 
 const TEST_STRINGS: &[&str] = &[
     // Identical match baseline
