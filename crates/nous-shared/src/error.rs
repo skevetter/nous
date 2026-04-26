@@ -17,6 +17,9 @@ pub enum NousError {
 
     #[error("embedding error: {0}")]
     Embedding(String),
+
+    #[error("validation error: {0}")]
+    Validation(String),
 }
 
 pub type Result<T> = std::result::Result<T, NousError>;

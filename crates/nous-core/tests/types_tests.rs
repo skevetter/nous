@@ -253,6 +253,10 @@ fn model_roundtrip_json() {
         name: "all-MiniLM-L6-v2".into(),
         dimensions: 384,
         max_tokens: 256,
+        variant: Some("fp16".into()),
+        chunk_size: 512,
+        chunk_overlap: 64,
+        active: false,
         created_at: "2025-01-01T00:00:00Z".into(),
     };
     let json = serde_json::to_string(&m).unwrap();
