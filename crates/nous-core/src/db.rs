@@ -101,10 +101,10 @@ const MIGRATIONS: &[&str] = &[
         model_id INTEGER NOT NULL REFERENCES models(id),
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )",
-    // Fallback embeddings table (sqlite-vec is broken upstream)
-    "CREATE TABLE IF NOT EXISTS memory_embeddings (
+    // vec0 virtual table for KNN embedding search (sqlite-vec)
+    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
         chunk_id TEXT PRIMARY KEY,
-        embedding BLOB
+        embedding float[384]
     )",
     // FTS triggers
     "CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -149,6 +149,7 @@ pub struct MemoryDb {
 impl MemoryDb {
     pub fn open(path: &str, key: Option<&str>) -> Result<Self> {
         let conn = open_connection(path, key)?;
+        crate::sqlite_vec::load(&conn)?;
         run_migrations(&conn, MIGRATIONS)?;
         migrate_models_columns(&conn)?;
         seed_placeholder_model(&conn)?;
@@ -413,10 +414,20 @@ impl MemoryDb {
         if hard {
             conn.execute("DELETE FROM memories WHERE id = ?1", params![id_str])?;
         } else {
-            conn.execute(
-                "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
-                params![id_str],
-            )?;
+            {
+                let chunk_ids: Vec<String> = {
+                    let mut stmt =
+                        conn.prepare("SELECT id FROM memory_chunks WHERE memory_id = ?1")?;
+                    stmt.query_map(params![id_str], |row| row.get(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                for chunk_id in &chunk_ids {
+                    conn.execute(
+                        "DELETE FROM memory_embeddings WHERE chunk_id = ?1",
+                        params![chunk_id],
+                    )?;
+                }
+            }
             conn.execute(
                 "DELETE FROM memory_chunks WHERE memory_id = ?1",
                 params![id_str],
@@ -733,6 +744,10 @@ impl MemoryDb {
             let blob: Vec<u8> = embeddings[i].iter().flat_map(|f| f.to_le_bytes()).collect();
 
             conn.execute(
+                "DELETE FROM memory_embeddings WHERE chunk_id = ?1",
+                params![chunk_id],
+            )?;
+            conn.execute(
                 "INSERT INTO memory_embeddings (chunk_id, embedding) VALUES (?1, ?2)",
                 params![chunk_id, blob],
             )?;
@@ -748,10 +763,17 @@ impl MemoryDb {
     pub(crate) fn delete_chunks_on(conn: &Connection, memory_id: &MemoryId) -> Result<()> {
         let memory_id_str = memory_id.to_string();
 
-        conn.execute(
-            "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
-            params![memory_id_str],
-        )?;
+        let chunk_ids: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM memory_chunks WHERE memory_id = ?1")?;
+            stmt.query_map(params![memory_id_str], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for chunk_id in &chunk_ids {
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE chunk_id = ?1",
+                params![chunk_id],
+            )?;
+        }
         conn.execute(
             "DELETE FROM memory_chunks WHERE memory_id = ?1",
             params![memory_id_str],

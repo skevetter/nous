@@ -25,14 +25,24 @@ fn make_memory(title: &str, content: &str) -> NewMemory {
     }
 }
 
+const VEC_DIMS: usize = 384;
+
 fn f32_to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+fn pad_to_384(v: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0f32; VEC_DIMS];
+    for (i, &val) in v.iter().enumerate().take(VEC_DIMS) {
+        out[i] = val;
+    }
+    out
 }
 
 fn setup_model(db: &MemoryDb) -> i64 {
     db.connection()
         .execute(
-            "INSERT INTO models (name, dimensions, max_tokens) VALUES ('test-model', 4, 512)",
+            "INSERT INTO models (name, dimensions, max_tokens) VALUES ('test-model', 384, 512)",
             [],
         )
         .unwrap();
@@ -63,12 +73,13 @@ fn store_chunk_with_embedding(
         .unwrap();
 }
 
-fn normalize(v: &[f32]) -> Vec<f32> {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+fn normalize384(v: &[f32]) -> Vec<f32> {
+    let padded = pad_to_384(v);
+    let norm = padded.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
-        v.iter().map(|x| x / norm).collect()
+        padded.iter().map(|x| x / norm).collect()
     } else {
-        v.to_vec()
+        padded
     }
 }
 
@@ -190,9 +201,9 @@ fn semantic_search_ranks_closest_first() {
         .store(&make_memory("far memory", "completely different"))
         .unwrap();
 
-    let emb_close = normalize(&[0.9, 0.1, 0.0, 0.0]);
-    let emb_medium = normalize(&[0.5, 0.5, 0.5, 0.0]);
-    let emb_far = normalize(&[0.0, 0.0, 0.1, 0.9]);
+    let emb_close = normalize384(&[0.9, 0.1, 0.0, 0.0]);
+    let emb_medium = normalize384(&[0.5, 0.5, 0.5, 0.0]);
+    let emb_far = normalize384(&[0.0, 0.0, 0.1, 0.9]);
 
     store_chunk_with_embedding(
         &db,
@@ -214,7 +225,7 @@ fn semantic_search_ranks_closest_first() {
     );
     store_chunk_with_embedding(&db, &id3.to_string(), "c3", 0, "chunk3", model_id, &emb_far);
 
-    let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
+    let query_emb = normalize384(&[1.0, 0.0, 0.0, 0.0]);
     let results = db
         .search(
             "",
@@ -241,9 +252,9 @@ fn semantic_search_deduplicates_multi_chunk_memory() {
         ))
         .unwrap();
 
-    let emb1 = normalize(&[0.8, 0.2, 0.0, 0.0]);
-    let emb2 = normalize(&[0.7, 0.3, 0.0, 0.0]);
-    let emb3 = normalize(&[0.6, 0.4, 0.0, 0.0]);
+    let emb1 = normalize384(&[0.8, 0.2, 0.0, 0.0]);
+    let emb2 = normalize384(&[0.7, 0.3, 0.0, 0.0]);
+    let emb3 = normalize384(&[0.6, 0.4, 0.0, 0.0]);
 
     store_chunk_with_embedding(
         &db,
@@ -273,7 +284,7 @@ fn semantic_search_deduplicates_multi_chunk_memory() {
         &emb3,
     );
 
-    let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
+    let query_emb = normalize384(&[1.0, 0.0, 0.0, 0.0]);
     let results = db
         .search(
             "",
@@ -315,9 +326,9 @@ fn hybrid_search_dual_signal_ranks_highest() {
         ))
         .unwrap();
 
-    let emb_both = normalize(&[0.9, 0.1, 0.0, 0.0]);
-    let emb_fts = normalize(&[0.0, 0.0, 0.1, 0.9]);
-    let emb_sem = normalize(&[0.8, 0.2, 0.0, 0.0]);
+    let emb_both = normalize384(&[0.9, 0.1, 0.0, 0.0]);
+    let emb_fts = normalize384(&[0.0, 0.0, 0.1, 0.9]);
+    let emb_sem = normalize384(&[0.8, 0.2, 0.0, 0.0]);
 
     store_chunk_with_embedding(
         &db,
@@ -347,7 +358,7 @@ fn hybrid_search_dual_signal_ranks_highest() {
         &emb_sem,
     );
 
-    let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
+    let query_emb = normalize384(&[1.0, 0.0, 0.0, 0.0]);
     let filters = SearchFilters::default();
     let results = db
         .search("kubernetes", &query_emb, &filters, SearchMode::Hybrid)
@@ -371,10 +382,10 @@ fn search_mode_dispatches_correctly() {
         .store(&make_memory("unique_fts_term", "unique_fts_term content"))
         .unwrap();
 
-    let emb = normalize(&[0.0, 0.0, 0.0, 1.0]);
+    let emb = normalize384(&[0.0, 0.0, 0.0, 1.0]);
     store_chunk_with_embedding(&db, &id.to_string(), "cx", 0, "text", model_id, &emb);
 
-    let query_emb = normalize(&[1.0, 0.0, 0.0, 0.0]);
+    let query_emb = normalize384(&[1.0, 0.0, 0.0, 0.0]);
     let filters = SearchFilters::default();
 
     let fts_results = db
