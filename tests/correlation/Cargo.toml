@@ -1,0 +1,15 @@
+[package]
+name = "correlation-tests"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[test]]
+name = "correlation"
+path = "tests/correlation.rs"
+
+[dev-dependencies]
+nous-core = { path = "../../crates/nous-core" }
+nous-otlp = { path = "../../crates/nous-otlp" }
+rusqlite = { workspace = true }
