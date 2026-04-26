@@ -104,6 +104,40 @@ fn load_tags_for(conn: &rusqlite::Connection, memory_id: &str) -> Result<Vec<Str
     Ok(tags)
 }
 
+fn batch_load_tags(
+    conn: &rusqlite::Connection,
+    memory_ids: &[&str],
+) -> Result<HashMap<String, Vec<String>>> {
+    if memory_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: String = (1..=memory_ids.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT mt.memory_id, t.name FROM tags t
+         JOIN memory_tags mt ON mt.tag_id = t.id
+         WHERE mt.memory_id IN ({placeholders})
+         ORDER BY mt.memory_id, t.name"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = memory_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for (memory_id, tag_name) in rows {
+        map.entry(memory_id).or_default().push(tag_name);
+    }
+    Ok(map)
+}
+
 impl MemoryDb {
     pub(crate) fn search_fts(
         &self,
@@ -201,14 +235,20 @@ impl MemoryDb {
         let mut scored: Vec<(String, f64)> = best_distances.into_iter().collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        let candidate_ids: Vec<&str> = scored.iter().map(|(id, _)| id.as_str()).collect();
+
+        // Batch-load in 2 queries instead of 2N (replaces former N+1 per-row lookups)
+        let memory_map = self.batch_load_memories(&candidate_ids)?;
+        let tags_map = batch_load_tags(self.connection(), &candidate_ids)?;
+
         let mut results = Vec::new();
-        for (memory_id, distance) in scored {
+        for (memory_id, distance) in &scored {
             if results.len() >= limit {
                 break;
             }
 
-            let memory = match self.load_memory_by_id(&memory_id)? {
-                Some(m) => m,
+            let memory = match memory_map.get(memory_id) {
+                Some(m) => m.clone(),
                 None => continue,
             };
 
@@ -216,7 +256,7 @@ impl MemoryDb {
                 continue;
             }
 
-            let tags = load_tags_for(self.connection(), &memory_id)?;
+            let tags = tags_map.get(memory_id).cloned().unwrap_or_default();
             let rank = (1.0 / (1.0 + distance)) * importance_weight(&memory.importance);
             results.push(SearchResult { memory, tags, rank });
         }
@@ -363,19 +403,33 @@ impl MemoryDb {
         }
     }
 
-    fn load_memory_by_id(&self, id: &str) -> Result<Option<Memory>> {
-        match self.connection().query_row(
+    fn batch_load_memories(&self, ids: &[&str]) -> Result<HashMap<String, Memory>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: String = (1..=ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "SELECT id, title, content, memory_type, source, importance, confidence,
                     workspace_id, session_id, trace_id, agent_id, agent_model,
                     valid_from, valid_until, archived, category_id, created_at, updated_at
-             FROM memories WHERE id = ?1",
-            params![id],
-            row_to_memory,
-        ) {
-            Ok(m) => Ok(Some(m)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+             FROM memories WHERE id IN ({placeholders})"
+        );
+        let mut stmt = self.connection().prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params.as_slice(), row_to_memory)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut map = HashMap::with_capacity(rows.len());
+        for memory in rows {
+            map.insert(memory.id.clone(), memory);
         }
+        Ok(map)
     }
 
     fn matches_filters(&self, memory: &Memory, filters: &SearchFilters) -> Result<bool> {
