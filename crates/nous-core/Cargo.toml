@@ -10,9 +10,7 @@ name = "nous_core"
 [dependencies]
 nous-shared = { path = "../nous-shared" }
 rusqlite = { workspace = true }
-# sqlite-vec 0.1.10-alpha.3 has broken build (missing sqlite-vec-diskann.c)
-# Uncomment when upstream publishes a fix
-# sqlite-vec = { workspace = true }
+libsqlite3-sys = { version = "0.37", features = ["bundled-sqlcipher"] }
 ort = { workspace = true }
 tokenizers = { workspace = true }
 hf-hub = { workspace = true }
@@ -21,6 +19,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+
+[build-dependencies]
+cc = "1"
 
 [dev-dependencies]
 tempfile = "3"

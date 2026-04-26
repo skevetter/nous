@@ -5,4 +5,5 @@ pub mod db;
 pub mod embed;
 pub mod model;
 pub mod search;
+pub mod sqlite_vec;
 pub mod types;

@@ -1691,7 +1691,9 @@ dependencies = [
 name = "nous-core"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "hf-hub 0.5.0",
+ "libsqlite3-sys",
  "ndarray",
  "nous-shared",
  "ort",
