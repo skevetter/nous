@@ -57,6 +57,10 @@ impl OtlpDb {
         Ok(Self { conn })
     }
 
+    pub fn from_connection(conn: Connection) -> Self {
+        Self { conn }
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
