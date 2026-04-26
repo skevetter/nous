@@ -77,11 +77,17 @@ impl OnnxBackendBuilder {
 
         let dimensions = detect_dimensions(&session, &model_path)?;
 
+        let needs_token_type_ids = session
+            .inputs()
+            .iter()
+            .any(|i| i.name() == "token_type_ids");
+
         Ok(OnnxBackend {
             model_id: model_repo,
             dimensions,
             max_tokens: 8192,
             batch_size: self.batch_size,
+            needs_token_type_ids,
             tokenizer,
             session: Mutex::new(session),
         })
@@ -108,6 +114,7 @@ pub struct OnnxBackend {
     dimensions: usize,
     max_tokens: usize,
     batch_size: usize,
+    needs_token_type_ids: bool,
     tokenizer: Tokenizer,
     session: Mutex<Session>,
 }
@@ -149,13 +156,26 @@ impl OnnxBackend {
         let mask_tensor = TensorRef::from_array_view(mask_array.view())
             .map_err(|e| NousError::Embedding(format!("mask tensor: {e}")))?;
 
+        let token_type_ids = vec![0i64; batch_size * seq_len];
+        let token_type_array =
+            ndarray::Array2::from_shape_vec((batch_size, seq_len), token_type_ids)
+                .map_err(|e| NousError::Embedding(format!("shape token_type_ids: {e}")))?;
+        let token_type_tensor = TensorRef::from_array_view(token_type_array.view())
+            .map_err(|e| NousError::Embedding(format!("token_type tensor: {e}")))?;
+
         let mut session = self
             .session
             .lock()
             .map_err(|e| NousError::Embedding(format!("session lock: {e}")))?;
-        let outputs = session
-            .run(ort::inputs![ids_tensor, mask_tensor])
-            .map_err(|e| NousError::Embedding(format!("inference: {e}")))?;
+        let outputs = if self.needs_token_type_ids {
+            session
+                .run(ort::inputs![ids_tensor, mask_tensor, token_type_tensor])
+                .map_err(|e| NousError::Embedding(format!("inference: {e}")))?
+        } else {
+            session
+                .run(ort::inputs![ids_tensor, mask_tensor])
+                .map_err(|e| NousError::Embedding(format!("inference: {e}")))?
+        };
 
         let output = &outputs[0];
         let (shape, data) = output
