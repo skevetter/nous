@@ -70,11 +70,6 @@ impl OnnxBackendBuilder {
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| NousError::Embedding(format!("load tokenizer: {e}")))?;
 
-        tokenizer.with_padding(Some(PaddingParams {
-            strategy: PaddingStrategy::BatchLongest,
-            direction: PaddingDirection::Left,
-            ..Default::default()
-        }));
         tokenizer
             .with_truncation(Some(TruncationParams {
                 max_length: max_tokens,
@@ -105,6 +100,16 @@ impl OnnxBackendBuilder {
         } else {
             ModelArch::Encoder
         };
+
+        let pad_direction = match arch {
+            ModelArch::Encoder => PaddingDirection::Right,
+            ModelArch::Decoder => PaddingDirection::Left,
+        };
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            direction: pad_direction,
+            ..Default::default()
+        }));
 
         Ok(OnnxBackend {
             model_id: model_repo,
