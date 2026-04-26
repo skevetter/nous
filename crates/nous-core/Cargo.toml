@@ -7,6 +7,10 @@ rust-version.workspace = true
 [lib]
 name = "nous_core"
 
+[[bin]]
+name = "generate-fixtures"
+path = "src/bin/generate_fixtures.rs"
+
 [dependencies]
 nous-shared = { path = "../nous-shared" }
 rusqlite = { workspace = true }
