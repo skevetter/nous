@@ -32,7 +32,7 @@ tokio = { version = "1", features = ["full"] }
 
 # OTLP decoding (nous-otlp only)
 prost = "0.13"
-opentelemetry-proto = { version = "0.27", features = ["gen-tonic-messages"] }
+opentelemetry-proto = { version = "0.27", features = ["gen-tonic-messages", "with-serde"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
