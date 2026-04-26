@@ -199,15 +199,19 @@ impl ServerHandler for NousServer {}
 mod tests {
     use super::*;
     use crate::config::Config;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn test_db_path() -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         format!(
-            "/tmp/nous-test-{}-{}.db",
+            "/tmp/nous-test-{}-{}-{}.db",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            seq,
         )
     }
 
