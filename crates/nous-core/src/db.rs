@@ -1,8 +1,9 @@
-use nous_shared::Result;
 use nous_shared::ids::MemoryId;
 use nous_shared::sqlite::{open_connection, run_migrations};
+use nous_shared::{NousError, Result};
 use rusqlite::{Connection, params};
 
+use crate::chunk::Chunk;
 use crate::types::{
     Category, Memory, MemoryPatch, MemoryWithRelations, NewMemory, RelationType, Relationship,
 };
@@ -149,6 +150,7 @@ impl MemoryDb {
         let conn = open_connection(path, key)?;
         run_migrations(&conn, MIGRATIONS)?;
         migrate_models_columns(&conn)?;
+        seed_placeholder_model(&conn)?;
         seed_categories(&conn)?;
         Ok(Self { conn })
     }
@@ -555,6 +557,61 @@ impl MemoryDb {
         )?;
         Ok(count as u64)
     }
+
+    pub fn store_chunks(
+        &self,
+        memory_id: &MemoryId,
+        chunks: &[Chunk],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
+        if chunks.len() != embeddings.len() {
+            return Err(NousError::Internal(format!(
+                "chunks length {} != embeddings length {}",
+                chunks.len(),
+                embeddings.len()
+            )));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let memory_id_str = memory_id.to_string();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_id = format!("{memory_id_str}:{i}");
+            let token_count = chunk.text.split_whitespace().count() as i64;
+
+            tx.execute(
+                "INSERT INTO memory_chunks (id, memory_id, chunk_index, content, token_count, model_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, (SELECT id FROM models WHERE name = 'placeholder'))",
+                params![chunk_id, memory_id_str, i as i64, chunk.text, token_count],
+            )?;
+
+            let blob: Vec<u8> = embeddings[i].iter().flat_map(|f| f.to_le_bytes()).collect();
+
+            tx.execute(
+                "INSERT INTO memory_embeddings (chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, blob],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_chunks(&self, memory_id: &MemoryId) -> Result<()> {
+        let memory_id_str = memory_id.to_string();
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
+            params![memory_id_str],
+        )?;
+        tx.execute(
+            "DELETE FROM memory_chunks WHERE memory_id = ?1",
+            params![memory_id_str],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 pub fn build_validity_clause(valid_only: Option<bool>) -> Option<String> {
@@ -593,6 +650,14 @@ fn migrate_models_columns(conn: &Connection) -> Result<()> {
             conn.execute_batch(sql)?;
         }
     }
+    Ok(())
+}
+
+fn seed_placeholder_model(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO models (name, dimensions, max_tokens) VALUES ('placeholder', 0, 0)",
+        [],
+    )?;
     Ok(())
 }
 

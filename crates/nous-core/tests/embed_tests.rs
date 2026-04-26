@@ -1,4 +1,4 @@
-use nous_core::embed::{EmbeddingBackend, MockEmbedding};
+use nous_core::embed::{EmbeddingBackend, MockEmbedding, OnnxBackend};
 
 #[test]
 fn embed_one_returns_correct_dimensions() {
@@ -67,4 +67,51 @@ fn model_id_and_metadata() {
     assert_eq!(mock.model_id(), "mock");
     assert_eq!(mock.dimensions(), 128);
     assert!(mock.max_tokens() > 0);
+}
+
+// --- OnnxBackend tests (require model download) ---
+
+#[test]
+#[ignore]
+fn onnx_embed_one_returns_correct_dimensions() {
+    let backend = OnnxBackend::builder()
+        .model("Qwen/Qwen3-Embedding-0.6B")
+        .variant("onnx/model.onnx")
+        .build()
+        .expect("failed to build OnnxBackend");
+    let vec = backend.embed_one("test").unwrap();
+    assert_eq!(vec.len(), backend.dimensions());
+}
+
+#[test]
+#[ignore]
+fn onnx_embed_batch_returns_correct_count() {
+    let backend = OnnxBackend::builder()
+        .model("Qwen/Qwen3-Embedding-0.6B")
+        .variant("onnx/model.onnx")
+        .build()
+        .expect("failed to build OnnxBackend");
+    let vecs = backend.embed(&["hello", "world", "foo bar"]).unwrap();
+    assert_eq!(vecs.len(), 3);
+    for v in &vecs {
+        assert_eq!(v.len(), backend.dimensions());
+    }
+}
+
+#[test]
+#[ignore]
+fn onnx_vectors_are_l2_normalized() {
+    let backend = OnnxBackend::builder()
+        .model("Qwen/Qwen3-Embedding-0.6B")
+        .variant("onnx/model.onnx")
+        .build()
+        .expect("failed to build OnnxBackend");
+    for text in &["hello", "world", "foo bar baz"] {
+        let vec = backend.embed_one(text).unwrap();
+        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "expected unit norm, got {norm} for input '{text}'"
+        );
+    }
 }

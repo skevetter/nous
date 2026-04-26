@@ -81,7 +81,7 @@ fn list_models_returns_all() {
         .unwrap();
 
     let models = db.list_models().unwrap();
-    assert_eq!(models.len(), 2);
+    assert!(models.len() >= 2);
 
     let ma = models.iter().find(|m| m.id == a).unwrap();
     assert_eq!(ma.dimensions, 384);
