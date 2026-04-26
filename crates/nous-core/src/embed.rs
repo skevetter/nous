@@ -255,6 +255,81 @@ impl EmbeddingBackend for OnnxBackend {
     }
 }
 
+pub struct FixtureEmbedding {
+    model: String,
+    dimension: usize,
+    vectors: std::collections::HashMap<String, Vec<f32>>,
+}
+
+#[derive(serde::Deserialize)]
+struct FixtureData {
+    model: String,
+    dimension: usize,
+    vectors: std::collections::HashMap<String, Vec<f32>>,
+}
+
+impl FixtureEmbedding {
+    pub fn load(path: &Path) -> nous_shared::Result<Self> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| NousError::Embedding(format!("read fixture: {e}")))?;
+        let fixture: FixtureData = serde_json::from_str(&data)
+            .map_err(|e| NousError::Embedding(format!("parse fixture: {e}")))?;
+        Ok(Self {
+            model: fixture.model,
+            dimension: fixture.dimension,
+            vectors: fixture.vectors,
+        })
+    }
+}
+
+impl EmbeddingBackend for FixtureEmbedding {
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimension
+    }
+
+    fn max_tokens(&self) -> usize {
+        8192
+    }
+
+    fn embed(&self, texts: &[&str]) -> nous_shared::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                self.vectors
+                    .get(*t)
+                    .cloned()
+                    .unwrap_or_else(|| self.hash_fallback(t))
+            })
+            .collect())
+    }
+}
+
+impl FixtureEmbedding {
+    fn hash_fallback(&self, text: &str) -> Vec<f32> {
+        let mut raw = vec![0.0f32; self.dimension];
+        for (i, byte) in text.bytes().enumerate() {
+            let idx = i % self.dimension;
+            raw[idx] += (byte as f32).sin() * ((i + 1) as f32).cos();
+        }
+        if text.is_empty() {
+            for (i, val) in raw.iter_mut().enumerate() {
+                *val = ((i + 1) as f32).sin();
+            }
+        }
+        let norm = raw.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for val in &mut raw {
+                *val /= norm;
+            }
+        }
+        raw
+    }
+}
+
 pub struct MockEmbedding {
     dimensions: usize,
 }
