@@ -1,1 +1,449 @@
+use std::collections::HashMap;
 
+use nous_shared::Result;
+use rusqlite::params;
+
+use crate::db::MemoryDb;
+use crate::types::{ContextEntry, Importance, Memory, SearchFilters, SearchMode, SearchResult};
+
+fn importance_weight(importance: &Importance) -> f64 {
+    match importance {
+        Importance::High => 3.0,
+        Importance::Moderate => 2.0,
+        Importance::Low => 1.0,
+    }
+}
+
+fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
+    Ok(Memory {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        content: row.get(2)?,
+        memory_type: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, e.into())
+        })?,
+        source: row.get(4)?,
+        importance: row.get::<_, String>(5)?.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, e.into())
+        })?,
+        confidence: row.get::<_, String>(6)?.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, e.into())
+        })?,
+        workspace_id: row.get(7)?,
+        session_id: row.get(8)?,
+        trace_id: row.get(9)?,
+        agent_id: row.get(10)?,
+        agent_model: row.get(11)?,
+        valid_from: row.get(12)?,
+        valid_until: row.get(13)?,
+        archived: row.get::<_, i64>(14)? != 0,
+        category_id: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+    })
+}
+
+fn load_tags_for(conn: &rusqlite::Connection, memory_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.name FROM tags t
+         JOIN memory_tags mt ON mt.tag_id = t.id
+         WHERE mt.memory_id = ?1
+         ORDER BY t.name",
+    )?;
+    let tags = stmt
+        .query_map(params![memory_id], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<String>, _>>()?;
+    Ok(tags)
+}
+
+impl MemoryDb {
+    pub fn search_fts(&self, query: &str, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
+        let mut conditions = vec!["memories_fts MATCH ?1".to_owned()];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(query.to_owned())];
+
+        self.apply_filter_conditions(filters, &mut conditions, &mut param_values);
+
+        let limit = filters.limit.unwrap_or(20);
+        let sql = format!(
+            "SELECT m.id, m.title, m.content, m.memory_type, m.source, m.importance, m.confidence,
+                    m.workspace_id, m.session_id, m.trace_id, m.agent_id, m.agent_model,
+                    m.valid_from, m.valid_until, m.archived, m.category_id, m.created_at, m.updated_at,
+                    bm25(memories_fts) AS rank
+             FROM memories_fts
+             JOIN memories m ON m.rowid = memories_fts.rowid
+             WHERE {}
+             ORDER BY rank,
+                      CASE m.importance WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 ELSE 3 END,
+                      m.created_at DESC
+             LIMIT ?{}",
+            conditions.join(" AND "),
+            param_values.len() + 1,
+        );
+
+        param_values.push(Box::new(limit as i64));
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self.connection().prepare(&sql)?;
+        let results = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                let memory = row_to_memory(row)?;
+                let bm25_rank: f64 = row.get(18)?;
+                Ok((memory, bm25_rank))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut search_results = Vec::new();
+        for (memory, bm25_rank) in results {
+            let tags = load_tags_for(self.connection(), &memory.id)?;
+            let rank = -bm25_rank * importance_weight(&memory.importance);
+            search_results.push(SearchResult { memory, tags, rank });
+        }
+
+        Ok(search_results)
+    }
+
+    pub fn search_semantic(
+        &self,
+        query_embedding: &[f32],
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>> {
+        let limit = filters.limit.unwrap_or(20);
+
+        let mut stmt = self.connection().prepare(
+            "SELECT mc.memory_id, mc.id AS chunk_id, me.embedding
+             FROM memory_chunks mc
+             JOIN memory_embeddings me ON me.chunk_id = mc.id",
+        )?;
+
+        let chunk_rows = stmt
+            .query_map([], |row| {
+                let memory_id: String = row.get(0)?;
+                let chunk_id: String = row.get(1)?;
+                let embedding_blob: Vec<u8> = row.get(2)?;
+                Ok((memory_id, chunk_id, embedding_blob))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut best_scores: HashMap<String, f64> = HashMap::new();
+        for (memory_id, _chunk_id, blob) in &chunk_rows {
+            let embedding = blob_to_f32(blob);
+            let similarity = dot_product(query_embedding, &embedding);
+            let entry = best_scores
+                .entry(memory_id.clone())
+                .or_insert(f64::NEG_INFINITY);
+            if similarity > *entry {
+                *entry = similarity;
+            }
+        }
+
+        let mut scored: Vec<(String, f64)> = best_scores.into_iter().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut results = Vec::new();
+        for (memory_id, score) in scored {
+            if results.len() >= limit {
+                break;
+            }
+
+            let memory = match self.load_memory_by_id(&memory_id)? {
+                Some(m) => m,
+                None => continue,
+            };
+
+            if !self.matches_filters(&memory, filters)? {
+                continue;
+            }
+
+            let tags = load_tags_for(self.connection(), &memory_id)?;
+            let rank = score * importance_weight(&memory.importance);
+            results.push(SearchResult { memory, tags, rank });
+        }
+
+        Ok(results)
+    }
+
+    pub fn search(
+        &self,
+        query: &str,
+        embedding: &[f32],
+        filters: &SearchFilters,
+        mode: SearchMode,
+    ) -> Result<Vec<SearchResult>> {
+        let results = match mode {
+            SearchMode::Fts => self.search_fts(query, filters)?,
+            SearchMode::Semantic => self.search_semantic(embedding, filters)?,
+            SearchMode::Hybrid => {
+                let fts_results = self.search_fts(query, filters)?;
+                let sem_results = self.search_semantic(embedding, filters)?;
+                self.fuse_rrf(fts_results, sem_results, filters)?
+            }
+        };
+
+        self.log_access_for_results(&results)?;
+        Ok(results)
+    }
+
+    pub fn context(&self, workspace_id: i64, summary: bool) -> Result<Vec<ContextEntry>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT id, title, content, memory_type, importance, created_at
+             FROM memories
+             WHERE workspace_id = ?1
+               AND archived = 0
+               AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ORDER BY CASE importance WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 ELSE 3 END,
+                      created_at DESC
+             LIMIT 50",
+        )?;
+
+        let entries = stmt
+            .query_map(params![workspace_id], |row| {
+                let content: String = row.get(2)?;
+                Ok(ContextEntry {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    content: if summary { None } else { Some(content) },
+                    memory_type: row.get::<_, String>(3)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    importance: row.get::<_, String>(4)?.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
+    fn apply_filter_conditions(
+        &self,
+        filters: &SearchFilters,
+        conditions: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) {
+        let archived = filters.archived.unwrap_or(false);
+        conditions.push(format!("m.archived = ?{}", params.len() + 1));
+        params.push(Box::new(archived as i64));
+
+        if let Some(ref mt) = filters.memory_type {
+            conditions.push(format!("m.memory_type = ?{}", params.len() + 1));
+            params.push(Box::new(mt.to_string()));
+        }
+
+        if let Some(cat_id) = filters.category_id {
+            conditions.push(format!("m.category_id = ?{}", params.len() + 1));
+            params.push(Box::new(cat_id));
+        }
+
+        if let Some(ws_id) = filters.workspace_id {
+            conditions.push(format!("m.workspace_id = ?{}", params.len() + 1));
+            params.push(Box::new(ws_id));
+        }
+
+        if let Some(ref imp) = filters.importance {
+            conditions.push(format!("m.importance = ?{}", params.len() + 1));
+            params.push(Box::new(imp.to_string()));
+        }
+
+        if let Some(ref conf) = filters.confidence {
+            conditions.push(format!("m.confidence = ?{}", params.len() + 1));
+            params.push(Box::new(conf.to_string()));
+        }
+
+        if let Some(ref since) = filters.since {
+            conditions.push(format!("m.created_at >= ?{}", params.len() + 1));
+            params.push(Box::new(since.clone()));
+        }
+
+        if let Some(ref until) = filters.until {
+            conditions.push(format!("m.created_at <= ?{}", params.len() + 1));
+            params.push(Box::new(until.clone()));
+        }
+
+        if filters.valid_only == Some(true) {
+            conditions.push(
+                "(m.valid_until IS NULL OR m.valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+                    .to_owned(),
+            );
+        }
+
+        if let Some(ref tag_names) = filters.tags {
+            if !tag_names.is_empty() {
+                let placeholders: Vec<String> = tag_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", params.len() + 1 + i))
+                    .collect();
+                conditions.push(format!(
+                    "m.id IN (SELECT mt.memory_id FROM memory_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN ({}))",
+                    placeholders.join(", ")
+                ));
+                for tag in tag_names {
+                    params.push(Box::new(tag.clone()));
+                }
+            }
+        }
+    }
+
+    fn load_memory_by_id(&self, id: &str) -> Result<Option<Memory>> {
+        match self.connection().query_row(
+            "SELECT id, title, content, memory_type, source, importance, confidence,
+                    workspace_id, session_id, trace_id, agent_id, agent_model,
+                    valid_from, valid_until, archived, category_id, created_at, updated_at
+             FROM memories WHERE id = ?1",
+            params![id],
+            row_to_memory,
+        ) {
+            Ok(m) => Ok(Some(m)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn matches_filters(&self, memory: &Memory, filters: &SearchFilters) -> Result<bool> {
+        let archived = filters.archived.unwrap_or(false);
+        if memory.archived != archived {
+            return Ok(false);
+        }
+
+        if let Some(ref mt) = filters.memory_type {
+            if &memory.memory_type != mt {
+                return Ok(false);
+            }
+        }
+
+        if let Some(cat_id) = filters.category_id {
+            if memory.category_id != Some(cat_id) {
+                return Ok(false);
+            }
+        }
+
+        if let Some(ws_id) = filters.workspace_id {
+            if memory.workspace_id != Some(ws_id) {
+                return Ok(false);
+            }
+        }
+
+        if let Some(ref imp) = filters.importance {
+            if &memory.importance != imp {
+                return Ok(false);
+            }
+        }
+
+        if let Some(ref conf) = filters.confidence {
+            if &memory.confidence != conf {
+                return Ok(false);
+            }
+        }
+
+        if let Some(ref since) = filters.since {
+            if memory.created_at < *since {
+                return Ok(false);
+            }
+        }
+
+        if let Some(ref until) = filters.until {
+            if memory.created_at > *until {
+                return Ok(false);
+            }
+        }
+
+        if filters.valid_only == Some(true) {
+            if let Some(ref valid_until) = memory.valid_until {
+                if !valid_until.is_empty() {
+                    return Ok(false);
+                }
+            }
+        }
+
+        if let Some(ref tag_names) = filters.tags {
+            if !tag_names.is_empty() {
+                let tags = load_tags_for(self.connection(), &memory.id)?;
+                if !tag_names.iter().any(|t| tags.contains(t)) {
+                    return Ok(false);
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn fuse_rrf(
+        &self,
+        fts_results: Vec<SearchResult>,
+        sem_results: Vec<SearchResult>,
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>> {
+        let k = 60.0_f64;
+        let limit = filters.limit.unwrap_or(20);
+
+        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+        let mut memory_map: HashMap<String, SearchResult> = HashMap::new();
+
+        for (rank_pos, result) in fts_results.into_iter().enumerate() {
+            let score = 1.0 / (k + rank_pos as f64 + 1.0);
+            *rrf_scores.entry(result.memory.id.clone()).or_default() += score;
+            memory_map.insert(result.memory.id.clone(), result);
+        }
+
+        for (rank_pos, result) in sem_results.into_iter().enumerate() {
+            let score = 1.0 / (k + rank_pos as f64 + 1.0);
+            *rrf_scores.entry(result.memory.id.clone()).or_default() += score;
+            memory_map.entry(result.memory.id.clone()).or_insert(result);
+        }
+
+        let mut fused: Vec<SearchResult> = rrf_scores
+            .into_iter()
+            .filter_map(|(id, rrf_score)| {
+                memory_map.remove(&id).map(|mut result| {
+                    result.rank = rrf_score * importance_weight(&result.memory.importance);
+                    result
+                })
+            })
+            .collect();
+
+        fused.sort_by(|a, b| {
+            b.rank
+                .partial_cmp(&a.rank)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        fused.truncate(limit);
+
+        Ok(fused)
+    }
+
+    fn log_access_for_results(&self, results: &[SearchResult]) -> Result<()> {
+        for result in results {
+            self.connection().execute(
+                "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'search')",
+                params![result.memory.id],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn blob_to_f32(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn dot_product(a: &[f32], b: &[f32]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as f64) * (*y as f64))
+        .sum()
+}
