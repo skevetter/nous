@@ -567,7 +567,7 @@ impl MemoryDb {
         })
     }
 
-    pub(crate) fn load_tags_on(conn: &Connection, memory_id: &str) -> Result<Vec<String>> {
+    pub fn load_tags_on(conn: &Connection, memory_id: &str) -> Result<Vec<String>> {
         let mut stmt = conn.prepare(
             "SELECT t.name FROM tags t
              JOIN memory_tags mt ON mt.tag_id = t.id
@@ -580,10 +580,7 @@ impl MemoryDb {
         Ok(tags)
     }
 
-    pub(crate) fn load_relationships_on(
-        conn: &Connection,
-        memory_id: &str,
-    ) -> Result<Vec<Relationship>> {
+    pub fn load_relationships_on(conn: &Connection, memory_id: &str) -> Result<Vec<Relationship>> {
         let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, created_at
              FROM relationships
