@@ -43,6 +43,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 thiserror = "2"
+anyhow = "1"
 
 # IDs
 uuid = { version = "1", features = ["v7"] }

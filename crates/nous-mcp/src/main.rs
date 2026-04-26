@@ -1,8 +1,16 @@
 mod config;
+pub mod server;
+mod tools;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use rmcp::ServiceExt;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+
+use crate::server::NousServer;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Transport {
@@ -72,17 +80,67 @@ enum CategorySubcommand {
 }
 
 fn main() {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
 
-    // Load configuration at startup
-    // This ensures the config module is actually used and not dead code
     let config = config::Config::load(None).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load config: {}", e);
         config::Config::default()
     });
 
-    // Resolve DB encryption key from config
     let _db_key = config.resolve_db_key().ok();
+
+    match cli.command {
+        Command::Serve { transport, port } => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            rt.block_on(run_serve(config, transport, port))
+                .expect("server error");
+        }
+        _ => {
+            eprintln!("Command not yet implemented");
+        }
+    }
+}
+
+async fn run_serve(
+    config: config::Config,
+    transport: Transport,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+    let server = NousServer::new(config, embedding)?;
+
+    match transport {
+        Transport::Stdio => {
+            let transport = rmcp::transport::io::stdio();
+            let service = server.serve(transport).await?;
+            service.waiting().await?;
+        }
+        Transport::Http => {
+            let user_config = server.config.clone();
+            let http_config = StreamableHttpServerConfig::default();
+            let ct = http_config.cancellation_token.clone();
+            let session_manager = Arc::new(LocalSessionManager::default());
+            let service = StreamableHttpService::new(
+                move || {
+                    let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+                    let cfg = user_config.clone();
+                    NousServer::new(cfg, embedding)
+                        .map_err(|e| std::io::Error::other(e.to_string()))
+                },
+                session_manager,
+                http_config,
+            );
+            let router = axum::Router::new().fallback_service(service);
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            eprintln!("Nous MCP HTTP server listening on {addr}");
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled().await })
+                .await?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -308,5 +366,79 @@ mod tests {
     fn import_missing_file_errors() {
         let result = Cli::try_parse_from(["nous-mcp", "import"]);
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn server_constructs_with_mock_embedding() {
+        let cfg = config::Config::default();
+        let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+        let server = NousServer::new(cfg, embedding).expect("server should construct");
+
+        assert!(server.embedding.dimensions() == 384);
+        assert_eq!(server.embedding.model_id(), "mock");
+    }
+
+    #[tokio::test]
+    async fn server_lists_all_15_tools() {
+        use rmcp::model::CallToolRequestParams;
+        use rmcp::{ClientHandler, ServiceExt};
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+
+        let cfg = config::Config::default();
+        let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+        let server = NousServer::new(cfg, embedding).unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            server.serve(server_transport).await?.waiting().await?;
+            anyhow::Ok(())
+        });
+
+        #[derive(Debug, Clone, Default)]
+        struct TestClient;
+        impl ClientHandler for TestClient {}
+
+        let client = TestClient.serve(client_transport).await.unwrap();
+        let tools_result = client.peer().list_tools(Default::default()).await.unwrap();
+        let tool_names: Vec<&str> = tools_result.tools.iter().map(|t| t.name.as_ref()).collect();
+
+        let expected = [
+            "memory_store",
+            "memory_recall",
+            "memory_search",
+            "memory_context",
+            "memory_forget",
+            "memory_unarchive",
+            "memory_update",
+            "memory_relate",
+            "memory_unrelate",
+            "memory_category_suggest",
+            "memory_workspaces",
+            "memory_tags",
+            "memory_stats",
+            "memory_schema",
+            "memory_sql",
+        ];
+
+        assert_eq!(
+            tools_result.tools.len(),
+            15,
+            "expected 15 tools, got {:?}",
+            tool_names
+        );
+
+        for name in &expected {
+            assert!(tool_names.contains(name), "missing tool: {name}");
+        }
+
+        // Verify a tool call returns not-implemented
+        let result = client
+            .call_tool(CallToolRequestParams::new("memory_stats"))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+
+        client.cancel().await.unwrap();
+        server_handle.await.unwrap().unwrap();
     }
 }
