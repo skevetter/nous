@@ -8,6 +8,7 @@ use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
 use nous_core::types::{
     Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations, NewMemory, RelationType,
+    SearchFilters, SearchMode,
 };
 use nous_shared::ids::MemoryId;
 use rmcp::model::CallToolResult;
@@ -676,4 +677,152 @@ fn is_read_only_pragma(trimmed_upper: &str) -> bool {
         .unwrap_or("")
         .trim_start();
     !after_pragma.contains('=')
+}
+
+pub async fn handle_search(
+    params: MemorySearchParams,
+    db_path: &str,
+    embedding: &Arc<dyn EmbeddingBackend>,
+) -> CallToolResult {
+    let mode = match params.mode.as_deref() {
+        Some(v) => match parse_enum::<SearchMode>(v, "mode") {
+            Ok(v) => v,
+            Err(e) => return e,
+        },
+        None => SearchMode::Hybrid,
+    };
+
+    if params.query.trim().is_empty() && matches!(mode, SearchMode::Fts | SearchMode::Hybrid) {
+        return err_result("query must not be empty for fts or hybrid mode");
+    }
+
+    let memory_type = match params.memory_type.as_deref() {
+        Some(v) => match parse_enum::<MemoryType>(v, "memory_type") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+
+    let importance = match params.importance.as_deref() {
+        Some(v) => match parse_enum::<Importance>(v, "importance") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+
+    let confidence = match params.confidence.as_deref() {
+        Some(v) => match parse_enum::<Confidence>(v, "confidence") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+
+    let query_embedding = match mode {
+        SearchMode::Semantic | SearchMode::Hybrid => match embedding.embed_one(&params.query) {
+            Ok(v) => v,
+            Err(e) => return err_result(&format!("embedding failed: {e}")),
+        },
+        SearchMode::Fts => vec![],
+    };
+
+    let filters = SearchFilters {
+        memory_type,
+        category_id: params.category_id,
+        workspace_id: params.workspace_id,
+        importance,
+        confidence,
+        tags: params.tags,
+        archived: params.archived,
+        since: params.since,
+        until: params.until,
+        valid_only: params.valid_only,
+        limit: params.limit,
+    };
+
+    let db_path = db_path.to_owned();
+    let query = params.query;
+    let results = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = MemoryDb::open(&db_path, None)?;
+        db.search(&query, &query_embedding, &filters, mode)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return err_result(&format!("search failed: {e}")),
+    };
+
+    let results_json: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "memory": {
+                    "id": r.memory.id,
+                    "title": r.memory.title,
+                    "content": r.memory.content,
+                    "memory_type": r.memory.memory_type,
+                    "importance": r.memory.importance,
+                    "confidence": r.memory.confidence,
+                    "workspace_id": r.memory.workspace_id,
+                    "archived": r.memory.archived,
+                    "created_at": r.memory.created_at,
+                },
+                "tags": r.tags,
+                "rank": r.rank,
+            })
+        })
+        .collect();
+
+    ok_json(&serde_json::json!({
+        "results": results_json,
+        "count": results_json.len(),
+    }))
+}
+
+pub async fn handle_context(params: MemoryContextParams, db_path: &str) -> CallToolResult {
+    let workspace_path = params.workspace_path;
+    let summary = params.summary;
+
+    let db_path = db_path.to_owned();
+    let entries = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = MemoryDb::open(&db_path, None)?;
+
+        let ws_id: i64 = match db.connection().query_row(
+            "SELECT id FROM workspaces WHERE path = ?1",
+            rusqlite::params![workspace_path],
+            |row| row.get(0),
+        ) {
+            Ok(id) => id,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+
+        db.context(ws_id, summary)
+    })
+    .await
+    {
+        Ok(e) => e,
+        Err(e) => return err_result(&format!("context failed: {e}")),
+    };
+
+    let entries_json: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "title": e.title,
+                "content": e.content,
+                "memory_type": e.memory_type,
+                "importance": e.importance,
+                "created_at": e.created_at,
+            })
+        })
+        .collect();
+
+    ok_json(&serde_json::json!({
+        "entries": entries_json,
+        "count": entries_json.len(),
+    }))
 }

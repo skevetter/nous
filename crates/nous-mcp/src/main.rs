@@ -504,7 +504,6 @@ mod tests {
             assert!(tool_names.contains(name), "missing tool: {name}");
         }
 
-        // Verify a still-stubbed tool returns not-implemented
         let result = client
             .call_tool(
                 CallToolRequestParams::new("memory_search").with_arguments(
@@ -516,7 +515,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.is_error, Some(true));
+        assert_ne!(result.is_error, Some(true));
 
         client.cancel().await.unwrap();
         server_handle.await.unwrap().unwrap();
