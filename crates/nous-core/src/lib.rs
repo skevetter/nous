@@ -1,3 +1,4 @@
+pub mod channel;
 pub mod chunk;
 pub mod classify;
 pub mod db;
