@@ -448,9 +448,16 @@ mod tests {
             assert!(tool_names.contains(name), "missing tool: {name}");
         }
 
-        // Verify a tool call returns not-implemented
+        // Verify a still-stubbed tool returns not-implemented
         let result = client
-            .call_tool(CallToolRequestParams::new("memory_stats"))
+            .call_tool(
+                CallToolRequestParams::new("memory_search").with_arguments(
+                    serde_json::json!({"query": "test"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
             .await
             .unwrap();
         assert_eq!(result.is_error, Some(true));

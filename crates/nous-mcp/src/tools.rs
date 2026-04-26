@@ -7,7 +7,7 @@ use nous_core::classify::CategoryClassifier;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
 use nous_core::types::{
-    Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations, NewMemory,
+    Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations, NewMemory, RelationType,
 };
 use nous_shared::ids::MemoryId;
 use rmcp::model::CallToolResult;
@@ -105,7 +105,9 @@ pub struct MemoryUnrelateParams {
 pub struct MemoryCategorySuggestParams {
     pub memory_id: String,
     pub name: String,
-    pub description: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -434,4 +436,244 @@ pub async fn handle_unarchive(
     }
 
     ok_json(&recall_to_json(&result))
+}
+
+pub async fn handle_relate(
+    params: MemoryRelateParams,
+    write_channel: &WriteChannel,
+) -> CallToolResult {
+    let source_id = match params.source_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid source_id: {e}")),
+    };
+    let target_id = match params.target_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid target_id: {e}")),
+    };
+    let relation_type = match parse_enum::<RelationType>(&params.relation_type, "relation_type") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    match write_channel
+        .relate(source_id, target_id, relation_type)
+        .await
+    {
+        Ok(()) => ok_json(&serde_json::json!({"status": "related"})),
+        Err(e) => err_result(&format!("relate failed: {e}")),
+    }
+}
+
+pub async fn handle_unrelate(
+    params: MemoryUnrelateParams,
+    write_channel: &WriteChannel,
+) -> CallToolResult {
+    let source_id = match params.source_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid source_id: {e}")),
+    };
+    let target_id = match params.target_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid target_id: {e}")),
+    };
+    let relation_type = match parse_enum::<RelationType>(&params.relation_type, "relation_type") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    match write_channel
+        .unrelate(source_id, target_id, relation_type)
+        .await
+    {
+        Ok(true) => ok_json(&serde_json::json!({"status": "unrelated"})),
+        Ok(false) => err_result("relationship not found"),
+        Err(e) => err_result(&format!("unrelate failed: {e}")),
+    }
+}
+
+pub async fn handle_category_suggest(
+    params: MemoryCategorySuggestParams,
+    write_channel: &WriteChannel,
+    embedding: &Arc<dyn EmbeddingBackend>,
+) -> CallToolResult {
+    let memory_id = match params.memory_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid memory_id: {e}")),
+    };
+
+    let description = params.description.unwrap_or_default();
+    let embed_text = if description.is_empty() {
+        params.name.clone()
+    } else {
+        format!("{} {}", params.name, description)
+    };
+
+    let embedding_blob = match embedding.embed_one(&embed_text) {
+        Ok(emb) => Some(
+            emb.iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        ),
+        Err(e) => return err_result(&format!("embedding failed: {e}")),
+    };
+
+    match write_channel
+        .category_suggest(
+            params.name,
+            if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
+            params.parent_id,
+            memory_id,
+            embedding_blob,
+        )
+        .await
+    {
+        Ok(id) => ok_json(&serde_json::json!({"category_id": id})),
+        Err(e) => err_result(&format!("category_suggest failed: {e}")),
+    }
+}
+
+pub async fn handle_workspaces(read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.with_conn(MemoryDb::workspaces_on).await {
+        Ok(workspaces) => {
+            let list: Vec<serde_json::Value> = workspaces
+                .into_iter()
+                .map(|(w, count)| {
+                    serde_json::json!({
+                        "id": w.id,
+                        "path": w.path,
+                        "name": w.name,
+                        "memory_count": count,
+                        "created_at": w.created_at,
+                    })
+                })
+                .collect();
+            ok_json(&serde_json::json!({"workspaces": list}))
+        }
+        Err(e) => err_result(&format!("workspaces failed: {e}")),
+    }
+}
+
+pub async fn handle_tags(read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.with_conn(MemoryDb::tags_on).await {
+        Ok(tags) => {
+            let list: Vec<serde_json::Value> = tags
+                .into_iter()
+                .map(|(name, count)| serde_json::json!({"tag": name, "count": count}))
+                .collect();
+            ok_json(&serde_json::json!({"tags": list}))
+        }
+        Err(e) => err_result(&format!("tags failed: {e}")),
+    }
+}
+
+pub async fn handle_stats(read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.with_conn(MemoryDb::stats_on).await {
+        Ok(stats) => ok_json(&stats),
+        Err(e) => err_result(&format!("stats failed: {e}")),
+    }
+}
+
+pub async fn handle_schema(read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.with_conn(MemoryDb::schema_on).await {
+        Ok(schema) => ok_json(&serde_json::json!({"schema": schema})),
+        Err(e) => err_result(&format!("schema failed: {e}")),
+    }
+}
+
+pub async fn handle_sql(params: MemorySqlParams, read_pool: &ReadPool) -> CallToolResult {
+    let query = params.query.trim().to_string();
+
+    if !is_read_only_sql(&query) {
+        return err_result(
+            "only SELECT, EXPLAIN, read-only PRAGMA, and read-only WITH statements are allowed",
+        );
+    }
+
+    match read_pool
+        .with_conn(move |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let column_names: Vec<String> =
+                stmt.column_names().iter().map(|s| s.to_string()).collect();
+            let col_count = column_names.len();
+
+            let rows: Vec<Vec<serde_json::Value>> = stmt
+                .query_map([], |row| {
+                    let mut values = Vec::with_capacity(col_count);
+                    for i in 0..col_count {
+                        let val = match row.get_ref(i)? {
+                            rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                            rusqlite::types::ValueRef::Integer(n) => {
+                                serde_json::Value::Number(n.into())
+                            }
+                            rusqlite::types::ValueRef::Real(f) => serde_json::json!(f),
+                            rusqlite::types::ValueRef::Text(t) => {
+                                serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                            }
+                            rusqlite::types::ValueRef::Blob(b) => {
+                                serde_json::Value::String(format!("<blob:{} bytes>", b.len()))
+                            }
+                        };
+                        values.push(val);
+                    }
+                    Ok(values)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            let row_count = rows.len();
+            Ok(serde_json::json!({
+                "columns": column_names,
+                "rows": rows,
+                "row_count": row_count,
+            }))
+        })
+        .await
+    {
+        Ok(result) => ok_json(&result),
+        Err(e) => err_result(&format!("sql query failed: {e}")),
+    }
+}
+
+fn is_read_only_sql(sql: &str) -> bool {
+    let upper = sql.to_uppercase();
+    let trimmed = upper.trim_start();
+
+    let first_keyword = trimmed
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .next()
+        .unwrap_or("");
+
+    match first_keyword {
+        "SELECT" | "EXPLAIN" => true,
+        "WITH" => !contains_write_keyword(&upper),
+        "PRAGMA" => is_read_only_pragma(trimmed),
+        _ => false,
+    }
+}
+
+fn contains_write_keyword(upper_sql: &str) -> bool {
+    let write_keywords = [
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH", "REPLACE",
+        "REINDEX", "VACUUM",
+    ];
+    let tokens: Vec<&str> = upper_sql
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .collect();
+    for kw in &write_keywords {
+        if tokens.iter().any(|t| t == kw) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_read_only_pragma(trimmed_upper: &str) -> bool {
+    let after_pragma = trimmed_upper
+        .strip_prefix("PRAGMA")
+        .unwrap_or("")
+        .trim_start();
+    !after_pragma.contains('=')
 }

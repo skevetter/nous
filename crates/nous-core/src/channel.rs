@@ -25,7 +25,21 @@ pub enum WriteOp {
         RelationType,
         oneshot::Sender<Result<()>>,
     ),
+    Unrelate(
+        MemoryId,
+        MemoryId,
+        RelationType,
+        oneshot::Sender<Result<bool>>,
+    ),
     Unarchive(MemoryId, oneshot::Sender<Result<bool>>),
+    CategorySuggest {
+        name: String,
+        description: Option<String>,
+        parent_id: Option<i64>,
+        memory_id: MemoryId,
+        embedding_blob: Option<Vec<u8>>,
+        resp: oneshot::Sender<Result<i64>>,
+    },
     StoreChunks(
         MemoryId,
         Vec<Chunk>,
@@ -87,6 +101,42 @@ impl WriteChannel {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
             .send(WriteOp::Relate(src, tgt, rel, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn unrelate(&self, src: MemoryId, tgt: MemoryId, rel: RelationType) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::Unrelate(src, tgt, rel, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn category_suggest(
+        &self,
+        name: String,
+        description: Option<String>,
+        parent_id: Option<i64>,
+        memory_id: MemoryId,
+        embedding_blob: Option<Vec<u8>>,
+    ) -> Result<i64> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CategorySuggest {
+                name,
+                description,
+                parent_id,
+                memory_id,
+                embedding_blob,
+                resp: resp_tx,
+            })
             .await
             .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
         resp_rx
@@ -188,6 +238,35 @@ async fn write_worker(
                     }
                     WriteOp::Relate(src, tgt, rel, resp) => {
                         let _ = resp.send(MemoryDb::relate_on(&tx, &src, &tgt, rel));
+                    }
+                    WriteOp::Unrelate(src, tgt, rel, resp) => {
+                        let _ = resp.send(MemoryDb::unrelate_on(&tx, &src, &tgt, rel));
+                    }
+                    WriteOp::CategorySuggest {
+                        name,
+                        description,
+                        parent_id,
+                        memory_id,
+                        embedding_blob,
+                        resp,
+                    } => {
+                        let result = MemoryDb::category_suggest_on(
+                            &tx,
+                            &name,
+                            description.as_deref(),
+                            parent_id,
+                            &memory_id,
+                        )
+                        .and_then(|id| {
+                            if let Some(blob) = embedding_blob {
+                                tx.execute(
+                                    "UPDATE categories SET embedding = ?1 WHERE id = ?2",
+                                    rusqlite::params![blob, id],
+                                )?;
+                            }
+                            Ok(id)
+                        });
+                        let _ = resp.send(result);
                     }
                     WriteOp::Unarchive(id, resp) => {
                         let _ = resp.send(MemoryDb::unarchive_on(&tx, &id));

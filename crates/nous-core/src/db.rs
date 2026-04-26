@@ -470,7 +470,16 @@ impl MemoryDb {
     }
 
     pub fn unrelate(&self, from: &MemoryId, to: &MemoryId, relation: RelationType) -> Result<bool> {
-        let changed = self.conn.execute(
+        Self::unrelate_on(&self.conn, from, to, relation)
+    }
+
+    pub(crate) fn unrelate_on(
+        conn: &Connection,
+        from: &MemoryId,
+        to: &MemoryId,
+        relation: RelationType,
+    ) -> Result<bool> {
+        let changed = conn.execute(
             "DELETE FROM relationships WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
             params![from.to_string(), to.to_string(), relation.to_string()],
         )?;
@@ -518,11 +527,26 @@ impl MemoryDb {
     pub fn category_suggest(
         &self,
         name: &str,
-        description: &str,
+        description: Option<&str>,
+        parent_id: Option<i64>,
         memory_id: &MemoryId,
     ) -> Result<i64> {
-        let id = self.category_add(name, None, Some(description), CategorySource::Agent)?;
-        self.conn.execute(
+        Self::category_suggest_on(&self.conn, name, description, parent_id, memory_id)
+    }
+
+    pub(crate) fn category_suggest_on(
+        conn: &Connection,
+        name: &str,
+        description: Option<&str>,
+        parent_id: Option<i64>,
+        memory_id: &MemoryId,
+    ) -> Result<i64> {
+        conn.execute(
+            "INSERT INTO categories (name, parent_id, description, source) VALUES (?1, ?2, ?3, 'agent')",
+            params![name, parent_id, description],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.execute(
             "UPDATE memories SET category_id = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?2",
             params![id, memory_id.to_string()],
         )?;
@@ -733,6 +757,162 @@ impl MemoryDb {
         )?;
 
         Ok(())
+    }
+
+    pub fn workspaces_on(conn: &Connection) -> Result<Vec<(crate::types::Workspace, i64)>> {
+        let mut stmt = conn.prepare(
+            "SELECT w.id, w.path, w.name, w.created_at, COUNT(m.id) as memory_count
+             FROM workspaces w
+             LEFT JOIN memories m ON m.workspace_id = w.id AND m.archived = 0
+             GROUP BY w.id
+             ORDER BY memory_count DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    crate::types::Workspace {
+                        id: row.get(0)?,
+                        path: row.get(1)?,
+                        name: row.get(2)?,
+                        created_at: row.get(3)?,
+                    },
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn tags_on(conn: &Connection) -> Result<Vec<(String, i64)>> {
+        let mut stmt = conn.prepare(
+            "SELECT t.name, COUNT(mt.memory_id) as usage_count
+             FROM tags t
+             JOIN memory_tags mt ON mt.tag_id = t.id
+             GROUP BY t.id
+             ORDER BY usage_count DESC, t.name ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn stats_on(conn: &Connection) -> Result<serde_json::Value> {
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE archived = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let archived: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE archived = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut by_type = serde_json::Map::new();
+        {
+            let mut stmt =
+                conn.prepare("SELECT memory_type, COUNT(*) FROM memories WHERE archived = 0 GROUP BY memory_type")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (k, v) = row?;
+                by_type.insert(k, serde_json::Value::Number(v.into()));
+            }
+        }
+
+        let mut by_importance = serde_json::Map::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT importance, COUNT(*) FROM memories WHERE archived = 0 GROUP BY importance",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (k, v) = row?;
+                by_importance.insert(k, serde_json::Value::Number(v.into()));
+            }
+        }
+
+        let mut by_workspace = serde_json::Map::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(w.path, 'unassigned'), COUNT(*)
+                 FROM memories m
+                 LEFT JOIN workspaces w ON w.id = m.workspace_id
+                 WHERE m.archived = 0
+                 GROUP BY m.workspace_id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (k, v) = row?;
+                by_workspace.insert(k, serde_json::Value::Number(v.into()));
+            }
+        }
+
+        let mut by_category = serde_json::Map::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(c.name, 'uncategorized'), COUNT(*)
+                 FROM memories m
+                 LEFT JOIN categories c ON c.id = m.category_id
+                 WHERE m.archived = 0
+                 GROUP BY m.category_id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (k, v) = row?;
+                by_category.insert(k, serde_json::Value::Number(v.into()));
+            }
+        }
+
+        let mut top_tags = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT t.name, COUNT(mt.memory_id) as cnt
+                 FROM tags t JOIN memory_tags mt ON mt.tag_id = t.id
+                 GROUP BY t.id ORDER BY cnt DESC LIMIT 20",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (name, count) = row?;
+                top_tags.push(serde_json::json!({"tag": name, "count": count}));
+            }
+        }
+
+        let total_accesses: i64 =
+            conn.query_row("SELECT COUNT(*) FROM access_log", [], |row| row.get(0))?;
+
+        Ok(serde_json::json!({
+            "total": total,
+            "archived": archived,
+            "by_type": by_type,
+            "by_importance": by_importance,
+            "by_workspace": by_workspace,
+            "by_category": by_category,
+            "top_tags": top_tags,
+            "total_accesses": total_accesses,
+        }))
+    }
+
+    pub fn schema_on(conn: &Connection) -> Result<String> {
+        let mut stmt = conn.prepare(
+            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type DESC, name ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.join(";\n\n") + ";")
     }
 }
 
