@@ -224,6 +224,8 @@ fn category_roundtrip_json() {
         name: "infrastructure".into(),
         parent_id: None,
         source: CategorySource::System,
+        description: None,
+        embedding: None,
         created_at: "2025-01-01T00:00:00Z".into(),
     };
     let json = serde_json::to_string(&cat).unwrap();
@@ -376,6 +378,8 @@ fn category_tree_roundtrip_json() {
             name: "infrastructure".into(),
             parent_id: None,
             source: CategorySource::System,
+            description: None,
+            embedding: None,
             created_at: "2025-01-01T00:00:00Z".into(),
         },
         children: vec![CategoryTree {
@@ -384,6 +388,8 @@ fn category_tree_roundtrip_json() {
                 name: "k8s".into(),
                 parent_id: Some(1),
                 source: CategorySource::System,
+                description: None,
+                embedding: None,
                 created_at: "2025-01-01T00:00:00Z".into(),
             },
             children: vec![],
