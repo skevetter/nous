@@ -517,13 +517,12 @@ impl MemoryDb {
     }
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .unwrap();
-    stmt.query_map([], |row| row.get::<_, String>(1))
-        .unwrap()
-        .any(|r| r.as_deref() == Ok(column))
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let found = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|r| r.as_deref() == Ok(column));
+    Ok(found)
 }
 
 fn migrate_models_columns(conn: &Connection) -> Result<()> {
@@ -543,7 +542,7 @@ fn migrate_models_columns(conn: &Connection) -> Result<()> {
         ),
     ];
     for (col, sql) in alters {
-        if !has_column(conn, "models", col) {
+        if !has_column(conn, "models", col)? {
             conn.execute_batch(sql)?;
         }
     }

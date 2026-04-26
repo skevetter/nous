@@ -115,3 +115,19 @@ fn validation_rejects_overlap_ge_chunk_size() {
     let err = db.register_model("bad", None, 384, 512, 600);
     assert!(err.is_err());
 }
+
+#[test]
+fn activate_nonexistent_model_errors() {
+    let db = open_test_db();
+    let a = db.register_model("model-a", None, 384, 512, 64).unwrap();
+    db.activate_model(a).unwrap();
+
+    let err = db.activate_model(9999);
+    assert!(err.is_err());
+
+    let active = db
+        .active_model()
+        .unwrap()
+        .expect("original model still active");
+    assert_eq!(active.id, a);
+}

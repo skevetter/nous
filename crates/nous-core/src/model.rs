@@ -36,7 +36,10 @@ impl MemoryDb {
     pub fn activate_model(&self, id: i64) -> Result<()> {
         let tx = self.connection().unchecked_transaction()?;
         tx.execute("UPDATE models SET active = 0", [])?;
-        tx.execute("UPDATE models SET active = 1 WHERE id = ?1", params![id])?;
+        let changed = tx.execute("UPDATE models SET active = 1 WHERE id = ?1", params![id])?;
+        if changed == 0 {
+            return Err(NousError::Validation(format!("model id {id} not found")));
+        }
         tx.commit()?;
         Ok(())
     }
