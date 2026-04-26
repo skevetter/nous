@@ -12,7 +12,7 @@ use serde::Serialize;
 pub enum DecodeError {
     #[error("protobuf decode failed: {0}")]
     Prost(#[from] prost::DecodeError),
-    #[error("json serialization failed: {0}")]
+    #[error("json failed: {0}")]
     Json(#[from] serde_json::Error),
 }
 
@@ -136,8 +136,17 @@ fn severity_number_to_string(n: i32) -> String {
     }
 }
 
+pub fn decode_logs_json(body: &[u8]) -> Result<Vec<LogEvent>> {
+    let request: ExportLogsServiceRequest = serde_json::from_slice(body)?;
+    Ok(convert_logs(&request))
+}
+
 pub fn decode_logs(body: &[u8]) -> Result<Vec<LogEvent>> {
     let request = ExportLogsServiceRequest::decode(body)?;
+    Ok(convert_logs(&request))
+}
+
+fn convert_logs(request: &ExportLogsServiceRequest) -> Vec<LogEvent> {
     let mut events = Vec::new();
 
     for rl in &request.resource_logs {
@@ -192,11 +201,20 @@ pub fn decode_logs(body: &[u8]) -> Result<Vec<LogEvent>> {
         }
     }
 
-    Ok(events)
+    events
+}
+
+pub fn decode_traces_json(body: &[u8]) -> Result<Vec<Span>> {
+    let request: ExportTraceServiceRequest = serde_json::from_slice(body)?;
+    Ok(convert_traces(&request))
 }
 
 pub fn decode_traces(body: &[u8]) -> Result<Vec<Span>> {
     let request = ExportTraceServiceRequest::decode(body)?;
+    Ok(convert_traces(&request))
+}
+
+fn convert_traces(request: &ExportTraceServiceRequest) -> Vec<Span> {
     let mut spans = Vec::new();
 
     for rs in &request.resource_spans {
@@ -256,7 +274,7 @@ pub fn decode_traces(body: &[u8]) -> Result<Vec<Span>> {
         }
     }
 
-    Ok(spans)
+    spans
 }
 
 #[derive(Serialize)]
@@ -377,8 +395,17 @@ fn extract_metric_data(
     }
 }
 
+pub fn decode_metrics_json(body: &[u8]) -> Result<Vec<Metric>> {
+    let request: ExportMetricsServiceRequest = serde_json::from_slice(body)?;
+    Ok(convert_metrics(&request))
+}
+
 pub fn decode_metrics(body: &[u8]) -> Result<Vec<Metric>> {
     let request = ExportMetricsServiceRequest::decode(body)?;
+    Ok(convert_metrics(&request))
+}
+
+fn convert_metrics(request: &ExportMetricsServiceRequest) -> Vec<Metric> {
     let mut metrics = Vec::new();
 
     for rm in &request.resource_metrics {
@@ -413,7 +440,7 @@ pub fn decode_metrics(body: &[u8]) -> Result<Vec<Metric>> {
         }
     }
 
-    Ok(metrics)
+    metrics
 }
 
 #[cfg(test)]
