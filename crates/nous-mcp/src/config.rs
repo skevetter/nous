@@ -17,7 +17,7 @@ pub enum ConfigError {
 
 type Result<T> = std::result::Result<T, ConfigError>;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub memory: MemoryConfig,
@@ -27,13 +27,13 @@ pub struct Config {
     pub encryption: EncryptionConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
     pub db_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct EmbeddingConfig {
     pub model: String,
@@ -42,20 +42,20 @@ pub struct EmbeddingConfig {
     pub chunk_overlap: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct OtlpConfig {
     pub db_path: String,
     pub port: u16,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct ClassificationConfig {
     pub confidence_threshold: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct EncryptionConfig {
     pub db_key_file: String,

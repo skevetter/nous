@@ -116,18 +116,19 @@ async fn run_serve(
             service.waiting().await?;
         }
         Transport::Http => {
-            let config = StreamableHttpServerConfig::default();
-            let ct = config.cancellation_token.clone();
+            let user_config = server.config.clone();
+            let http_config = StreamableHttpServerConfig::default();
+            let ct = http_config.cancellation_token.clone();
             let session_manager = Arc::new(LocalSessionManager::default());
             let service = StreamableHttpService::new(
                 move || {
                     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-                    let cfg = crate::config::Config::default();
+                    let cfg = user_config.clone();
                     NousServer::new(cfg, embedding)
                         .map_err(|e| std::io::Error::other(e.to_string()))
                 },
                 session_manager,
-                config,
+                http_config,
             );
             let router = axum::Router::new().fallback_service(service);
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
