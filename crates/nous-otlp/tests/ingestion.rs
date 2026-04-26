@@ -42,7 +42,7 @@ fn make_resource(session_id: &str, service_name: &str) -> Option<Resource> {
 
 fn build_log_payload(batch_idx: usize) -> (Vec<u8>, usize) {
     let session_id = format!("log-sess-{batch_idx}");
-    let num_records = if batch_idx % 2 == 0 { 3 } else { 2 };
+    let num_records = if batch_idx.is_multiple_of(2) { 3 } else { 2 };
 
     let records: Vec<LogRecord> = (0..num_records)
         .map(|i| LogRecord {
@@ -76,7 +76,7 @@ fn build_log_payload(batch_idx: usize) -> (Vec<u8>, usize) {
 
 fn build_trace_payload(batch_idx: usize) -> (Vec<u8>, usize) {
     let trace_id_byte = (batch_idx + 100) as u8;
-    let num_spans = if batch_idx % 2 == 0 { 2 } else { 1 };
+    let num_spans = if batch_idx.is_multiple_of(2) { 2 } else { 1 };
 
     let spans: Vec<OtlpSpan> = (0..num_spans)
         .map(|i| {
@@ -116,7 +116,7 @@ fn build_trace_payload(batch_idx: usize) -> (Vec<u8>, usize) {
 }
 
 fn build_metric_payload(batch_idx: usize) -> (Vec<u8>, usize) {
-    let num_metrics = if batch_idx % 2 == 0 { 2 } else { 1 };
+    let num_metrics = if batch_idx.is_multiple_of(2) { 2 } else { 1 };
 
     let metrics: Vec<OtlpMetric> = (0..num_metrics)
         .map(|i| OtlpMetric {
@@ -317,9 +317,9 @@ async fn concurrent_ingestion_20_requests() {
     );
 
     // Verify session isolation: each log session has expected count
-    for i in 0..10 {
+    for i in 0usize..10 {
         let session_id = format!("log-sess-{i}");
-        let expected = if i % 2 == 0 { 3i64 } else { 2i64 };
+        let expected = if i.is_multiple_of(2) { 3i64 } else { 2i64 };
         let actual: i64 = conn
             .query_row(
                 "SELECT count(*) FROM log_events WHERE session_id = ?1",
@@ -334,13 +334,11 @@ async fn concurrent_ingestion_20_requests() {
     }
 
     // Verify trace isolation: each trace_id has expected span count
-    for i in 0..5 {
+    for i in 0usize..5 {
         let trace_id_byte = (i + 100) as u8;
-        let trace_id_hex = format!(
-            "{}",
-            std::iter::repeat_n(format!("{trace_id_byte:02x}"), 16).collect::<String>()
-        );
-        let expected = if i % 2 == 0 { 2i64 } else { 1i64 };
+        let trace_id_hex =
+            std::iter::repeat_n(format!("{trace_id_byte:02x}"), 16).collect::<String>();
+        let expected = if i.is_multiple_of(2) { 2i64 } else { 1i64 };
         let actual: i64 = conn
             .query_row(
                 "SELECT count(*) FROM spans WHERE trace_id = ?1",

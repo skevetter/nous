@@ -82,19 +82,19 @@ fn default_key_path() -> PathBuf {
 }
 
 pub fn resolve_key() -> Result<String> {
-    if let Ok(val) = std::env::var("NOUS_DB_KEY") {
-        if !val.is_empty() {
-            return Ok(val);
-        }
+    if let Ok(val) = std::env::var("NOUS_DB_KEY")
+        && !val.is_empty()
+    {
+        return Ok(val);
     }
     resolve_key_with_path(&default_key_path())
 }
 
 pub fn resolve_key_with_path(key_path: &Path) -> Result<String> {
-    if let Ok(val) = std::env::var("NOUS_DB_KEY") {
-        if !val.is_empty() {
-            return Ok(val);
-        }
+    if let Ok(val) = std::env::var("NOUS_DB_KEY")
+        && !val.is_empty()
+    {
+        return Ok(val);
     }
 
     if key_path.exists() {
@@ -185,12 +185,11 @@ pub fn rotate_key(db_path: &Path, current_key: &str, new_key: &str) -> Result<()
     }
 
     let key_path = default_key_path();
-    if key_path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(&key_path) {
-            if contents.trim() == current_key {
-                std::fs::write(&key_path, new_key)?;
-            }
-        }
+    if key_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(&key_path)
+        && contents.trim() == current_key
+    {
+        std::fs::write(&key_path, new_key)?;
     }
 
     Ok(())

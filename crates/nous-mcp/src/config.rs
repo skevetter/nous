@@ -158,20 +158,20 @@ impl Config {
     }
 
     fn apply_env_overrides(cfg: &mut Config) {
-        if let Ok(val) = std::env::var("NOUS_MEMORY_DB") {
-            if !val.is_empty() {
-                cfg.memory.db_path = val;
-            }
+        if let Ok(val) = std::env::var("NOUS_MEMORY_DB")
+            && !val.is_empty()
+        {
+            cfg.memory.db_path = val;
         }
-        if let Ok(val) = std::env::var("NOUS_OTLP_DB") {
-            if !val.is_empty() {
-                cfg.otlp.db_path = val;
-            }
+        if let Ok(val) = std::env::var("NOUS_OTLP_DB")
+            && !val.is_empty()
+        {
+            cfg.otlp.db_path = val;
         }
-        if let Ok(val) = std::env::var("NOUS_DB_KEY_FILE") {
-            if !val.is_empty() {
-                cfg.encryption.db_key_file = val;
-            }
+        if let Ok(val) = std::env::var("NOUS_DB_KEY_FILE")
+            && !val.is_empty()
+        {
+            cfg.encryption.db_key_file = val;
         }
     }
 }

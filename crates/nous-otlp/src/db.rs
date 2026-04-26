@@ -453,9 +453,9 @@ mod tests {
 
         let result = db.query_logs("sess-abc", None, None).unwrap();
         assert_eq!(result.len(), 5);
-        for i in 0..5 {
-            assert_eq!(result[i].timestamp, 1000 + i as i64);
-            assert_eq!(result[i].body, format!("log-{i}"));
+        for (i, entry) in result.iter().enumerate().take(5) {
+            assert_eq!(entry.timestamp, 1000 + i as i64);
+            assert_eq!(entry.body, format!("log-{i}"));
         }
     }
 
@@ -487,9 +487,9 @@ mod tests {
 
         let result = db.query_spans("trace-xyz", None, None).unwrap();
         assert_eq!(result.len(), 3);
-        for i in 0..3 {
-            assert_eq!(result[i].start_time, 2000 + i as i64);
-            assert_eq!(result[i].name, format!("op-{i}"));
+        for (i, entry) in result.iter().enumerate().take(3) {
+            assert_eq!(entry.start_time, 2000 + i as i64);
+            assert_eq!(entry.name, format!("op-{i}"));
         }
     }
 
