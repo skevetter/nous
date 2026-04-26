@@ -154,17 +154,17 @@ impl NousServer {
     )]
     async fn memory_workspaces(
         &self,
-        _params: Parameters<MemoryWorkspacesParams>,
+        params: Parameters<MemoryWorkspacesParams>,
     ) -> CallToolResult {
-        handle_workspaces(&self.read_pool).await
+        handle_workspaces(params.0, &self.read_pool).await
     }
 
     #[tool(
         name = "memory_tags",
         description = "List all tags with usage counts ordered by frequency"
     )]
-    async fn memory_tags(&self, _params: Parameters<MemoryTagsParams>) -> CallToolResult {
-        handle_tags(&self.read_pool).await
+    async fn memory_tags(&self, params: Parameters<MemoryTagsParams>) -> CallToolResult {
+        handle_tags(params.0, &self.read_pool).await
     }
 
     #[tool(
@@ -1039,7 +1039,8 @@ mod tests {
         store_test_memory_simple(&server, "WS memory 2", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let result = handle_workspaces(&server.read_pool).await;
+        let result =
+            handle_workspaces(MemoryWorkspacesParams { source: None }, &server.read_pool).await;
         assert!(is_success(&result));
         let json = extract_json(&result);
         let workspaces = json["workspaces"].as_array().unwrap();
@@ -1060,7 +1061,7 @@ mod tests {
         store_test_memory_simple(&server, "Tagged 2", vec!["alpha".into(), "gamma".into()]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let result = handle_tags(&server.read_pool).await;
+        let result = handle_tags(MemoryTagsParams { prefix: None }, &server.read_pool).await;
         assert!(is_success(&result));
         let json = extract_json(&result);
         let tags = json["tags"].as_array().unwrap();

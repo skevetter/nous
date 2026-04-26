@@ -112,13 +112,11 @@ pub struct MemoryCategorySuggestParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
 pub struct MemoryWorkspacesParams {
     pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
 pub struct MemoryTagsParams {
     pub prefix: Option<String>,
 }
@@ -539,10 +537,21 @@ pub async fn handle_category_suggest(
     }
 }
 
-pub async fn handle_workspaces(read_pool: &ReadPool) -> CallToolResult {
+pub async fn handle_workspaces(
+    params: MemoryWorkspacesParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
     match read_pool.with_conn(MemoryDb::workspaces_on).await {
         Ok(workspaces) => {
-            let list: Vec<serde_json::Value> = workspaces
+            let filtered: Vec<_> = if let Some(ref source) = params.source {
+                workspaces
+                    .into_iter()
+                    .filter(|(w, _)| w.path.contains(source.as_str()))
+                    .collect()
+            } else {
+                workspaces
+            };
+            let list: Vec<serde_json::Value> = filtered
                 .into_iter()
                 .map(|(w, count)| {
                     serde_json::json!({
@@ -560,10 +569,17 @@ pub async fn handle_workspaces(read_pool: &ReadPool) -> CallToolResult {
     }
 }
 
-pub async fn handle_tags(read_pool: &ReadPool) -> CallToolResult {
+pub async fn handle_tags(params: MemoryTagsParams, read_pool: &ReadPool) -> CallToolResult {
     match read_pool.with_conn(MemoryDb::tags_on).await {
         Ok(tags) => {
-            let list: Vec<serde_json::Value> = tags
+            let filtered: Vec<_> = if let Some(ref prefix) = params.prefix {
+                tags.into_iter()
+                    .filter(|(name, _)| name.starts_with(prefix.as_str()))
+                    .collect()
+            } else {
+                tags
+            };
+            let list: Vec<serde_json::Value> = filtered
                 .into_iter()
                 .map(|(name, count)| serde_json::json!({"tag": name, "count": count}))
                 .collect();
