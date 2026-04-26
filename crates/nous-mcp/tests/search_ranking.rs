@@ -1,8 +1,17 @@
-use nous_core::embed::MockEmbedding;
+use std::path::Path;
+
+use nous_core::embed::FixtureEmbedding;
 use nous_mcp::config::Config;
 use nous_mcp::server::NousServer;
 use nous_mcp::tools::{MemorySearchParams, MemoryStoreParams, handle_search, handle_store};
 use rmcp::model::CallToolResult;
+
+fn fixture_path() -> &'static Path {
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../nous-core/tests/fixtures/embedding_vectors.json"
+    ))
+}
 
 fn test_db_path() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +30,7 @@ fn test_db_path() -> String {
 
 fn test_server(db_path: &str) -> NousServer {
     let cfg = Config::default();
-    let embedding = Box::new(MockEmbedding::new(384));
+    let embedding = Box::new(FixtureEmbedding::load(fixture_path()).unwrap());
     NousServer::new(cfg, embedding, db_path).unwrap()
 }
 
@@ -68,20 +77,20 @@ async fn semantic_search_ranks_closest_match_first() {
     let server = test_server(&db_path);
 
     let contents = [
-        "Kubernetes pod scheduling and container orchestration",
-        "Python dependency management with pip and virtualenv",
-        "SQL query optimization and database indexing strategies",
+        "Rust programming language",
+        "Writing code in Rust",
+        "Chocolate cake recipe",
     ];
 
-    let id0 = store_memory(&server, "k8s scheduling", contents[0]).await;
-    let id1 = store_memory(&server, "python deps", contents[1]).await;
-    let id2 = store_memory(&server, "sql optimization", contents[2]).await;
+    let id0 = store_memory(&server, "rust-lang", contents[0]).await;
+    let id1 = store_memory(&server, "coding-rust", contents[1]).await;
+    let id2 = store_memory(&server, "chocolate", contents[2]).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let result = handle_search(
         MemorySearchParams {
-            query: contents[1].into(),
+            query: "Rust programming language".into(),
             mode: Some("semantic".into()),
             memory_type: None,
             category_id: None,
@@ -111,8 +120,8 @@ async fn semantic_search_ranks_closest_match_first() {
         .map(|r| r["memory"]["id"].as_str().unwrap())
         .collect();
     assert_eq!(
-        result_ids[0], id1,
-        "closest semantic match (python deps) should rank first"
+        result_ids[0], id0,
+        "exact match (Rust programming language) should rank first"
     );
 
     let scores: Vec<f64> = results
