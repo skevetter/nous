@@ -73,7 +73,7 @@ impl OtlpServer {
             .arg(db_path)
             .env("NOUS_DB_KEY", DB_KEY)
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::inherit())
             .spawn()
             .expect("failed to start nous-otlp");
 
