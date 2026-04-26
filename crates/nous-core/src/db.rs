@@ -507,6 +507,45 @@ impl MemoryDb {
         }
     }
 
+    pub fn log_access(&self, memory_id: &MemoryId, tool_name: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO access_log (memory_id, access_type) VALUES (?1, ?2)",
+            params![memory_id.to_string(), tool_name],
+        )?;
+        Ok(())
+    }
+
+    pub fn most_accessed(&self, since: Option<&str>, limit: usize) -> Result<Vec<(String, u64)>> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
+            Some(ts) => (
+                "SELECT memory_id, COUNT(*) as cnt FROM access_log \
+                 WHERE accessed_at >= ?1 GROUP BY memory_id ORDER BY cnt DESC LIMIT ?2"
+                    .into(),
+                vec![Box::new(ts.to_owned()), Box::new(limit as i64)],
+            ),
+            None => (
+                "SELECT memory_id, COUNT(*) as cnt FROM access_log \
+                 GROUP BY memory_id ORDER BY cnt DESC LIMIT ?1"
+                    .into(),
+                vec![Box::new(limit as i64)],
+            ),
+        };
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn access_count(&self, memory_id: &MemoryId) -> Result<u64> {
+        self.count_access(&memory_id.to_string())
+    }
+
     fn count_access(&self, memory_id: &str) -> Result<u64> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM access_log WHERE memory_id = ?1",
@@ -514,6 +553,13 @@ impl MemoryDb {
             |row| row.get(0),
         )?;
         Ok(count as u64)
+    }
+}
+
+pub fn build_validity_clause(valid_only: Option<bool>) -> Option<String> {
+    match valid_only {
+        Some(true) => Some("AND (valid_until IS NULL OR valid_until > datetime('now'))".into()),
+        _ => None,
     }
 }
 
