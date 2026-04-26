@@ -95,8 +95,8 @@ fn store_chunks_inserts_embeddings() {
         .unwrap();
 
     assert_eq!(chunk_ids.len(), 3);
-    for i in 0..3 {
-        assert_eq!(chunk_ids[i], format!("{}:{}", memory_id, i));
+    for (i, chunk_id) in chunk_ids.iter().enumerate().take(3) {
+        assert_eq!(*chunk_id, format!("{}:{}", memory_id, i));
     }
 }
 
@@ -186,7 +186,7 @@ fn embedding_blob_roundtrips() {
     let db = open_test_db();
     let memory_id = db.store(&minimal_memory()).unwrap();
     let chunks = make_chunks(1);
-    let original: Vec<f32> = vec![1.0, 2.5, -3.14, 0.0, f32::MAX, f32::MIN];
+    let original: Vec<f32> = vec![1.0, 2.5, -3.15, 0.0, f32::MAX, f32::MIN];
     let embeddings = vec![original.clone()];
 
     db.store_chunks(&memory_id, &chunks, &embeddings).unwrap();

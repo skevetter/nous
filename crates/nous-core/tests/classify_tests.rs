@@ -17,7 +17,7 @@ fn all_categories_have_embeddings_after_construction() {
     let embedder = mock_embedder();
     let classifier = CategoryClassifier::new(&db, &embedder).unwrap();
 
-    for (_, (cat, emb)) in classifier.cache() {
+    for (cat, emb) in classifier.cache().values() {
         assert!(
             !emb.is_empty(),
             "category '{}' should have a non-empty embedding",
