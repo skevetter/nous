@@ -22,6 +22,7 @@ pub struct NousServer {
     pub classifier: CategoryClassifier,
     pub chunker: Chunker,
     pub config: Config,
+    pub db_path: String,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
@@ -47,6 +48,7 @@ impl NousServer {
             classifier,
             chunker,
             config,
+            db_path: db_path.to_owned(),
             tool_router: Self::tool_router(),
         })
     }
@@ -79,16 +81,16 @@ impl NousServer {
         name = "memory_search",
         description = "Search memories using FTS, semantic, or hybrid search"
     )]
-    async fn memory_search(&self, _params: Parameters<MemorySearchParams>) -> CallToolResult {
-        not_implemented()
+    async fn memory_search(&self, params: Parameters<MemorySearchParams>) -> CallToolResult {
+        handle_search(params.0, &self.db_path, &self.embedding).await
     }
 
     #[tool(
         name = "memory_context",
         description = "Get context-relevant memories for a workspace"
     )]
-    async fn memory_context(&self, _params: Parameters<MemoryContextParams>) -> CallToolResult {
-        not_implemented()
+    async fn memory_context(&self, params: Parameters<MemoryContextParams>) -> CallToolResult {
+        handle_context(params.0, &self.db_path).await
     }
 
     #[tool(
@@ -841,7 +843,11 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
-    async fn store_test_memory(server: &NousServer, title: &str, tags: Vec<String>) -> String {
+    async fn store_test_memory_simple(
+        server: &NousServer,
+        title: &str,
+        tags: Vec<String>,
+    ) -> String {
         let result = handle_store(
             MemoryStoreParams {
                 title: title.into(),
@@ -869,13 +875,48 @@ mod tests {
         extract_json(&result)["id"].as_str().unwrap().to_string()
     }
 
+    async fn store_test_memory(
+        server: &NousServer,
+        title: &str,
+        content: &str,
+        memory_type: &str,
+        importance: Option<&str>,
+        workspace_path: Option<&str>,
+    ) -> String {
+        let result = handle_store(
+            MemoryStoreParams {
+                title: title.into(),
+                content: content.into(),
+                memory_type: memory_type.into(),
+                tags: vec![],
+                source: None,
+                importance: importance.map(String::from),
+                confidence: None,
+                workspace_path: workspace_path.map(String::from),
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        assert!(is_success(&result));
+        extract_json(&result)["id"].as_str().unwrap().to_string()
+    }
+
     #[tokio::test]
     async fn relate_supersedes_sets_valid_until() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        let id1 = store_test_memory(&server, "Original decision", vec![]).await;
-        let id2 = store_test_memory(&server, "Updated decision", vec![]).await;
+        let id1 = store_test_memory_simple(&server, "Original decision", vec![]).await;
+        let id2 = store_test_memory_simple(&server, "Updated decision", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_relate(
@@ -915,8 +956,8 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        let id1 = store_test_memory(&server, "Memory A", vec![]).await;
-        let id2 = store_test_memory(&server, "Memory B", vec![]).await;
+        let id1 = store_test_memory_simple(&server, "Memory A", vec![]).await;
+        let id2 = store_test_memory_simple(&server, "Memory B", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         handle_relate(
@@ -960,7 +1001,7 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        let id = store_test_memory(&server, "Uncategorized memory", vec![]).await;
+        let id = store_test_memory_simple(&server, "Uncategorized memory", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_category_suggest(
@@ -998,8 +1039,8 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        store_test_memory(&server, "WS memory 1", vec![]).await;
-        store_test_memory(&server, "WS memory 2", vec![]).await;
+        store_test_memory_simple(&server, "WS memory 1", vec![]).await;
+        store_test_memory_simple(&server, "WS memory 2", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_workspaces(&server.read_pool).await;
@@ -1019,8 +1060,8 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        store_test_memory(&server, "Tagged 1", vec!["alpha".into(), "beta".into()]).await;
-        store_test_memory(&server, "Tagged 2", vec!["alpha".into(), "gamma".into()]).await;
+        store_test_memory_simple(&server, "Tagged 1", vec!["alpha".into(), "beta".into()]).await;
+        store_test_memory_simple(&server, "Tagged 2", vec!["alpha".into(), "gamma".into()]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_tags(&server.read_pool).await;
@@ -1040,7 +1081,7 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        store_test_memory(&server, "Stats test", vec!["stat-tag".into()]).await;
+        store_test_memory_simple(&server, "Stats test", vec!["stat-tag".into()]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_stats(&server.read_pool).await;
@@ -1076,7 +1117,7 @@ mod tests {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        store_test_memory(&server, "SQL test", vec![]).await;
+        store_test_memory_simple(&server, "SQL test", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_sql(
@@ -1167,11 +1208,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_hybrid_default_ranks_matching_first() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(&server, "alpha", "the quick brown fox", "fact", None, None).await;
+        store_test_memory(
+            &server,
+            "beta",
+            "xylophone orchestra performance",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "gamma",
+            "red blue green yellow",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "xylophone".into(),
+                mode: None,
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert!(!results.is_empty());
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("beta")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
     async fn sql_allows_readonly_with() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
 
-        store_test_memory(&server, "CTE test", vec![]).await;
+        store_test_memory_simple(&server, "CTE test", vec![]).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = handle_sql(
@@ -1195,6 +1298,402 @@ mod tests {
             Some(true),
             "should reject WITH containing INSERT"
         );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_fts_mode() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "fts target",
+            "kubernetes deployment",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "other",
+            "unrelated content here",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "kubernetes".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("fts target")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_semantic_mode() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "semantic target",
+            "kubernetes container orchestration platform",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "distant",
+            "completely different topic about cooking recipes",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "kubernetes container orchestration platform".into(),
+                mode: Some("semantic".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert!(!results.is_empty());
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("semantic target")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_with_filters() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "decision mem",
+            "database connection pooling strategy",
+            "decision",
+            Some("high"),
+            None,
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "fact mem",
+            "database sharding approach",
+            "fact",
+            None,
+            None,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "database".into(),
+                mode: Some("fts".into()),
+                memory_type: Some("decision".into()),
+                category_id: None,
+                workspace_id: None,
+                importance: Some("high".into()),
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("decision")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn context_returns_workspace_memories() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "ws-a mem",
+            "content for workspace A",
+            "fact",
+            Some("high"),
+            Some("/tmp/test-ws-a"),
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "ws-b mem",
+            "content for workspace B",
+            "fact",
+            None,
+            Some("/tmp/test-ws-b"),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_context(
+            MemoryContextParams {
+                workspace_path: "/tmp/test-ws-a".into(),
+                summary: false,
+            },
+            &db_path,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0]["title"].as_str().unwrap().contains("ws-a"));
+        assert!(entries[0]["content"].as_str().is_some());
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn context_summary_omits_content() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "summary test",
+            "this content should be omitted in summary",
+            "fact",
+            None,
+            Some("/tmp/test-ws-summary"),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_context(
+            MemoryContextParams {
+                workspace_path: "/tmp/test-ws-summary".into(),
+                summary: true,
+            },
+            &db_path,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0]["content"].is_null());
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn context_high_importance_first() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        store_test_memory(
+            &server,
+            "low importance",
+            "low importance content",
+            "fact",
+            Some("low"),
+            Some("/tmp/test-ws-order"),
+        )
+        .await;
+        store_test_memory(
+            &server,
+            "high importance",
+            "high importance content",
+            "decision",
+            Some("high"),
+            Some("/tmp/test-ws-order"),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_context(
+            MemoryContextParams {
+                workspace_path: "/tmp/test-ws-order".into(),
+                summary: false,
+            },
+            &db_path,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries[0]["title"]
+                .as_str()
+                .unwrap()
+                .contains("high importance")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn context_unknown_workspace_returns_empty() {
+        let db_path = test_db_path();
+        let _server = test_server(&db_path);
+
+        let result = handle_context(
+            MemoryContextParams {
+                workspace_path: "/tmp/nonexistent-workspace".into(),
+                summary: false,
+            },
+            &db_path,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let entries = json["entries"].as_array().unwrap();
+        assert!(entries.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_empty_query_fts_returns_error() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_invalid_mode_returns_error() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "test".into(),
+                mode: Some("invalid".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
 
         let _ = std::fs::remove_file(&db_path);
     }
