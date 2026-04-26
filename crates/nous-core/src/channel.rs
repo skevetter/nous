@@ -8,6 +8,7 @@ use nous_shared::sqlite::spawn_blocking;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
+use crate::chunk::Chunk;
 use crate::db::MemoryDb;
 use crate::types::{MemoryPatch, NewMemory, RelationType};
 
@@ -24,6 +25,15 @@ pub enum WriteOp {
         RelationType,
         oneshot::Sender<Result<()>>,
     ),
+    Unarchive(MemoryId, oneshot::Sender<Result<bool>>),
+    StoreChunks(
+        MemoryId,
+        Vec<Chunk>,
+        Vec<Vec<f32>>,
+        oneshot::Sender<Result<()>>,
+    ),
+    DeleteChunks(MemoryId, oneshot::Sender<Result<()>>),
+    LogAccess(MemoryId, String, oneshot::Sender<Result<()>>),
 }
 
 #[derive(Clone)]
@@ -84,6 +94,55 @@ impl WriteChannel {
             .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
     }
 
+    pub async fn unarchive(&self, id: MemoryId) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::Unarchive(id, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn store_chunks(
+        &self,
+        memory_id: MemoryId,
+        chunks: Vec<Chunk>,
+        embeddings: Vec<Vec<f32>>,
+    ) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::StoreChunks(memory_id, chunks, embeddings, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn delete_chunks(&self, memory_id: MemoryId) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::DeleteChunks(memory_id, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn log_access(&self, memory_id: MemoryId, access_type: String) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::LogAccess(memory_id, access_type, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
     pub fn batch_count(&self) -> usize {
         self.batch_count.load(Ordering::Relaxed)
     }
@@ -129,6 +188,19 @@ async fn write_worker(
                     }
                     WriteOp::Relate(src, tgt, rel, resp) => {
                         let _ = resp.send(MemoryDb::relate_on(&tx, &src, &tgt, rel));
+                    }
+                    WriteOp::Unarchive(id, resp) => {
+                        let _ = resp.send(MemoryDb::unarchive_on(&tx, &id));
+                    }
+                    WriteOp::StoreChunks(id, chunks, embeddings, resp) => {
+                        let _ =
+                            resp.send(MemoryDb::store_chunks_on(&tx, &id, &chunks, &embeddings));
+                    }
+                    WriteOp::DeleteChunks(id, resp) => {
+                        let _ = resp.send(MemoryDb::delete_chunks_on(&tx, &id));
+                    }
+                    WriteOp::LogAccess(id, access_type, resp) => {
+                        let _ = resp.send(MemoryDb::log_access_on(&tx, &id, &access_type));
                     }
                 }
             }

@@ -228,9 +228,20 @@ impl MemoryDb {
     }
 
     pub fn recall(&self, id: &MemoryId) -> Result<Option<MemoryWithRelations>> {
+        let result = Self::recall_on(&self.conn, id)?;
+        if result.is_some() {
+            self.conn.execute(
+                "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'recall')",
+                params![id.to_string()],
+            )?;
+        }
+        Ok(result)
+    }
+
+    pub fn recall_on(conn: &Connection, id: &MemoryId) -> Result<Option<MemoryWithRelations>> {
         let id_str = id.to_string();
 
-        let memory = match self.conn.query_row(
+        let memory = match conn.query_row(
             "SELECT id, title, content, memory_type, source, importance, confidence,
                     workspace_id, session_id, trace_id, agent_id, agent_model,
                     valid_from, valid_until, archived, category_id, created_at, updated_at
@@ -282,15 +293,10 @@ impl MemoryDb {
             Err(e) => return Err(e.into()),
         };
 
-        self.conn.execute(
-            "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'recall')",
-            params![id_str],
-        )?;
-
-        let tags = self.load_tags(&id_str)?;
-        let relationships = self.load_relationships(&id_str)?;
-        let category = self.load_category(memory.category_id)?;
-        let access_count = self.count_access(&id_str)?;
+        let tags = Self::load_tags_on(conn, &id_str)?;
+        let relationships = Self::load_relationships_on(conn, &id_str)?;
+        let category = Self::load_category_on(conn, memory.category_id)?;
+        let access_count = Self::count_access_on(conn, &id_str)?;
 
         Ok(Some(MemoryWithRelations {
             memory,
@@ -421,8 +427,12 @@ impl MemoryDb {
     }
 
     pub fn unarchive(&self, id: &MemoryId) -> Result<bool> {
+        Self::unarchive_on(&self.conn, id)
+    }
+
+    pub(crate) fn unarchive_on(conn: &Connection, id: &MemoryId) -> Result<bool> {
         let id_str = id.to_string();
-        let changed = self.conn.execute(
+        let changed = conn.execute(
             "UPDATE memories SET archived = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE id = ?1 AND archived = 1",
             params![id_str],
@@ -533,8 +543,8 @@ impl MemoryDb {
         })
     }
 
-    fn load_tags(&self, memory_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+    pub(crate) fn load_tags_on(conn: &Connection, memory_id: &str) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(
             "SELECT t.name FROM tags t
              JOIN memory_tags mt ON mt.tag_id = t.id
              WHERE mt.memory_id = ?1
@@ -546,8 +556,11 @@ impl MemoryDb {
         Ok(tags)
     }
 
-    fn load_relationships(&self, memory_id: &str) -> Result<Vec<Relationship>> {
-        let mut stmt = self.conn.prepare(
+    pub(crate) fn load_relationships_on(
+        conn: &Connection,
+        memory_id: &str,
+    ) -> Result<Vec<Relationship>> {
+        let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, created_at
              FROM relationships
              WHERE source_id = ?1 OR target_id = ?1",
@@ -572,11 +585,14 @@ impl MemoryDb {
         Ok(rels)
     }
 
-    fn load_category(&self, category_id: Option<i64>) -> Result<Option<Category>> {
+    pub(crate) fn load_category_on(
+        conn: &Connection,
+        category_id: Option<i64>,
+    ) -> Result<Option<Category>> {
         let Some(cat_id) = category_id else {
             return Ok(None);
         };
-        match self.conn.query_row(
+        match conn.query_row(
             "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories WHERE id = ?1",
             params![cat_id],
             |row| {
@@ -585,11 +601,7 @@ impl MemoryDb {
                     name: row.get(1)?,
                     parent_id: row.get(2)?,
                     source: row.get::<_, String>(3)?.parse().map_err(|e: String| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            3,
-                            rusqlite::types::Type::Text,
-                            e.into(),
-                        )
+                        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, e.into())
                     })?,
                     description: row.get(4)?,
                     embedding: row.get(5)?,
@@ -604,9 +616,17 @@ impl MemoryDb {
     }
 
     pub fn log_access(&self, memory_id: &MemoryId, tool_name: &str) -> Result<()> {
-        self.conn.execute(
+        Self::log_access_on(&self.conn, memory_id, tool_name)
+    }
+
+    pub(crate) fn log_access_on(
+        conn: &Connection,
+        memory_id: &MemoryId,
+        access_type: &str,
+    ) -> Result<()> {
+        conn.execute(
             "INSERT INTO access_log (memory_id, access_type) VALUES (?1, ?2)",
-            params![memory_id.to_string(), tool_name],
+            params![memory_id.to_string(), access_type],
         )?;
         Ok(())
     }
@@ -639,11 +659,11 @@ impl MemoryDb {
     }
 
     pub fn access_count(&self, memory_id: &MemoryId) -> Result<u64> {
-        self.count_access(&memory_id.to_string())
+        Self::count_access_on(&self.conn, &memory_id.to_string())
     }
 
-    fn count_access(&self, memory_id: &str) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
+    pub(crate) fn count_access_on(conn: &Connection, memory_id: &str) -> Result<u64> {
+        let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM access_log WHERE memory_id = ?1",
             params![memory_id],
             |row| row.get(0),
@@ -657,6 +677,15 @@ impl MemoryDb {
         chunks: &[Chunk],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
+        Self::store_chunks_on(&self.conn, memory_id, chunks, embeddings)
+    }
+
+    pub(crate) fn store_chunks_on(
+        conn: &Connection,
+        memory_id: &MemoryId,
+        chunks: &[Chunk],
+        embeddings: &[Vec<f32>],
+    ) -> Result<()> {
         if chunks.len() != embeddings.len() {
             return Err(NousError::Internal(format!(
                 "chunks length {} != embeddings length {}",
@@ -664,14 +693,13 @@ impl MemoryDb {
                 embeddings.len()
             )));
         }
-        let tx = self.conn.unchecked_transaction()?;
         let memory_id_str = memory_id.to_string();
 
         for (i, chunk) in chunks.iter().enumerate() {
             let chunk_id = format!("{memory_id_str}:{i}");
             let token_count = chunk.text.split_whitespace().count() as i64;
 
-            tx.execute(
+            conn.execute(
                 "INSERT INTO memory_chunks (id, memory_id, chunk_index, content, token_count, model_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, (SELECT id FROM models WHERE name = 'placeholder'))",
                 params![chunk_id, memory_id_str, i as i64, chunk.text, token_count],
@@ -679,30 +707,31 @@ impl MemoryDb {
 
             let blob: Vec<u8> = embeddings[i].iter().flat_map(|f| f.to_le_bytes()).collect();
 
-            tx.execute(
+            conn.execute(
                 "INSERT INTO memory_embeddings (chunk_id, embedding) VALUES (?1, ?2)",
                 params![chunk_id, blob],
             )?;
         }
 
-        tx.commit()?;
         Ok(())
     }
 
     pub fn delete_chunks(&self, memory_id: &MemoryId) -> Result<()> {
-        let memory_id_str = memory_id.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        Self::delete_chunks_on(&self.conn, memory_id)
+    }
 
-        tx.execute(
+    pub(crate) fn delete_chunks_on(conn: &Connection, memory_id: &MemoryId) -> Result<()> {
+        let memory_id_str = memory_id.to_string();
+
+        conn.execute(
             "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
             params![memory_id_str],
         )?;
-        tx.execute(
+        conn.execute(
             "DELETE FROM memory_chunks WHERE memory_id = ?1",
             params![memory_id_str],
         )?;
 
-        tx.commit()?;
         Ok(())
     }
 }

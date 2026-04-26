@@ -1,5 +1,6 @@
 mod config;
 pub mod server;
+#[allow(dead_code)]
 mod tools;
 
 use std::path::PathBuf;
@@ -106,8 +107,9 @@ async fn run_serve(
     transport: Transport,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = config.memory.db_path.clone();
     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-    let server = NousServer::new(config, embedding)?;
+    let server = NousServer::new(config, embedding, &db_path)?;
 
     match transport {
         Transport::Stdio => {
@@ -117,6 +119,7 @@ async fn run_serve(
         }
         Transport::Http => {
             let user_config = server.config.clone();
+            let user_db_path = db_path.clone();
             let http_config = StreamableHttpServerConfig::default();
             let ct = http_config.cancellation_token.clone();
             let session_manager = Arc::new(LocalSessionManager::default());
@@ -124,7 +127,7 @@ async fn run_serve(
                 move || {
                     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
                     let cfg = user_config.clone();
-                    NousServer::new(cfg, embedding)
+                    NousServer::new(cfg, embedding, &user_db_path)
                         .map_err(|e| std::io::Error::other(e.to_string()))
                 },
                 session_manager,
@@ -368,14 +371,27 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn test_db_path() -> String {
+        format!(
+            "/tmp/nous-test-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
     #[tokio::test]
     async fn server_constructs_with_mock_embedding() {
+        let db_path = test_db_path();
         let cfg = config::Config::default();
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        let server = NousServer::new(cfg, embedding).expect("server should construct");
+        let server = NousServer::new(cfg, embedding, &db_path).expect("server should construct");
 
         assert!(server.embedding.dimensions() == 384);
         assert_eq!(server.embedding.model_id(), "mock");
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[tokio::test]
@@ -385,9 +401,10 @@ mod tests {
 
         let (server_transport, client_transport) = tokio::io::duplex(4096);
 
+        let db_path = test_db_path();
         let cfg = config::Config::default();
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        let server = NousServer::new(cfg, embedding).unwrap();
+        let server = NousServer::new(cfg, embedding, &db_path).unwrap();
 
         let server_handle = tokio::spawn(async move {
             server.serve(server_transport).await?.waiting().await?;
@@ -440,5 +457,6 @@ mod tests {
 
         client.cancel().await.unwrap();
         server_handle.await.unwrap().unwrap();
+        let _ = std::fs::remove_file(&db_path);
     }
 }
