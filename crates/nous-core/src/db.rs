@@ -1,6 +1,6 @@
-use nous_shared::Result;
 use nous_shared::ids::MemoryId;
 use nous_shared::sqlite::{open_connection, run_migrations};
+use nous_shared::{NousError, Result};
 use rusqlite::{Connection, params};
 
 use crate::chunk::Chunk;
@@ -524,6 +524,13 @@ impl MemoryDb {
         chunks: &[Chunk],
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
+        if chunks.len() != embeddings.len() {
+            return Err(NousError::Internal(format!(
+                "chunks length {} != embeddings length {}",
+                chunks.len(),
+                embeddings.len()
+            )));
+        }
         let tx = self.conn.unchecked_transaction()?;
         let memory_id_str = memory_id.to_string();
 
@@ -551,12 +558,11 @@ impl MemoryDb {
 
     pub fn delete_chunks(&self, memory_id: &MemoryId) -> Result<()> {
         let memory_id_str = memory_id.to_string();
-        let pattern = format!("{memory_id_str}:%");
         let tx = self.conn.unchecked_transaction()?;
 
         tx.execute(
-            "DELETE FROM memory_embeddings WHERE chunk_id LIKE ?1",
-            params![pattern],
+            "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
+            params![memory_id_str],
         )?;
         tx.execute(
             "DELETE FROM memory_chunks WHERE memory_id = ?1",
