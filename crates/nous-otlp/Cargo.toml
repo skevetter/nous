@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "nous_otlp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nous-otlp"
 path = "src/main.rs"
