@@ -47,3 +47,6 @@ anyhow = "1"
 
 # IDs
 uuid = { version = "1", features = ["v7"] }
+
+# Testing
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
