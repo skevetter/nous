@@ -112,11 +112,13 @@ pub struct MemoryCategorySuggestParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct MemoryWorkspacesParams {
     pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct MemoryTagsParams {
     pub prefix: Option<String>,
 }
