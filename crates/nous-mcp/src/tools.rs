@@ -259,7 +259,10 @@ pub async fn handle_recall(
     read_pool: &ReadPool,
     write_channel: &WriteChannel,
 ) -> CallToolResult {
-    let id = params.id.parse::<MemoryId>().unwrap();
+    let id = match params.id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid id: {e}")),
+    };
 
     let result = match read_pool
         .with_conn({
@@ -288,7 +291,10 @@ pub async fn handle_update(
     chunker: &Chunker,
     read_pool: &ReadPool,
 ) -> CallToolResult {
-    let id = params.id.parse::<MemoryId>().unwrap();
+    let id = match params.id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid id: {e}")),
+    };
 
     let importance = match params.importance.as_deref() {
         Some(v) => match parse_enum::<Importance>(v, "importance") {
@@ -366,7 +372,10 @@ pub async fn handle_forget(
     params: MemoryForgetParams,
     write_channel: &WriteChannel,
 ) -> CallToolResult {
-    let id = params.id.parse::<MemoryId>().unwrap();
+    let id = match params.id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid id: {e}")),
+    };
 
     match write_channel.forget(id, params.hard).await {
         Ok(true) => ok_json(&serde_json::json!({
@@ -384,7 +393,10 @@ pub async fn handle_unarchive(
     chunker: &Chunker,
     read_pool: &ReadPool,
 ) -> CallToolResult {
-    let id = params.id.parse::<MemoryId>().unwrap();
+    let id = match params.id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid id: {e}")),
+    };
 
     match write_channel.unarchive(id.clone()).await {
         Ok(true) => {}
@@ -403,6 +415,10 @@ pub async fn handle_unarchive(
         Ok(None) => return err_result("memory not found after unarchive"),
         Err(e) => return err_result(&format!("recall after unarchive failed: {e}")),
     };
+
+    if let Err(e) = write_channel.delete_chunks(id.clone()).await {
+        return err_result(&format!("delete_chunks failed: {e}"));
+    }
 
     let chunks = chunker.chunk(&result.memory.content);
     if !chunks.is_empty() {
