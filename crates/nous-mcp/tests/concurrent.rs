@@ -7,13 +7,17 @@ use nous_mcp::tools::{MemoryRecallParams, MemorySqlParams, MemoryStoreParams, ha
 use tokio::task::JoinSet;
 
 fn test_db_path() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!(
-        "/tmp/nous-test-{}-{}.db",
+        "/tmp/nous-test-{}-{}-{}.db",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        seq,
     )
 }
 
