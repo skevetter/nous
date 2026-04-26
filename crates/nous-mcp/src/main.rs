@@ -30,6 +30,10 @@ enum Command {
         transport: Transport,
         #[arg(long, default_value_t = 8377)]
         port: u16,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        variant: Option<String>,
     },
     ReEmbed {
         #[arg(long)]
@@ -77,6 +81,20 @@ enum CategorySubcommand {
     },
 }
 
+fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::EmbeddingBackend> {
+    match nous_core::embed::OnnxBackend::builder()
+        .model(model)
+        .variant(variant)
+        .build()
+    {
+        Ok(backend) => Box::new(backend),
+        Err(e) => {
+            eprintln!("Warning: OnnxBackend failed ({e}), falling back to MockEmbedding");
+            Box::new(nous_core::embed::MockEmbedding::new(384))
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -88,29 +106,27 @@ fn main() {
     let _db_key = config.resolve_db_key().ok();
 
     match cli.command {
-        Command::Serve { transport, port } => {
+        Command::Serve {
+            transport,
+            port,
+            model,
+            variant,
+        } => {
+            let model = model.unwrap_or_else(|| config.embedding.model.clone());
+            let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-            rt.block_on(run_serve(config, transport, port))
+            rt.block_on(run_serve(config, transport, port, &model, &variant))
                 .expect("server error");
         }
         Command::ReEmbed { model, variant } => {
-            eprintln!(
-                "Warning: real embedding not yet implemented, using mock. \
-                 --model {model}{} ignored.",
-                variant
-                    .as_ref()
-                    .map(|v| format!(" --variant {v}"))
-                    .unwrap_or_default()
-            );
-            let embedding: Box<dyn nous_core::embed::EmbeddingBackend> =
-                Box::new(nous_core::embed::MockEmbedding::new(384));
+            let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
+            let embedding = build_embedding(&model, &variant);
             commands::run_re_embed(&config, embedding.as_ref())
                 .unwrap_or_else(|e| eprintln!("re-embed failed: {e}"));
         }
         Command::ReClassify { since } => {
-            eprintln!("Warning: real embedding not yet implemented, using mock");
-            let embedding = nous_core::embed::MockEmbedding::new(384);
-            commands::run_re_classify(&config, since.as_deref(), &embedding)
+            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            commands::run_re_classify(&config, since.as_deref(), embedding.as_ref())
                 .unwrap_or_else(|e| eprintln!("re-classify failed: {e}"));
         }
         Command::Category(cat) => match cat.command {
@@ -123,14 +139,13 @@ fn main() {
                 parent,
                 description,
             } => {
-                eprintln!("Warning: real embedding not yet implemented, using mock");
-                let embedding = nous_core::embed::MockEmbedding::new(384);
+                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
                 commands::run_category_add(
                     &config,
                     &name,
                     parent.as_deref(),
                     description.as_deref(),
-                    &embedding,
+                    embedding.as_ref(),
                 )
                 .unwrap_or_else(|e| eprintln!("category add failed: {e}"));
             }
@@ -139,9 +154,8 @@ fn main() {
             commands::run_export(&config).unwrap_or_else(|e| eprintln!("export failed: {e}"));
         }
         Command::Import { file } => {
-            eprintln!("Warning: real embedding not yet implemented, using mock");
-            let embedding = nous_core::embed::MockEmbedding::new(384);
-            commands::run_import(&config, &file, &embedding)
+            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            commands::run_import(&config, &file, embedding.as_ref())
                 .unwrap_or_else(|e| eprintln!("import failed: {e}"));
         }
         Command::RotateKey { new_key_file } => {
@@ -158,9 +172,11 @@ async fn run_serve(
     config: config::Config,
     transport: Transport,
     port: u16,
+    model: &str,
+    variant: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = config.memory.db_path.clone();
-    let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+    let embedding = build_embedding(model, variant);
     let server = NousServer::new(config, embedding, &db_path)?;
 
     match transport {
@@ -172,12 +188,14 @@ async fn run_serve(
         Transport::Http => {
             let user_config = server.config.clone();
             let user_db_path = db_path.clone();
+            let user_model = model.to_owned();
+            let user_variant = variant.to_owned();
             let http_config = StreamableHttpServerConfig::default();
             let ct = http_config.cancellation_token.clone();
             let session_manager = Arc::new(LocalSessionManager::default());
             let service = StreamableHttpService::new(
                 move || {
-                    let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+                    let embedding = build_embedding(&user_model, &user_variant);
                     let cfg = user_config.clone();
                     NousServer::new(cfg, embedding, &user_db_path)
                         .map_err(|e| std::io::Error::other(e.to_string()))
@@ -206,9 +224,16 @@ mod tests {
     fn serve_defaults() {
         let cli = Cli::try_parse_from(["nous-mcp", "serve"]).unwrap();
         match cli.command {
-            Command::Serve { transport, port } => {
+            Command::Serve {
+                transport,
+                port,
+                model,
+                variant,
+            } => {
                 assert!(matches!(transport, Transport::Stdio));
                 assert_eq!(port, 8377);
+                assert!(model.is_none());
+                assert!(variant.is_none());
             }
             _ => panic!("expected Serve"),
         }
@@ -220,9 +245,36 @@ mod tests {
             Cli::try_parse_from(["nous-mcp", "serve", "--transport", "http", "--port", "9000"])
                 .unwrap();
         match cli.command {
-            Command::Serve { transport, port } => {
+            Command::Serve {
+                transport,
+                port,
+                model,
+                variant,
+            } => {
                 assert!(matches!(transport, Transport::Http));
                 assert_eq!(port, 9000);
+                assert!(model.is_none());
+                assert!(variant.is_none());
+            }
+            _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn serve_with_model_and_variant() {
+        let cli = Cli::try_parse_from([
+            "nous-mcp",
+            "serve",
+            "--model",
+            "org/repo",
+            "--variant",
+            "q4",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Serve { model, variant, .. } => {
+                assert_eq!(model.as_deref(), Some("org/repo"));
+                assert_eq!(variant.as_deref(), Some("q4"));
             }
             _ => panic!("expected Serve"),
         }

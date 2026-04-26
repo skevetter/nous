@@ -385,20 +385,20 @@ impl MemoryDb {
             );
         }
 
-        if let Some(ref tag_names) = filters.tags {
-            if !tag_names.is_empty() {
-                let placeholders: Vec<String> = tag_names
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("?{}", params.len() + 1 + i))
-                    .collect();
-                conditions.push(format!(
-                    "m.id IN (SELECT mt.memory_id FROM memory_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN ({}))",
-                    placeholders.join(", ")
-                ));
-                for tag in tag_names {
-                    params.push(Box::new(tag.clone()));
-                }
+        if let Some(ref tag_names) = filters.tags
+            && !tag_names.is_empty()
+        {
+            let placeholders: Vec<String> = tag_names
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", params.len() + 1 + i))
+                .collect();
+            conditions.push(format!(
+                "m.id IN (SELECT mt.memory_id FROM memory_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name IN ({}))",
+                placeholders.join(", ")
+            ));
+            for tag in tag_names {
+                params.push(Box::new(tag.clone()));
             }
         }
     }
@@ -438,65 +438,64 @@ impl MemoryDb {
             return Ok(false);
         }
 
-        if let Some(ref mt) = filters.memory_type {
-            if &memory.memory_type != mt {
+        if let Some(ref mt) = filters.memory_type
+            && &memory.memory_type != mt
+        {
+            return Ok(false);
+        }
+
+        if let Some(cat_id) = filters.category_id
+            && memory.category_id != Some(cat_id)
+        {
+            return Ok(false);
+        }
+
+        if let Some(ws_id) = filters.workspace_id
+            && memory.workspace_id != Some(ws_id)
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref imp) = filters.importance
+            && &memory.importance != imp
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref conf) = filters.confidence
+            && &memory.confidence != conf
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref since) = filters.since
+            && memory.created_at < *since
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref until) = filters.until
+            && memory.created_at > *until
+        {
+            return Ok(false);
+        }
+
+        if filters.valid_only == Some(true)
+            && let Some(ref valid_until) = memory.valid_until
+            && !valid_until.is_empty()
+        {
+            let now = now_iso8601();
+            if *valid_until < now {
                 return Ok(false);
             }
         }
 
-        if let Some(cat_id) = filters.category_id {
-            if memory.category_id != Some(cat_id) {
+        if let Some(ref tag_names) = filters.tags
+            && !tag_names.is_empty()
+        {
+            let tags = load_tags_for(self.connection(), &memory.id)?;
+            if !tag_names.iter().any(|t| tags.contains(t)) {
                 return Ok(false);
-            }
-        }
-
-        if let Some(ws_id) = filters.workspace_id {
-            if memory.workspace_id != Some(ws_id) {
-                return Ok(false);
-            }
-        }
-
-        if let Some(ref imp) = filters.importance {
-            if &memory.importance != imp {
-                return Ok(false);
-            }
-        }
-
-        if let Some(ref conf) = filters.confidence {
-            if &memory.confidence != conf {
-                return Ok(false);
-            }
-        }
-
-        if let Some(ref since) = filters.since {
-            if memory.created_at < *since {
-                return Ok(false);
-            }
-        }
-
-        if let Some(ref until) = filters.until {
-            if memory.created_at > *until {
-                return Ok(false);
-            }
-        }
-
-        if filters.valid_only == Some(true) {
-            if let Some(ref valid_until) = memory.valid_until {
-                if !valid_until.is_empty() {
-                    let now = now_iso8601();
-                    if *valid_until < now {
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-
-        if let Some(ref tag_names) = filters.tags {
-            if !tag_names.is_empty() {
-                let tags = load_tags_for(self.connection(), &memory.id)?;
-                if !tag_names.iter().any(|t| tags.contains(t)) {
-                    return Ok(false);
-                }
             }
         }
 

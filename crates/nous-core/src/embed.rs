@@ -90,14 +90,12 @@ impl OnnxBackendBuilder {
 
 fn detect_dimensions(session: &Session, model_path: &Path) -> nous_shared::Result<usize> {
     let outputs = session.outputs();
-    if let Some(output) = outputs.first() {
-        if let ort::value::ValueType::Tensor { shape, .. } = output.dtype() {
-            if let Some(&dim) = shape.last() {
-                if dim > 0 {
-                    return Ok(dim as usize);
-                }
-            }
-        }
+    if let Some(output) = outputs.first()
+        && let ort::value::ValueType::Tensor { shape, .. } = output.dtype()
+        && let Some(&dim) = shape.last()
+        && dim > 0
+    {
+        return Ok(dim as usize);
     }
     Err(NousError::Embedding(format!(
         "cannot detect embedding dimensions from model: {}",
