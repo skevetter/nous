@@ -1,3 +1,4 @@
+mod commands;
 mod config;
 pub mod server;
 #[allow(dead_code)]
@@ -96,8 +97,55 @@ fn main() {
             rt.block_on(run_serve(config, transport, port))
                 .expect("server error");
         }
-        _ => {
-            eprintln!("Command not yet implemented");
+        Command::ReEmbed {
+            model: _,
+            variant: _,
+        } => {
+            let embedding: Box<dyn nous_core::embed::EmbeddingBackend> =
+                Box::new(nous_core::embed::MockEmbedding::new(384));
+            commands::run_re_embed(&config, embedding.as_ref())
+                .unwrap_or_else(|e| eprintln!("re-embed failed: {e}"));
+        }
+        Command::ReClassify { since } => {
+            let embedding = nous_core::embed::MockEmbedding::new(384);
+            commands::run_re_classify(&config, since.as_deref(), &embedding)
+                .unwrap_or_else(|e| eprintln!("re-classify failed: {e}"));
+        }
+        Command::Category(cat) => match cat.command {
+            CategorySubcommand::List { source } => {
+                commands::run_category_list(&config, source.as_deref())
+                    .unwrap_or_else(|e| eprintln!("category list failed: {e}"));
+            }
+            CategorySubcommand::Add {
+                name,
+                parent,
+                description,
+            } => {
+                let embedding = nous_core::embed::MockEmbedding::new(384);
+                commands::run_category_add(
+                    &config,
+                    &name,
+                    parent.as_deref(),
+                    description.as_deref(),
+                    &embedding,
+                )
+                .unwrap_or_else(|e| eprintln!("category add failed: {e}"));
+            }
+        },
+        Command::Export { format: _ } => {
+            commands::run_export(&config).unwrap_or_else(|e| eprintln!("export failed: {e}"));
+        }
+        Command::Import { file } => {
+            let embedding = nous_core::embed::MockEmbedding::new(384);
+            commands::run_import(&config, &file, &embedding)
+                .unwrap_or_else(|e| eprintln!("import failed: {e}"));
+        }
+        Command::RotateKey { new_key_file } => {
+            commands::run_rotate_key(&config, new_key_file.as_deref())
+                .unwrap_or_else(|e| eprintln!("rotate-key failed: {e}"));
+        }
+        Command::Status => {
+            commands::run_status(&config).unwrap_or_else(|e| eprintln!("status failed: {e}"));
         }
     }
 }

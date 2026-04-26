@@ -12,6 +12,7 @@ path = "src/main.rs"
 nous-core = { path = "../nous-core" }
 nous-shared = { path = "../nous-shared" }
 rmcp = { workspace = true }
+rusqlite = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
