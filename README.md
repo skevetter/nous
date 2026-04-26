@@ -59,3 +59,26 @@ nous-mcp category list      List categories
 nous-mcp category add       Add a category
 nous-mcp rotate-key         Rotate SQLCipher encryption key
 ```
+
+## Usage with Claude Code
+
+Add to `.mcp.json` at your project root:
+
+```json
+{
+  "mcpServers": {
+    "nous": {
+      "command": "path/to/nous-mcp",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+This starts `nous-mcp` in stdio transport mode (the default). Claude Code manages the process lifecycle.
+
+For HTTP transport instead:
+
+```bash
+nous-mcp serve --transport http --port 8377
+```
