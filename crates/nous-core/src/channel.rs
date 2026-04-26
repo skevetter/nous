@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nous_shared::Result;
 use nous_shared::ids::MemoryId;
-use nous_shared::sqlite::{open_connection, spawn_blocking};
+use nous_shared::sqlite::open_connection;
+use nous_shared::sqlite::spawn_blocking;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
@@ -114,22 +115,24 @@ async fn write_worker(
         let db = Arc::clone(&db);
         let _ = spawn_blocking(move || {
             let db = db.blocking_lock();
+            let tx = db.connection().unchecked_transaction()?;
             for op in batch {
                 match op {
                     WriteOp::Store(memory, resp) => {
-                        let _ = resp.send(db.store(&memory));
+                        let _ = resp.send(MemoryDb::store_on(&tx, &memory));
                     }
                     WriteOp::Update(id, patch, resp) => {
-                        let _ = resp.send(db.update(&id, &patch));
+                        let _ = resp.send(MemoryDb::update_on(&tx, &id, &patch));
                     }
                     WriteOp::Forget(id, hard, resp) => {
-                        let _ = resp.send(db.forget(&id, hard));
+                        let _ = resp.send(MemoryDb::forget_on(&tx, &id, hard));
                     }
                     WriteOp::Relate(src, tgt, rel, resp) => {
-                        let _ = resp.send(db.relate(&src, &tgt, rel));
+                        let _ = resp.send(MemoryDb::relate_on(&tx, &src, &tgt, rel));
                     }
                 }
             }
+            tx.commit()?;
             Ok(())
         })
         .await;
@@ -174,21 +177,28 @@ impl ReadPool {
         };
 
         let connections = Arc::clone(&self.connections);
-        let result = spawn_blocking(move || {
-            let result = f(&conn);
-            Ok((conn, result))
+        let result = tokio::task::spawn_blocking(move || {
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)));
+            (conn, res)
         })
         .await;
 
         match result {
-            Ok((conn, result)) => {
+            Ok((conn, res)) => {
                 connections.lock().await.push(conn);
                 drop(permit);
-                result
+                match res {
+                    Ok(r) => r,
+                    Err(_) => Err(nous_shared::NousError::Internal(
+                        "closure panicked in ReadPool::with_conn".into(),
+                    )),
+                }
             }
             Err(e) => {
                 drop(permit);
-                Err(e)
+                Err(nous_shared::NousError::Internal(format!(
+                    "spawn_blocking failed: {e}"
+                )))
             }
         }
     }

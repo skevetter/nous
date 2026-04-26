@@ -162,15 +162,21 @@ impl MemoryDb {
     }
 
     pub fn store(&self, memory: &NewMemory) -> Result<MemoryId> {
-        let id = MemoryId::new();
         let tx = self.conn.unchecked_transaction()?;
+        let id = Self::store_on(&tx, memory)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub(crate) fn store_on(conn: &Connection, memory: &NewMemory) -> Result<MemoryId> {
+        let id = MemoryId::new();
 
         let workspace_id: Option<i64> = if let Some(ref path) = memory.workspace_path {
-            tx.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO workspaces (path) VALUES (?1)",
                 params![path],
             )?;
-            Some(tx.query_row(
+            Some(conn.query_row(
                 "SELECT id FROM workspaces WHERE path = ?1",
                 params![path],
                 |row| row.get(0),
@@ -179,7 +185,7 @@ impl MemoryDb {
             None
         };
 
-        tx.execute(
+        conn.execute(
             "INSERT INTO memories (id, title, content, memory_type, source, importance, confidence,
                 workspace_id, session_id, trace_id, agent_id, agent_model, valid_from, archived, category_id)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -203,22 +209,21 @@ impl MemoryDb {
         )?;
 
         for tag_name in &memory.tags {
-            tx.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
                 params![tag_name],
             )?;
-            let tag_id: i64 = tx.query_row(
+            let tag_id: i64 = conn.query_row(
                 "SELECT id FROM tags WHERE name = ?1",
                 params![tag_name],
                 |row| row.get(0),
             )?;
-            tx.execute(
+            conn.execute(
                 "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?1, ?2)",
                 params![id.to_string(), tag_id],
             )?;
         }
 
-        tx.commit()?;
         Ok(id)
     }
 
@@ -297,10 +302,16 @@ impl MemoryDb {
     }
 
     pub fn update(&self, id: &MemoryId, patch: &MemoryPatch) -> Result<bool> {
-        let id_str = id.to_string();
         let tx = self.conn.unchecked_transaction()?;
+        let result = Self::update_on(&tx, id, patch)?;
+        tx.commit()?;
+        Ok(result)
+    }
 
-        let exists: bool = tx.query_row(
+    pub(crate) fn update_on(conn: &Connection, id: &MemoryId, patch: &MemoryPatch) -> Result<bool> {
+        let id_str = id.to_string();
+
+        let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
             params![id_str],
             |row| row.get(0),
@@ -343,38 +354,44 @@ impl MemoryDb {
         );
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
-        tx.execute(&sql, params_ref.as_slice())?;
+        conn.execute(&sql, params_ref.as_slice())?;
 
         if let Some(ref new_tags) = patch.tags {
-            tx.execute(
+            conn.execute(
                 "DELETE FROM memory_tags WHERE memory_id = ?1",
                 params![id_str],
             )?;
             for tag_name in new_tags {
-                tx.execute(
+                conn.execute(
                     "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
                     params![tag_name],
                 )?;
-                let tag_id: i64 = tx.query_row(
+                let tag_id: i64 = conn.query_row(
                     "SELECT id FROM tags WHERE name = ?1",
                     params![tag_name],
                     |row| row.get(0),
                 )?;
-                tx.execute(
+                conn.execute(
                     "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?1, ?2)",
                     params![id_str, tag_id],
                 )?;
             }
         }
 
-        tx.commit()?;
         Ok(true)
     }
 
     pub fn forget(&self, id: &MemoryId, hard: bool) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = Self::forget_on(&tx, id, hard)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub(crate) fn forget_on(conn: &Connection, id: &MemoryId, hard: bool) -> Result<bool> {
         let id_str = id.to_string();
 
-        let exists: bool = self.conn.query_row(
+        let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
             params![id_str],
             |row| row.get(0),
@@ -384,23 +401,20 @@ impl MemoryDb {
         }
 
         if hard {
-            self.conn
-                .execute("DELETE FROM memories WHERE id = ?1", params![id_str])?;
+            conn.execute("DELETE FROM memories WHERE id = ?1", params![id_str])?;
         } else {
-            let tx = self.conn.unchecked_transaction()?;
-            tx.execute(
+            conn.execute(
                 "DELETE FROM memory_embeddings WHERE chunk_id IN (SELECT id FROM memory_chunks WHERE memory_id = ?1)",
                 params![id_str],
             )?;
-            tx.execute(
+            conn.execute(
                 "DELETE FROM memory_chunks WHERE memory_id = ?1",
                 params![id_str],
             )?;
-            tx.execute(
+            conn.execute(
                 "UPDATE memories SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1",
                 params![id_str],
             )?;
-            tx.commit()?;
         }
 
         Ok(true)
@@ -418,21 +432,30 @@ impl MemoryDb {
 
     pub fn relate(&self, from: &MemoryId, to: &MemoryId, relation: RelationType) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        Self::relate_on(&tx, from, to, relation)?;
+        tx.commit()?;
+        Ok(())
+    }
 
-        tx.execute(
+    pub(crate) fn relate_on(
+        conn: &Connection,
+        from: &MemoryId,
+        to: &MemoryId,
+        relation: RelationType,
+    ) -> Result<()> {
+        conn.execute(
             "INSERT OR IGNORE INTO relationships (source_id, target_id, relation_type)
              VALUES (?1, ?2, ?3)",
             params![from.to_string(), to.to_string(), relation.to_string()],
         )?;
 
-        if relation == RelationType::Supersedes && tx.changes() > 0 {
-            tx.execute(
+        if relation == RelationType::Supersedes && conn.changes() > 0 {
+            conn.execute(
                 "UPDATE memories SET valid_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1",
                 params![to.to_string()],
             )?;
         }
 
-        tx.commit()?;
         Ok(())
     }
 

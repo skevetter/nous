@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use nous_core::channel::{WriteChannel, WriteOp};
 use nous_core::db::MemoryDb;
-use nous_core::types::{Importance, MemoryPatch, MemoryType, NewMemory};
+use nous_core::types::{Importance, MemoryPatch, MemoryType, NewMemory, RelationType};
 use tempfile::NamedTempFile;
 use tokio::sync::oneshot;
 
@@ -172,4 +172,31 @@ async fn forget_via_channel() {
         .unwrap()
         .expect("should find archived memory");
     assert!(recalled.memory.archived);
+}
+
+#[tokio::test]
+async fn relate_via_channel() {
+    let (db, file) = temp_db();
+    let (ch, handle) = WriteChannel::new(db);
+
+    let id1 = ch.store(minimal_memory()).await.unwrap();
+    let id2 = ch.store(minimal_memory()).await.unwrap();
+    ch.relate(id1.clone(), id2.clone(), RelationType::Related)
+        .await
+        .unwrap();
+
+    drop(ch);
+    handle.await.unwrap();
+
+    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None).unwrap();
+    let recalled = verify_db.recall(&id1).unwrap().expect("should find memory");
+    assert!(
+        recalled
+            .relationships
+            .iter()
+            .any(|r| r.source_id == id1.to_string()
+                && r.target_id == id2.to_string()
+                && r.relation_type == RelationType::Related),
+        "relationship should exist between id1 and id2"
+    );
 }
