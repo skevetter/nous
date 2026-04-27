@@ -193,11 +193,10 @@ async fn room_create_and_read_round_trip() {
 async fn room_archive_and_delete() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.db");
-    let path_str = path.to_str().unwrap();
+    let path_str = path.to_str().unwrap().to_string();
 
-    let db = MemoryDb::open(path_str, None, 384).unwrap();
-    let (write_channel, _handle) = WriteChannel::new(db);
-    let read_pool = ReadPool::new(path_str, None, 1).unwrap();
+    let db = MemoryDb::open(&path_str, None, 384).unwrap();
+    let (write_channel, handle) = WriteChannel::new(db);
 
     let room_id = nous_shared::ids::MemoryId::new().to_string();
     write_channel
@@ -207,12 +206,6 @@ async fn room_archive_and_delete() {
 
     let archived = write_channel.archive_room(room_id.clone()).await.unwrap();
     assert!(archived);
-
-    let active_rooms = read_pool.list_rooms(false, None).await.unwrap();
-    assert!(active_rooms.is_empty());
-
-    let archived_rooms = read_pool.list_rooms(true, None).await.unwrap();
-    assert_eq!(archived_rooms.len(), 1);
 
     let room_id2 = nous_shared::ids::MemoryId::new().to_string();
     write_channel
@@ -225,6 +218,17 @@ async fn room_archive_and_delete() {
         .await
         .unwrap();
     assert!(deleted);
+
+    drop(write_channel);
+    handle.await.unwrap();
+
+    let read_pool = ReadPool::new(&path_str, None, 1).unwrap();
+
+    let active_rooms = read_pool.list_rooms(false, None).await.unwrap();
+    assert!(active_rooms.is_empty());
+
+    let archived_rooms = read_pool.list_rooms(true, None).await.unwrap();
+    assert_eq!(archived_rooms.len(), 1);
 
     let room = read_pool.get_room(&room_id2).await.unwrap();
     assert!(room.is_none());
