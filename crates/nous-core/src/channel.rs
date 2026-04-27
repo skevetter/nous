@@ -10,7 +10,11 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::chunk::Chunk;
 use crate::db::MemoryDb;
-use crate::types::{MemoryPatch, Message, NewMemory, RelationType, Room};
+use crate::schedule_db::ScheduleDb;
+use crate::types::{
+    MemoryPatch, Message, NewMemory, RelationType, Room, RunPatch, Schedule, SchedulePatch,
+    ScheduleRun,
+};
 
 const CHANNEL_CAPACITY: usize = 256;
 const BATCH_LIMIT: usize = 32;
@@ -82,6 +86,12 @@ pub enum WriteOp {
         role: String,
         resp: oneshot::Sender<Result<()>>,
     },
+    CreateSchedule(Schedule, oneshot::Sender<Result<String>>),
+    UpdateSchedule(String, SchedulePatch, oneshot::Sender<Result<bool>>),
+    DeleteSchedule(String, oneshot::Sender<Result<bool>>),
+    RecordRun(ScheduleRun, oneshot::Sender<Result<String>>),
+    UpdateRun(String, RunPatch, oneshot::Sender<Result<bool>>),
+    ComputeNextRun(String, oneshot::Sender<Result<()>>),
 }
 
 #[derive(Clone)]
@@ -362,6 +372,72 @@ impl WriteChannel {
             .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
     }
 
+    pub async fn create_schedule(&self, schedule: Schedule) -> Result<String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CreateSchedule(schedule, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn update_schedule(&self, id: String, patch: SchedulePatch) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::UpdateSchedule(id, patch, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn delete_schedule(&self, id: String) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::DeleteSchedule(id, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn record_run(&self, run: ScheduleRun) -> Result<String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::RecordRun(run, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn update_run(&self, id: String, patch: RunPatch) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::UpdateRun(id, patch, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn compute_next_run(&self, id: String) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::ComputeNextRun(id, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
     pub fn batch_count(&self) -> usize {
         self.batch_count.load(Ordering::Relaxed)
     }
@@ -539,6 +615,24 @@ async fn write_worker(
                     } => {
                         let result = MemoryDb::join_room_on(&tx, &room_id, &agent_id, &role);
                         let _ = resp.send(result);
+                    }
+                    WriteOp::CreateSchedule(schedule, resp) => {
+                        let _ = resp.send(ScheduleDb::create_on(&tx, &schedule));
+                    }
+                    WriteOp::UpdateSchedule(id, patch, resp) => {
+                        let _ = resp.send(ScheduleDb::update_on(&tx, &id, &patch));
+                    }
+                    WriteOp::DeleteSchedule(id, resp) => {
+                        let _ = resp.send(ScheduleDb::delete_on(&tx, &id));
+                    }
+                    WriteOp::RecordRun(run, resp) => {
+                        let _ = resp.send(ScheduleDb::record_run_on(&tx, &run));
+                    }
+                    WriteOp::UpdateRun(id, patch, resp) => {
+                        let _ = resp.send(ScheduleDb::update_run_on(&tx, &id, &patch));
+                    }
+                    WriteOp::ComputeNextRun(id, resp) => {
+                        let _ = resp.send(ScheduleDb::compute_next_run_on(&tx, &id));
                     }
                 }
             }

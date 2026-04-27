@@ -343,3 +343,91 @@ pub struct Message {
     pub metadata: Option<String>,
     pub created_at: String,
 }
+
+// --- Schedule types ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionType {
+    McpTool,
+    Shell,
+    Http,
+}
+
+impl_display_fromstr!(ActionType,
+    McpTool => "mcp_tool",
+    Shell => "shell",
+    Http => "http",
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    Running,
+    Completed,
+    Failed,
+    Timeout,
+    Skipped,
+}
+
+impl_display_fromstr!(RunStatus,
+    Running => "running",
+    Completed => "completed",
+    Failed => "failed",
+    Timeout => "timeout",
+    Skipped => "skipped",
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Schedule {
+    pub id: String,
+    pub name: String,
+    pub cron_expr: String,
+    pub timezone: String,
+    pub enabled: bool,
+    pub action_type: ActionType,
+    pub action_payload: String,
+    pub desired_outcome: Option<String>,
+    pub max_retries: i64,
+    pub timeout_secs: Option<i64>,
+    pub max_output_bytes: i64,
+    pub max_runs: i64,
+    pub next_run_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchedulePatch {
+    pub name: Option<String>,
+    pub cron_expr: Option<String>,
+    pub action_payload: Option<String>,
+    pub enabled: Option<bool>,
+    pub max_retries: Option<i64>,
+    pub timeout_secs: Option<i64>,
+    pub desired_outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleRun {
+    pub id: String,
+    pub schedule_id: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub status: RunStatus,
+    pub exit_code: Option<i64>,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub attempt: i64,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunPatch {
+    pub finished_at: Option<i64>,
+    pub status: Option<RunStatus>,
+    pub exit_code: Option<i64>,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub duration_ms: Option<i64>,
+}

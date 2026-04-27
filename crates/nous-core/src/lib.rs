@@ -5,6 +5,7 @@ pub mod cron_parser;
 pub mod db;
 pub mod embed;
 pub mod model;
+pub mod schedule_db;
 pub mod search;
 pub mod sqlite_vec;
 pub mod types;
