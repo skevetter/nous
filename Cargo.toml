@@ -58,3 +58,14 @@ uuid = { version = "1", features = ["v7"] }
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 tempfile = "3"
 
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+codegen-units = 64
+
+[profile.release]
+opt-level = 3
+codegen-units = 16
+lto = "thin"
+strip = true
