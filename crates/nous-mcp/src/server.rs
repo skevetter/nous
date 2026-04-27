@@ -283,6 +283,28 @@ impl NousServer {
     async fn memory_sql(&self, params: Parameters<MemorySqlParams>) -> CallToolResult {
         handle_sql(params.0, &self.read_pool).await
     }
+
+    #[tool(
+        name = "otlp_trace_context",
+        description = "Get correlated memories, spans, and logs for a given trace ID. Optionally provide a session_id to also fetch logs."
+    )]
+    async fn otlp_trace_context(
+        &self,
+        params: Parameters<OtlpTraceContextParams>,
+    ) -> CallToolResult {
+        handle_otlp_trace_context(params.0, &self.otlp_db, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "otlp_memory_context",
+        description = "Look up a memory by ID and fetch correlated OTLP spans and logs using the memory's trace_id and session_id."
+    )]
+    async fn otlp_memory_context(
+        &self,
+        params: Parameters<OtlpMemoryContextParams>,
+    ) -> CallToolResult {
+        handle_otlp_memory_context(params.0, &self.otlp_db, &self.read_pool).await
+    }
 }
 
 #[tool_handler(name = "nous-mcp", version = "0.1.0")]
@@ -2153,5 +2175,358 @@ mod tests {
         assert!(count > 0, "context should create access log entries");
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    fn test_otlp_db() -> (Mutex<OtlpDb>, String) {
+        let path = format!(
+            "/tmp/nous-test-otlp-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        );
+        let db = OtlpDb::open(&path, None).unwrap();
+        (Mutex::new(db), path)
+    }
+
+    #[tokio::test]
+    async fn otlp_trace_context_returns_correlated_data() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let (otlp_db, otlp_path) = test_otlp_db();
+
+        // Store a memory with trace_id
+        let store_result = handle_store(
+            MemoryStoreParams {
+                title: "Traced memory".into(),
+                content: "Memory correlated with a trace".into(),
+                memory_type: "observation".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: Some("sess-001".into()),
+                trace_id: Some("trace-abc".into()),
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        assert!(is_success(&store_result));
+
+        // Store spans and logs in OTLP DB
+        {
+            let db = otlp_db.lock().unwrap();
+            db.store_spans(&[nous_otlp::decode::Span {
+                trace_id: "trace-abc".into(),
+                span_id: "span-001".into(),
+                parent_span_id: None,
+                name: "HTTP GET /api".into(),
+                kind: 1,
+                start_time: 1000,
+                end_time: 2000,
+                status_code: 0,
+                status_message: None,
+                resource_attrs: "{}".into(),
+                span_attrs: "{}".into(),
+                events_json: "[]".into(),
+            }])
+            .unwrap();
+            db.store_logs(&[nous_otlp::decode::LogEvent {
+                timestamp: 1500,
+                severity: "INFO".into(),
+                body: "Request processed".into(),
+                resource_attrs: "{}".into(),
+                scope_attrs: "{}".into(),
+                log_attrs: "{}".into(),
+                session_id: Some("sess-001".into()),
+                trace_id: Some("trace-abc".into()),
+                span_id: None,
+            }])
+            .unwrap();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_otlp_trace_context(
+            OtlpTraceContextParams {
+                trace_id: "trace-abc".into(),
+                session_id: Some("sess-001".into()),
+            },
+            &Some(otlp_db),
+            &server.read_pool,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert!(!json["memories"].as_array().unwrap().is_empty());
+        assert_eq!(json["spans"].as_array().unwrap().len(), 1);
+        assert_eq!(json["spans"][0]["name"], "HTTP GET /api");
+        assert_eq!(json["logs"].as_array().unwrap().len(), 1);
+        assert_eq!(json["logs"][0]["body"], "Request processed");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_trace_context_without_session_id_returns_empty_logs() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let (otlp_db, otlp_path) = test_otlp_db();
+
+        {
+            let db = otlp_db.lock().unwrap();
+            db.store_spans(&[nous_otlp::decode::Span {
+                trace_id: "trace-xyz".into(),
+                span_id: "span-002".into(),
+                parent_span_id: None,
+                name: "DB query".into(),
+                kind: 2,
+                start_time: 3000,
+                end_time: 4000,
+                status_code: 0,
+                status_message: None,
+                resource_attrs: "{}".into(),
+                span_attrs: "{}".into(),
+                events_json: "[]".into(),
+            }])
+            .unwrap();
+        }
+
+        let result = handle_otlp_trace_context(
+            OtlpTraceContextParams {
+                trace_id: "trace-xyz".into(),
+                session_id: None,
+            },
+            &Some(otlp_db),
+            &server.read_pool,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["spans"].as_array().unwrap().len(), 1);
+        assert!(json["logs"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_trace_context_no_otlp_db_returns_error() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        let result = handle_otlp_trace_context(
+            OtlpTraceContextParams {
+                trace_id: "trace-abc".into(),
+                session_id: None,
+            },
+            &None,
+            &server.read_pool,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().unwrap().text.as_str();
+        assert_eq!(text, "OTLP database not configured");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_memory_context_returns_correlated_data() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let (otlp_db, otlp_path) = test_otlp_db();
+
+        let store_result = handle_store(
+            MemoryStoreParams {
+                title: "Correlated memory".into(),
+                content: "Memory with trace and session".into(),
+                memory_type: "decision".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: Some("sess-mem".into()),
+                trace_id: Some("trace-mem".into()),
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        assert!(is_success(&store_result));
+        let memory_id = extract_json(&store_result)["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        {
+            let db = otlp_db.lock().unwrap();
+            db.store_spans(&[nous_otlp::decode::Span {
+                trace_id: "trace-mem".into(),
+                span_id: "span-mem".into(),
+                parent_span_id: None,
+                name: "memory_store".into(),
+                kind: 1,
+                start_time: 5000,
+                end_time: 6000,
+                status_code: 0,
+                status_message: None,
+                resource_attrs: "{}".into(),
+                span_attrs: "{}".into(),
+                events_json: "[]".into(),
+            }])
+            .unwrap();
+            db.store_logs(&[nous_otlp::decode::LogEvent {
+                timestamp: 5500,
+                severity: "DEBUG".into(),
+                body: "Storing memory".into(),
+                resource_attrs: "{}".into(),
+                scope_attrs: "{}".into(),
+                log_attrs: "{}".into(),
+                session_id: Some("sess-mem".into()),
+                trace_id: Some("trace-mem".into()),
+                span_id: None,
+            }])
+            .unwrap();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_otlp_memory_context(
+            OtlpMemoryContextParams {
+                memory_id: memory_id.clone(),
+            },
+            &Some(otlp_db),
+            &server.read_pool,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["memory"]["id"], memory_id);
+        assert_eq!(json["memory"]["title"], "Correlated memory");
+        assert_eq!(json["spans"].as_array().unwrap().len(), 1);
+        assert_eq!(json["spans"][0]["name"], "memory_store");
+        assert_eq!(json["logs"].as_array().unwrap().len(), 1);
+        assert_eq!(json["logs"][0]["body"], "Storing memory");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_memory_context_no_correlation_ids_returns_error() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let (otlp_db, otlp_path) = test_otlp_db();
+
+        let store_result = handle_store(
+            MemoryStoreParams {
+                title: "No correlation".into(),
+                content: "Memory without trace or session".into(),
+                memory_type: "fact".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+        let memory_id = extract_json(&store_result)["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_otlp_memory_context(
+            OtlpMemoryContextParams { memory_id },
+            &Some(otlp_db),
+            &server.read_pool,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().unwrap().text.as_str();
+        assert_eq!(
+            text,
+            "memory has no trace_id or session_id for OTLP correlation"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_memory_context_no_otlp_db_returns_error() {
+        let db_path = test_db_path();
+        let _server = test_server(&db_path);
+
+        let result = handle_otlp_memory_context(
+            OtlpMemoryContextParams {
+                memory_id: "some-id".into(),
+            },
+            &None,
+            &_server.read_pool,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().unwrap().text.as_str();
+        assert_eq!(text, "OTLP database not configured");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn otlp_memory_context_nonexistent_memory_returns_error() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let (otlp_db, otlp_path) = test_otlp_db();
+
+        let result = handle_otlp_memory_context(
+            OtlpMemoryContextParams {
+                memory_id: "nonexistent-id".into(),
+            },
+            &Some(otlp_db),
+            &server.read_pool,
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
     }
 }
