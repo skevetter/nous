@@ -843,7 +843,7 @@ impl MemoryDb {
         }
     }
 
-    pub(crate) fn create_room_on(
+    pub fn create_room_on(
         conn: &Connection,
         id: &str,
         name: &str,
@@ -857,7 +857,7 @@ impl MemoryDb {
         Ok(())
     }
 
-    pub(crate) fn post_message_on(
+    pub fn post_message_on(
         conn: &Connection,
         id: &str,
         room_id: &str,
@@ -874,17 +874,17 @@ impl MemoryDb {
         Ok(())
     }
 
-    pub(crate) fn archive_room_on(conn: &Connection, id: &str) -> Result<bool> {
+    pub fn archive_room_on(conn: &Connection, id: &str) -> Result<bool> {
         let rows = conn.execute("UPDATE rooms SET archived = 1 WHERE id = ?1", params![id])?;
         Ok(rows > 0)
     }
 
-    pub(crate) fn hard_delete_room_on(conn: &Connection, id: &str) -> Result<bool> {
+    pub fn hard_delete_room_on(conn: &Connection, id: &str) -> Result<bool> {
         let rows = conn.execute("DELETE FROM rooms WHERE id = ?1", params![id])?;
         Ok(rows > 0)
     }
 
-    pub(crate) fn join_room_on(
+    pub fn join_room_on(
         conn: &Connection,
         room_id: &str,
         agent_id: &str,
