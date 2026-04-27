@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::chunk::Chunk;
 use crate::db::MemoryDb;
-use crate::types::{MemoryPatch, NewMemory, RelationType};
+use crate::types::{MemoryPatch, Message, NewMemory, RelationType, Room};
 
 const CHANNEL_CAPACITY: usize = 256;
 const BATCH_LIMIT: usize = 32;
@@ -58,6 +58,24 @@ pub enum WriteOp {
     ),
     DeleteChunks(MemoryId, oneshot::Sender<Result<()>>),
     LogAccess(MemoryId, String, oneshot::Sender<Result<()>>),
+    CreateRoom {
+        id: String,
+        name: String,
+        purpose: Option<String>,
+        metadata: Option<String>,
+        resp: oneshot::Sender<Result<String>>,
+    },
+    PostMessage {
+        id: String,
+        room_id: String,
+        sender_id: String,
+        content: String,
+        reply_to: Option<String>,
+        metadata: Option<String>,
+        resp: oneshot::Sender<Result<String>>,
+    },
+    DeleteRoom(String, bool, oneshot::Sender<Result<bool>>),
+    ArchiveRoom(String, oneshot::Sender<Result<bool>>),
 }
 
 #[derive(Clone)]
@@ -250,6 +268,78 @@ impl WriteChannel {
             .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
     }
 
+    pub async fn create_room(
+        &self,
+        id: String,
+        name: String,
+        purpose: Option<String>,
+        metadata: Option<String>,
+    ) -> Result<String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CreateRoom {
+                id,
+                name,
+                purpose,
+                metadata,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn post_message(
+        &self,
+        id: String,
+        room_id: String,
+        sender_id: String,
+        content: String,
+        reply_to: Option<String>,
+        metadata: Option<String>,
+    ) -> Result<String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::PostMessage {
+                id,
+                room_id,
+                sender_id,
+                content,
+                reply_to,
+                metadata,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn delete_room(&self, id: String, hard: bool) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::DeleteRoom(id, hard, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn archive_room(&self, id: String) -> Result<bool> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::ArchiveRoom(id, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
     pub fn batch_count(&self) -> usize {
         self.batch_count.load(Ordering::Relaxed)
     }
@@ -371,6 +461,54 @@ async fn write_worker(
                     WriteOp::LogAccess(id, access_type, resp) => {
                         let _ = resp.send(MemoryDb::log_access_on(&tx, &id, &access_type));
                     }
+                    WriteOp::CreateRoom {
+                        id,
+                        name,
+                        purpose,
+                        metadata,
+                        resp,
+                    } => {
+                        let result = MemoryDb::create_room_on(
+                            &tx,
+                            &id,
+                            &name,
+                            purpose.as_deref(),
+                            metadata.as_deref(),
+                        );
+                        let _ = resp.send(result.map(|_| id));
+                    }
+                    WriteOp::PostMessage {
+                        id,
+                        room_id,
+                        sender_id,
+                        content,
+                        reply_to,
+                        metadata,
+                        resp,
+                    } => {
+                        let result = MemoryDb::post_message_on(
+                            &tx,
+                            &id,
+                            &room_id,
+                            &sender_id,
+                            &content,
+                            reply_to.as_deref(),
+                            metadata.as_deref(),
+                        );
+                        let _ = resp.send(result.map(|_| id));
+                    }
+                    WriteOp::DeleteRoom(id, hard, resp) => {
+                        let result = if hard {
+                            MemoryDb::hard_delete_room_on(&tx, &id)
+                        } else {
+                            MemoryDb::archive_room_on(&tx, &id)
+                        };
+                        let _ = resp.send(result);
+                    }
+                    WriteOp::ArchiveRoom(id, resp) => {
+                        let result = MemoryDb::archive_room_on(&tx, &id);
+                        let _ = resp.send(result);
+                    }
                 }
             }
             tx.commit()?;
@@ -442,5 +580,221 @@ impl ReadPool {
                 )))
             }
         }
+    }
+
+    pub async fn list_rooms(&self, archived: bool, limit: Option<usize>) -> Result<Vec<Room>> {
+        let limit = limit.unwrap_or(100);
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, purpose, metadata, archived, created_at, updated_at
+                 FROM rooms
+                 WHERE archived = ?1
+                 ORDER BY created_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![archived as i64, limit as i64], |row| {
+                Ok(Room {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    purpose: row.get(2)?,
+                    metadata: row.get(3)?,
+                    archived: row.get::<_, i64>(4)? != 0,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn get_room(&self, id: &str) -> Result<Option<Room>> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            match conn.query_row(
+                "SELECT id, name, purpose, metadata, archived, created_at, updated_at
+                 FROM rooms WHERE id = ?1",
+                rusqlite::params![id],
+                |row| {
+                    Ok(Room {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        purpose: row.get(2)?,
+                        metadata: row.get(3)?,
+                        archived: row.get::<_, i64>(4)? != 0,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
+            ) {
+                Ok(r) => Ok(Some(r)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+    }
+
+    pub async fn get_room_by_name(&self, name: &str) -> Result<Option<Room>> {
+        let name = name.to_string();
+        self.with_conn(move |conn| {
+            match conn.query_row(
+                "SELECT id, name, purpose, metadata, archived, created_at, updated_at
+                 FROM rooms WHERE name = ?1 AND archived = 0",
+                rusqlite::params![name],
+                |row| {
+                    Ok(Room {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        purpose: row.get(2)?,
+                        metadata: row.get(3)?,
+                        archived: row.get::<_, i64>(4)? != 0,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
+            ) {
+                Ok(r) => Ok(Some(r)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+    }
+
+    pub async fn list_messages(
+        &self,
+        room_id: &str,
+        limit: Option<usize>,
+        before: Option<String>,
+        since: Option<String>,
+    ) -> Result<Vec<Message>> {
+        let room_id = room_id.to_string();
+        let limit = limit.unwrap_or(100);
+        self.with_conn(move |conn| {
+            let mut sql = "SELECT id, room_id, sender_id, content, reply_to, metadata, created_at
+                           FROM room_messages
+                           WHERE room_id = ?1"
+                .to_string();
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(room_id)];
+
+            if let Some(b) = before {
+                sql.push_str(" AND created_at < ?");
+                params.push(Box::new(b));
+            }
+            if let Some(s) = since {
+                sql.push_str(" AND created_at > ?");
+                params.push(Box::new(s));
+            }
+
+            sql.push_str(" ORDER BY created_at DESC LIMIT ?");
+            params.push(Box::new(limit as i64));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                |row| {
+                    Ok(Message {
+                        id: row.get(0)?,
+                        room_id: row.get(1)?,
+                        sender_id: row.get(2)?,
+                        content: row.get(3)?,
+                        reply_to: row.get(4)?,
+                        metadata: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn search_messages(
+        &self,
+        room_id: &str,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<Message>> {
+        let room_id = room_id.to_string();
+        let query = query.to_string();
+        let limit = limit.unwrap_or(50);
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.room_id, m.sender_id, m.content, m.reply_to, m.metadata, m.created_at
+                 FROM room_messages m
+                 JOIN room_messages_fts ON m.rowid = room_messages_fts.rowid
+                 WHERE room_messages_fts MATCH ?1 AND m.room_id = ?2
+                 ORDER BY m.created_at DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![query, room_id, limit as i64], |row| {
+                Ok(Message {
+                    id: row.get(0)?,
+                    room_id: row.get(1)?,
+                    sender_id: row.get(2)?,
+                    content: row.get(3)?,
+                    reply_to: row.get(4)?,
+                    metadata: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn room_info(&self, id: &str) -> Result<Option<serde_json::Value>> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let room = match conn.query_row(
+                "SELECT id, name, purpose, metadata, archived, created_at, updated_at
+                 FROM rooms WHERE id = ?1",
+                rusqlite::params![id],
+                |row| {
+                    Ok(Room {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        purpose: row.get(2)?,
+                        metadata: row.get(3)?,
+                        archived: row.get::<_, i64>(4)? != 0,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
+            ) {
+                Ok(r) => r,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+
+            let mut stmt = conn.prepare(
+                "SELECT agent_id, role, joined_at FROM room_participants WHERE room_id = ?1",
+            )?;
+            let participants: Vec<serde_json::Value> = stmt
+                .query_map(rusqlite::params![id], |row| {
+                    Ok(serde_json::json!({
+                        "agent_id": row.get::<_, String>(0)?,
+                        "role": row.get::<_, String>(1)?,
+                        "joined_at": row.get::<_, String>(2)?,
+                    }))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            let message_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM room_messages WHERE room_id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )?;
+
+            Ok(Some(serde_json::json!({
+                "room": room,
+                "participants": participants,
+                "message_count": message_count,
+            })))
+        })
+        .await
     }
 }

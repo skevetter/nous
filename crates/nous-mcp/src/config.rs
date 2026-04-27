@@ -25,6 +25,7 @@ pub struct Config {
     pub otlp: OtlpConfig,
     pub classification: ClassificationConfig,
     pub encryption: EncryptionConfig,
+    pub rooms: RoomsConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -105,6 +106,22 @@ impl Default for EncryptionConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct RoomsConfig {
+    pub max_rooms: usize,
+    pub max_messages_per_room: usize,
+}
+
+impl Default for RoomsConfig {
+    fn default() -> Self {
+        Self {
+            max_rooms: 1000,
+            max_messages_per_room: 10000,
+        }
+    }
+}
+
 const DEFAULT_CONFIG_TOML: &str = r#"[memory]
 db_path = "~/.cache/nous/memory.db"
 
@@ -123,6 +140,10 @@ confidence_threshold = 0.3
 
 [encryption]
 db_key_file = "~/.config/nous/db.key"
+
+[rooms]
+max_rooms = 1000
+max_messages_per_room = 10000
 "#;
 
 fn default_config_path() -> std::result::Result<PathBuf, ConfigError> {
@@ -173,6 +194,16 @@ impl Config {
         {
             cfg.encryption.db_key_file = val;
         }
+        if let Ok(val) = std::env::var("NOUS_ROOMS_MAX")
+            && let Ok(n) = val.parse::<usize>()
+        {
+            cfg.rooms.max_rooms = n;
+        }
+        if let Ok(val) = std::env::var("NOUS_ROOMS_MAX_MESSAGES")
+            && let Ok(n) = val.parse::<usize>()
+        {
+            cfg.rooms.max_messages_per_room = n;
+        }
     }
 }
 
@@ -211,6 +242,10 @@ confidence_threshold = 0.3
 
 [encryption]
 db_key_file = "~/.config/nous/db.key"
+
+[rooms]
+max_rooms = 1000
+max_messages_per_room = 10000
 "#;
 
     #[test]

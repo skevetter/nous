@@ -321,3 +321,25 @@ pub struct CategoryTree {
     pub category: Category,
     pub children: Vec<CategoryTree>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Room {
+    pub id: String,
+    pub name: String,
+    pub purpose: Option<String>,
+    pub metadata: Option<String>,
+    pub archived: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub room_id: String,
+    pub sender_id: String,
+    pub content: String,
+    pub reply_to: Option<String>,
+    pub metadata: Option<String>,
+    pub created_at: String,
+}
