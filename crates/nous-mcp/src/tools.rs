@@ -2090,8 +2090,10 @@ struct ScheduleExportEntry {
     enabled: bool,
     action_type: String,
     action_payload: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     desired_outcome: Option<String>,
     max_retries: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     timeout_secs: Option<i64>,
     max_output_bytes: i64,
     max_runs: i64,
@@ -2133,7 +2135,13 @@ pub async fn handle_schedule_export(
         .collect();
 
     if format == "toml" {
-        match toml::to_string_pretty(&serde_json::json!({"schedules": entries})) {
+        #[derive(Serialize)]
+        struct TomlWrapper<'a> {
+            schedules: &'a [ScheduleExportEntry],
+        }
+        match toml::to_string_pretty(&TomlWrapper {
+            schedules: &entries,
+        }) {
             Ok(toml_str) => ok_json(&serde_json::json!({
                 "format": "toml",
                 "data": toml_str,
@@ -2206,6 +2214,7 @@ pub async fn handle_schedule_import(
         }
     }
 
+    let total = import_data.schedules.len();
     let mut imported_ids = Vec::new();
     for entry in import_data.schedules {
         let action_type = match parse_enum::<ActionType>(&entry.action_type, "action_type") {
@@ -2233,7 +2242,16 @@ pub async fn handle_schedule_import(
 
         match write_channel.create_schedule(schedule).await {
             Ok(id) => imported_ids.push(id),
-            Err(e) => return err_result(&format!("import failed: {e}")),
+            Err(e) => {
+                if !imported_ids.is_empty() {
+                    scheduler_notify.notify_one();
+                }
+                return err_result(&format!(
+                    "import failed at entry {}/{total}: {e} (partially imported {} schedule(s): {imported_ids:?})",
+                    imported_ids.len() + 1,
+                    imported_ids.len(),
+                ));
+            }
         }
     }
 

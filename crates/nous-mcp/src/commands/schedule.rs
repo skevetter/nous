@@ -127,20 +127,26 @@ pub fn run_schedule_delete(config: &Config, id: &str) -> Result<(), Box<dyn std:
 
 pub fn run_schedule_pause(config: &Config, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db = open_db(config)?;
-    db.connection().execute(
+    let rows = db.connection().execute(
         "UPDATE schedules SET enabled = 0, updated_at = strftime('%s', 'now') WHERE id = ?1",
         rusqlite::params![id],
     )?;
+    if rows == 0 {
+        return Err(format!("schedule not found: {id}").into());
+    }
     println!("paused {id}");
     Ok(())
 }
 
 pub fn run_schedule_resume(config: &Config, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db = open_db(config)?;
-    db.connection().execute(
+    let rows = db.connection().execute(
         "UPDATE schedules SET enabled = 1, updated_at = strftime('%s', 'now') WHERE id = ?1",
         rusqlite::params![id],
     )?;
+    if rows == 0 {
+        return Err(format!("schedule not found: {id}").into());
+    }
     println!("resumed {id}");
     Ok(())
 }
