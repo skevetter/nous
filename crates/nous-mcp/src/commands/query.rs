@@ -102,7 +102,7 @@ fn is_read_only_sql(sql: &str) -> bool {
         .unwrap_or("");
 
     match first_keyword {
-        "SELECT" | "EXPLAIN" => true,
+        "SELECT" | "EXPLAIN" => !contains_write_keyword(&upper),
         "WITH" => !contains_write_keyword(&upper),
         "PRAGMA" => !trimmed
             .strip_prefix("PRAGMA")

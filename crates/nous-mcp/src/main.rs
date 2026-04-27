@@ -2637,6 +2637,27 @@ mod tests {
     }
 
     #[test]
+    fn integration_sql_nested_insert_in_select_rejected() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_sql(
+            &cfg,
+            "SELECT * FROM (INSERT INTO memories VALUES ('x','y','z') RETURNING *)",
+            &format,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation (exit 2)");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
     fn integration_schema_dumps_ddl() {
         let cfg = make_test_config();
 
