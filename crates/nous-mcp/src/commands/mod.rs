@@ -169,3 +169,29 @@ pub fn expand_tilde(p: &str) -> String {
     }
     p.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_tilde_replaces_home_prefix() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_tilde("~/foo/bar.db"), format!("{home}/foo/bar.db"),);
+    }
+
+    #[test]
+    fn expand_tilde_leaves_absolute_path_unchanged() {
+        assert_eq!(expand_tilde("/tmp/memory.db"), "/tmp/memory.db");
+    }
+
+    #[test]
+    fn expand_tilde_leaves_relative_path_unchanged() {
+        assert_eq!(expand_tilde("data/memory.db"), "data/memory.db");
+    }
+
+    #[test]
+    fn expand_tilde_leaves_bare_tilde_unchanged() {
+        assert_eq!(expand_tilde("~"), "~");
+    }
+}
