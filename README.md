@@ -60,6 +60,47 @@ nous-mcp category add       Add a category
 nous-mcp rotate-key         Rotate SQLCipher encryption key
 ```
 
+## First Run
+
+On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. The default model configured in code is `BAAI/bge-small-en-v1.5` (~30MB). If `config.toml` specifies a different model (e.g., `Qwen3-Embedding-0.6B-ONNX` as shown in the Configuration section), that model is downloaded instead (~600MB for quantized variants).
+
+- **Network required** — the first run must reach `huggingface.co` to fetch the model
+- **Cache location** — models are cached by the `hf-hub` crate at `~/.cache/huggingface/hub` (the standard Hugging Face cache directory); subsequent runs load from cache
+- **Fallback** — if the download fails, nous falls back to `MockEmbedding`: FTS full-text search continues working, but semantic/vector search is unavailable until a model is successfully downloaded
+
+## Models
+
+Semantic search uses ONNX-format embedding models loaded via the `ort` crate. The model is configured in `config.toml` under the `[embedding]` section (`model` and `variant` fields).
+
+**Default model in code:** `BAAI/bge-small-en-v1.5` (encoder architecture, variant `onnx/model.onnx`)
+
+Nous auto-detects model architecture by inspecting the ONNX graph inputs for KV-cache tensors:
+
+| Architecture | Examples | Padding | KV-cache |
+|-------------|----------|---------|----------|
+| Encoder | BGE-small, MiniLM | Right | No |
+| Decoder | Qwen3-Embedding | Left | Inputs detected |
+
+KV-cache inference optimization for decoder models is planned but not yet implemented.
+
+## Feature Status
+
+### Working
+
+- MCP server (stdio + HTTP transports)
+- 15 MCP tools (`memory_store`, `memory_recall`, `memory_search`, `memory_context`, `memory_forget`, `memory_update`, `memory_relate`, and more)
+- CLI commands: `serve`, `status`, `export`, `import`, `re-embed`, `re-classify`, `category`, `rotate-key`
+- Hybrid search: FTS5 full-text (BM25) + semantic (ONNX embeddings), fused with Reciprocal Rank Fusion
+- SQLCipher encryption at rest
+- OTLP trace/log/metric ingestion
+- Encoder and decoder model support with architecture auto-detection
+
+### Planned
+
+- KV-cache inference optimization for decoder models
+- OTLP-to-memory correlation (linking traces to stored memories)
+- Category tuning and custom classification
+
 ## Usage with Claude Code
 
 Add to `.mcp.json` at your project root:
