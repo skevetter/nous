@@ -7,16 +7,16 @@ use crate::db::MemoryDb;
 use crate::embed::EmbeddingBackend;
 use crate::types::Category;
 
-const SIMILARITY_THRESHOLD: f32 = 0.3;
-
 pub struct CategoryClassifier {
     cache: HashMap<i64, (Category, Vec<f32>)>,
+    default_threshold: f32,
 }
 
 impl CategoryClassifier {
-    pub fn new(db: &MemoryDb, embedder: &dyn EmbeddingBackend) -> Result<Self> {
+    pub fn new(db: &MemoryDb, embedder: &dyn EmbeddingBackend, threshold: f32) -> Result<Self> {
         let mut classifier = Self {
             cache: HashMap::new(),
+            default_threshold: threshold,
         };
         classifier.load_and_embed(db, embedder)?;
         Ok(classifier)
@@ -34,7 +34,7 @@ impl CategoryClassifier {
             .filter(|(cat, _)| cat.parent_id.is_none())
             .collect();
 
-        let best = best_match(&top_level, memory_embedding)?;
+        let best = self.best_match(&top_level, memory_embedding)?;
 
         let children: Vec<_> = self
             .cache
@@ -46,7 +46,7 @@ impl CategoryClassifier {
             return Some(best);
         }
 
-        match best_match(&children, memory_embedding) {
+        match self.best_match(&children, memory_embedding) {
             Some(child_id) => Some(child_id),
             None => Some(best),
         }
@@ -56,10 +56,26 @@ impl CategoryClassifier {
         &self.cache
     }
 
+    fn best_match(&self, candidates: &[&(Category, Vec<f32>)], query: &[f32]) -> Option<i64> {
+        let mut best_id = None;
+        let mut best_score = self.default_threshold;
+
+        for (cat, emb) in candidates {
+            let threshold = cat.threshold.unwrap_or(self.default_threshold);
+            let score = cosine_similarity(emb, query);
+            if score > best_score && score > threshold {
+                best_score = score;
+                best_id = Some(cat.id);
+            }
+        }
+
+        best_id
+    }
+
     fn load_and_embed(&mut self, db: &MemoryDb, embedder: &dyn EmbeddingBackend) -> Result<()> {
         let conn = db.connection();
         let mut stmt = conn.prepare(
-            "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories",
+            "SELECT id, name, parent_id, source, description, embedding, threshold, created_at FROM categories",
         )?;
 
         let categories: Vec<Category> = stmt
@@ -77,7 +93,8 @@ impl CategoryClassifier {
                     })?,
                     description: row.get(4)?,
                     embedding: row.get(5)?,
-                    created_at: row.get(6)?,
+                    threshold: row.get(6)?,
+                    created_at: row.get(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -118,21 +135,6 @@ impl CategoryClassifier {
 
         Ok(())
     }
-}
-
-fn best_match(candidates: &[&(Category, Vec<f32>)], query: &[f32]) -> Option<i64> {
-    let mut best_id = None;
-    let mut best_score = SIMILARITY_THRESHOLD;
-
-    for (cat, emb) in candidates {
-        let score = cosine_similarity(emb, query);
-        if score > best_score {
-            best_score = score;
-            best_id = Some(cat.id);
-        }
-    }
-
-    best_id
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {

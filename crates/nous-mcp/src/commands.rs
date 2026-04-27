@@ -129,7 +129,7 @@ pub fn build_export_data(db: &MemoryDb) -> Result<ExportData, Box<dyn std::error
     }
 
     let mut cat_stmt = conn.prepare(
-        "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories ORDER BY id",
+        "SELECT id, name, parent_id, source, description, embedding, threshold, created_at FROM categories ORDER BY id",
     )?;
     let categories: Vec<Category> = cat_stmt
         .query_map([], |row| {
@@ -146,7 +146,8 @@ pub fn build_export_data(db: &MemoryDb) -> Result<ExportData, Box<dyn std::error
                 })?,
                 description: row.get(4)?,
                 embedding: row.get(5)?,
-                created_at: row.get(6)?,
+                threshold: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -464,7 +465,11 @@ pub fn run_re_embed(
     }
     conn.execute("DELETE FROM memory_chunks", [])?;
 
-    let _classifier = CategoryClassifier::new(&db, embedding)?;
+    let _classifier = CategoryClassifier::new(
+        &db,
+        embedding,
+        config.classification.confidence_threshold as f32,
+    )?;
 
     let mut stmt =
         conn.prepare("SELECT id, content FROM memories WHERE archived = 0 ORDER BY created_at")?;
@@ -501,7 +506,11 @@ pub fn run_re_classify(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
     let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
-    let classifier = CategoryClassifier::new(&db, embedding)?;
+    let classifier = CategoryClassifier::new(
+        &db,
+        embedding,
+        config.classification.confidence_threshold as f32,
+    )?;
 
     let conn = db.connection();
     let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match since {
@@ -808,7 +817,7 @@ mod tests {
             .unwrap();
         assert!(cat_before.is_none());
 
-        let classifier = CategoryClassifier::new(&db, &embedding).unwrap();
+        let classifier = CategoryClassifier::new(&db, &embedding, 0.3).unwrap();
         let emb = embedding
             .embed_one("Some content about kubernetes infrastructure deployment pipelines")
             .unwrap();

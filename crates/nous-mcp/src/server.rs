@@ -58,7 +58,11 @@ impl NousServer {
             db.reset_embeddings(new_dim)?;
         }
 
-        let classifier = CategoryClassifier::new(&db, embedding.as_ref())?;
+        let classifier = CategoryClassifier::new(
+            &db,
+            embedding.as_ref(),
+            config.classification.confidence_threshold as f32,
+        )?;
         let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
         let (write_channel, write_handle) = WriteChannel::new(db);
         let read_pool = ReadPool::new(db_path, None, 4)?;

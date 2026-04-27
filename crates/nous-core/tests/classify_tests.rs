@@ -15,7 +15,7 @@ fn mock_embedder() -> MockEmbedding {
 fn all_categories_have_embeddings_after_construction() {
     let db = open_test_db();
     let embedder = mock_embedder();
-    let classifier = CategoryClassifier::new(&db, &embedder).unwrap();
+    let classifier = CategoryClassifier::new(&db, &embedder, 0.3).unwrap();
 
     for (cat, emb) in classifier.cache().values() {
         assert!(
@@ -40,7 +40,7 @@ fn all_categories_have_embeddings_after_construction() {
 fn refresh_picks_up_new_category() {
     let db = open_test_db();
     let embedder = mock_embedder();
-    let mut classifier = CategoryClassifier::new(&db, &embedder).unwrap();
+    let mut classifier = CategoryClassifier::new(&db, &embedder, 0.3).unwrap();
 
     let initial_count = classifier.cache().len();
     db.category_add(
@@ -69,7 +69,7 @@ fn refresh_picks_up_new_category() {
 fn classify_returns_some_for_known_category() {
     let db = open_test_db();
     let embedder = mock_embedder();
-    let classifier = CategoryClassifier::new(&db, &embedder).unwrap();
+    let classifier = CategoryClassifier::new(&db, &embedder, 0.3).unwrap();
 
     let emb = embedder.embed_one("infrastructure networking").unwrap();
     let result = classifier.classify(&emb);
@@ -83,7 +83,7 @@ fn classify_returns_some_for_known_category() {
 fn classify_returns_none_for_zero_vector() {
     let db = open_test_db();
     let embedder = mock_embedder();
-    let classifier = CategoryClassifier::new(&db, &embedder).unwrap();
+    let classifier = CategoryClassifier::new(&db, &embedder, 0.3).unwrap();
 
     let zero = vec![0.0f32; 64];
     let result = classifier.classify(&zero);
@@ -213,4 +213,100 @@ fn category_tree_nesting_correct() {
     for child in &infra.children {
         assert_eq!(child.category.parent_id, Some(infra.category.id));
     }
+}
+
+#[test]
+fn high_threshold_rejects_weak_matches() {
+    let db = open_test_db();
+    let embedder = mock_embedder();
+    let classifier = CategoryClassifier::new(&db, &embedder, 0.99).unwrap();
+
+    let emb = embedder.embed_one("infrastructure networking").unwrap();
+    let result = classifier.classify(&emb);
+    assert!(
+        result.is_none(),
+        "very high global threshold should reject weak matches"
+    );
+}
+
+#[test]
+fn zero_threshold_accepts_any_nonzero_match() {
+    let db = open_test_db();
+    let embedder = mock_embedder();
+    let classifier = CategoryClassifier::new(&db, &embedder, 0.0).unwrap();
+
+    let emb = embedder.embed_one("infrastructure networking").unwrap();
+    let result = classifier.classify(&emb);
+    assert!(
+        result.is_some(),
+        "zero threshold should accept any nonzero similarity"
+    );
+}
+
+#[test]
+fn per_category_threshold_overrides_global() {
+    let db = open_test_db();
+    let embedder = mock_embedder();
+
+    let without_override = {
+        let c = CategoryClassifier::new(&db, &embedder, 0.0).unwrap();
+        let emb = embedder.embed_one("infrastructure networking").unwrap();
+        c.classify(&emb)
+    };
+    assert!(
+        without_override.is_some(),
+        "should match without per-category override"
+    );
+
+    db.connection()
+        .execute(
+            "UPDATE categories SET threshold = 2.0 WHERE name = 'infrastructure'",
+            [],
+        )
+        .unwrap();
+    db.connection()
+        .execute(
+            "UPDATE categories SET threshold = 2.0 WHERE parent_id = (SELECT id FROM categories WHERE name = 'infrastructure')",
+            [],
+        )
+        .unwrap();
+
+    let with_override = {
+        let c = CategoryClassifier::new(&db, &embedder, 0.0).unwrap();
+        let emb = embedder.embed_one("infrastructure networking").unwrap();
+        c.classify(&emb)
+    };
+
+    match with_override {
+        None => {} // rejected entirely — correct
+        Some(id) => {
+            assert_ne!(
+                id,
+                without_override.unwrap(),
+                "per-category threshold=2.0 should prevent infrastructure from being the best match"
+            );
+        }
+    }
+}
+
+#[test]
+fn per_category_threshold_none_uses_global() {
+    let db = open_test_db();
+    let embedder = mock_embedder();
+    let low_classifier = CategoryClassifier::new(&db, &embedder, 0.0).unwrap();
+    let high_classifier = CategoryClassifier::new(&db, &embedder, 0.99).unwrap();
+
+    let emb = embedder.embed_one("infrastructure networking").unwrap();
+
+    let low_result = low_classifier.classify(&emb);
+    let high_result = high_classifier.classify(&emb);
+
+    assert!(
+        low_result.is_some(),
+        "low global threshold should match when no per-category override"
+    );
+    assert!(
+        high_result.is_none(),
+        "high global threshold should reject when no per-category override"
+    );
 }
