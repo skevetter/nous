@@ -7,7 +7,7 @@
 
 ## 1. Overview & Motivation
 
-Nous tracks agent metadata in freeform TEXT fields (`agent_id`, `agent_model`) scattered across three tables: `memories` (`crates/nous-core/src/db.rs:49-50`), `room_participants` (`db.rs:150`), and `room_messages` (`db.rs:159`). These fields have no validation, no foreign key enforcement, no registry. Agent lineage (which agent spawned which) is untracked. Performance metrics (memory counts, session durations, error rates) are unavailable. Debugging agent behavior requires manual log correlation.
+Nous tracks agent metadata in freeform TEXT fields (`agent_id`, `agent_model`) scattered across three tables: `memories` (`crates/nous-core/src/db.rs:49-50`), `room_participants` (`db.rs:150`), and `room_messages` (`db.rs:160`). These fields have no validation, no foreign key enforcement, no registry. Agent lineage (which agent spawned which) is untracked. Performance metrics (memory counts, session durations, error rates) are unavailable. Debugging agent behavior requires manual log correlation.
 
 This design introduces a proper agent registry with lifecycle tracking, spawn lineage, and performance metrics. The registry integrates with the existing SQLite schema (14 tables, UUIDv7 IDs, WriteChannel batching, ReadPool queries) and provides both MCP tools and CLI commands for agent management.
 
@@ -93,9 +93,9 @@ No semantic search use case. Agents are retrieved by exact ID, name prefix, work
 
 ## 3. Schema DDL
 
-Copy-pasteable SQL for appending to the `MIGRATIONS` array at `crates/nous-core/src/db.rs:11-233` (currently 38 statements, will become 47).
+Copy-pasteable SQL for appending to the `MIGRATIONS` array at `crates/nous-core/src/db.rs:11-233` (currently 44 statements, will become 53).
 
-**Append position:** After index 37 (line 233).
+**Append position:** After index 43 (line 233).
 
 ```sql
 -- agents table
@@ -310,7 +310,7 @@ async fn write_worker(mut rx: mpsc::Receiver<WriteOp>, db: MemoryDb, batch_count
 }
 ```
 
-**MemoryDb methods** (add to `crates/nous-core/src/db.rs`):
+**MemoryDb methods** (add to `crates/nous-core/src/db.rs`, in the `impl MemoryDb` block after existing write methods (after line 650)):
 
 ```rust
 impl MemoryDb {
@@ -1321,10 +1321,10 @@ This structure is ready for future use but omitted from MVP to avoid unused code
 
 ## 9. Migration Strategy
 
-The `MIGRATIONS` array at `crates/nous-core/src/db.rs:11-233` currently contains 38 SQL statements. Append the 9 new statements from Section 3 to this array.
+The `MIGRATIONS` array at `crates/nous-core/src/db.rs:11-233` currently contains 44 SQL statements. Append the 9 new statements from Section 3 to this array.
 
-**Current migration count:** 38  
-**New migration count:** 47  
+**Current migration count:** 44  
+**New migration count:** 53  
 **Insertion point:** After line 233 (after the last existing index creation)
 
 **Order matters:** The new statements must come after the existing schema because:
@@ -1338,8 +1338,8 @@ The `MIGRATIONS` array at `crates/nous-core/src/db.rs:11-233` currently contains
 
 | Scenario | Behavior |
 |----------|----------|
-| Old Nous binary + new database (47 migrations) | Works. `CREATE TABLE IF NOT EXISTS` guards prevent errors. Agent tables are ignored. |
-| New Nous binary + old database (38 migrations) | Works. On first open, runs migrations 39-47 to add agent tables. |
+| Old Nous binary + new database (53 migrations) | Works. `CREATE TABLE IF NOT EXISTS` guards prevent errors. Agent tables are ignored. |
+| New Nous binary + old database (44 migrations) | Works. On first open, runs migrations 45-53 to add agent tables. |
 | Existing `agent_id` fields in `memories`, `room_participants`, `room_messages` | Remain freeform TEXT. No FK constraint added. Optional JOIN capability to `agents` table. |
 
 **No breaking changes:** Existing queries and code continue to work. Agent registry is additive.
@@ -1367,8 +1367,8 @@ This backfill is optional. The registry is designed to work alongside freeform a
 **Testing:**
 
 Unit tests should verify:
-1. Fresh database opens successfully with all 47 migrations applied
-2. Existing database (38 migrations) upgrades to 47 migrations without errors
+1. Fresh database opens successfully with all 53 migrations applied
+2. Existing database (44 migrations) upgrades to 53 migrations without errors
 3. All indexes are created
 4. Agent lineage recursive CTE returns correct parent chain
 5. CASCADE deletes work (deleting an agent removes its sessions and metrics)
@@ -1527,3 +1527,5 @@ Trigger on `agents.status` UPDATE to log transitions.
 | **Phase 3** | Auto-discovery, dashboard, agent-to-agent messaging, capabilities registry | 5-8 days |
 
 **Total estimated LOE:** 10-16 days (includes testing, documentation, PR review)
+
+**Assumption:** Developer familiar with Rust, rusqlite, and the existing WriteChannel/ReadPool patterns.
