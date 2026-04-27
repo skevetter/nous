@@ -5,10 +5,12 @@ use nous_core::chunk::Chunker;
 use nous_core::classify::CategoryClassifier;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
+use nous_core::scheduler::Scheduler;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use tokio::sync::Notify;
 
 use crate::config::Config;
 use crate::tools::*;
@@ -22,6 +24,8 @@ pub struct NousServer {
     pub chunker: Chunker,
     pub config: Config,
     pub db_path: String,
+    pub scheduler_notify: Arc<Notify>,
+    _scheduler_handle: Option<tokio::task::JoinHandle<()>>,
     _tool_router: ToolRouter<Self>,
 }
 
@@ -68,6 +72,17 @@ impl NousServer {
         let read_pool = ReadPool::new(db_path, None, 4)?;
         let embedding = Arc::from(embedding);
 
+        let (scheduler_notify, scheduler_handle) = if config.schedule.enabled {
+            let (notify, handle) = Scheduler::spawn(
+                write_channel.clone(),
+                read_pool.clone(),
+                config.schedule.clone(),
+            );
+            (notify, Some(handle))
+        } else {
+            (Arc::new(Notify::new()), None)
+        };
+
         Ok(Self {
             write_channel,
             _write_handle: write_handle,
@@ -77,6 +92,8 @@ impl NousServer {
             chunker,
             config,
             db_path: db_path.to_owned(),
+            scheduler_notify,
+            _scheduler_handle: scheduler_handle,
             _tool_router: Self::tool_router(),
         })
     }
@@ -358,6 +375,62 @@ impl NousServer {
     )]
     async fn room_join(&self, params: Parameters<RoomJoinParams>) -> CallToolResult {
         handle_room_join(params.0, &self.write_channel, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_create",
+        description = "Register a new cron schedule. Validates cron_expr and returns the schedule ID."
+    )]
+    async fn schedule_create(&self, params: Parameters<ScheduleCreateParams>) -> CallToolResult {
+        handle_schedule_create(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
+
+    #[tool(
+        name = "schedule_list",
+        description = "List schedules ordered by next fire time. Filter by enabled status or action_type."
+    )]
+    async fn schedule_list(&self, params: Parameters<ScheduleListParams>) -> CallToolResult {
+        handle_schedule_list(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_get",
+        description = "Get full schedule detail including last 10 runs."
+    )]
+    async fn schedule_get(&self, params: Parameters<ScheduleGetParams>) -> CallToolResult {
+        handle_schedule_get(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_update",
+        description = "Modify a schedule. Recomputes next_run_at if cron_expr changes."
+    )]
+    async fn schedule_update(&self, params: Parameters<ScheduleUpdateParams>) -> CallToolResult {
+        handle_schedule_update(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
+
+    #[tool(
+        name = "schedule_delete",
+        description = "Remove a schedule and all its run history."
+    )]
+    async fn schedule_delete(&self, params: Parameters<ScheduleDeleteParams>) -> CallToolResult {
+        handle_schedule_delete(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
+
+    #[tool(
+        name = "schedule_pause",
+        description = "Pause a schedule (set enabled=false). Optionally auto-resume after duration_secs."
+    )]
+    async fn schedule_pause(&self, params: Parameters<SchedulePauseParams>) -> CallToolResult {
+        handle_schedule_pause(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
+
+    #[tool(
+        name = "schedule_resume",
+        description = "Resume a paused schedule and recompute next_run_at."
+    )]
+    async fn schedule_resume(&self, params: Parameters<ScheduleResumeParams>) -> CallToolResult {
+        handle_schedule_resume(params.0, &self.write_channel, &self.scheduler_notify).await
     }
 }
 

@@ -643,6 +643,7 @@ async fn write_worker(
     }
 }
 
+#[derive(Clone)]
 pub struct ReadPool {
     connections: Arc<Mutex<Vec<Connection>>>,
     semaphore: Arc<Semaphore>,

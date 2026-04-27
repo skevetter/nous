@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use nous_core::scheduler::ScheduleConfig;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -27,6 +28,7 @@ pub struct Config {
     pub encryption: EncryptionConfig,
     pub rooms: RoomsConfig,
     pub daemon: DaemonConfig,
+    pub schedule: ScheduleConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -177,6 +179,13 @@ log_file = "~/.cache/nous/daemon.log"
 mcp_transport = "stdio"
 mcp_port = 8377
 shutdown_timeout_secs = 30
+
+[schedule]
+enabled = true
+allow_shell = false
+allow_http = true
+max_concurrent = 4
+default_timeout_secs = 300
 "#;
 
 fn default_config_path() -> std::result::Result<PathBuf, ConfigError> {
@@ -242,6 +251,12 @@ impl Config {
         {
             cfg.daemon.socket_path = val;
         }
+        if let Ok(val) = std::env::var("NOUS_SCHEDULE_ENABLED") {
+            cfg.schedule.enabled = val != "0" && val.to_lowercase() != "false";
+        }
+        if let Ok(val) = std::env::var("NOUS_SCHEDULE_ALLOW_SHELL") {
+            cfg.schedule.allow_shell = val == "1" || val.to_lowercase() == "true";
+        }
     }
 }
 
@@ -292,6 +307,13 @@ log_file = "~/.cache/nous/daemon.log"
 mcp_transport = "stdio"
 mcp_port = 8377
 shutdown_timeout_secs = 30
+
+[schedule]
+enabled = true
+allow_shell = false
+allow_http = true
+max_concurrent = 4
+default_timeout_secs = 300
 "#;
 
     #[test]
