@@ -119,10 +119,33 @@ mod tests {
     use crate::config::DaemonConfig;
     use crate::daemon::Daemon;
     use crate::daemon_api::daemon_router;
+    use crate::server::NousServer;
+    use nous_core::embed::MockEmbedding;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nous-client-test-{}-{}", name, std::process::id()))
+    }
+
+    fn test_db_path() -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!(
+            "/tmp/nous-client-test-{}-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            seq,
+        )
+    }
+
+    fn test_server(db_path: &str) -> std::sync::Arc<NousServer> {
+        let cfg = crate::config::Config::default();
+        let embedding = Box::new(MockEmbedding::new(384));
+        std::sync::Arc::new(NousServer::new(cfg, embedding, db_path).unwrap())
     }
 
     fn test_config(dir: &std::path::Path) -> DaemonConfig {
@@ -140,11 +163,13 @@ mod tests {
     async fn status_returns_pid_and_version() {
         let dir = temp_dir("status");
         let _ = fs::remove_dir_all(&dir);
+        let db_path = test_db_path();
         let cfg = test_config(&dir);
         let socket_path = cfg.socket_path.clone();
 
         let daemon = Daemon::new(&cfg).unwrap();
-        let router = daemon_router(daemon.shutdown_sender());
+        let server = test_server(&db_path);
+        let router = daemon_router(daemon.shutdown_sender(), server);
         let handle = tokio::spawn(daemon.run(router));
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -158,17 +183,20 @@ mod tests {
         client.shutdown().await.unwrap();
         let _ = handle.await;
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&db_path);
     }
 
     #[tokio::test]
     async fn shutdown_stops_daemon() {
         let dir = temp_dir("shutdown");
         let _ = fs::remove_dir_all(&dir);
+        let db_path = test_db_path();
         let cfg = test_config(&dir);
         let socket_path = cfg.socket_path.clone();
 
         let daemon = Daemon::new(&cfg).unwrap();
-        let router = daemon_router(daemon.shutdown_sender());
+        let server = test_server(&db_path);
+        let router = daemon_router(daemon.shutdown_sender(), server);
         let handle = tokio::spawn(daemon.run(router));
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -181,6 +209,7 @@ mod tests {
         assert!(result.is_ok());
 
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&db_path);
     }
 
     #[tokio::test]
@@ -194,14 +223,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_endpoint_returns_server_error() {
-        let dir = temp_dir("stub");
+    async fn rooms_endpoint_rejects_empty_body() {
+        let dir = temp_dir("rooms-empty");
         let _ = fs::remove_dir_all(&dir);
+        let db_path = test_db_path();
         let cfg = test_config(&dir);
         let socket_path = cfg.socket_path.clone();
 
         let daemon = Daemon::new(&cfg).unwrap();
-        let router = daemon_router(daemon.shutdown_sender());
+        let server = test_server(&db_path);
+        let router = daemon_router(daemon.shutdown_sender(), server);
         let handle = tokio::spawn(daemon.run(router));
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -217,12 +248,13 @@ mod tests {
         let err = client.send::<serde_json::Value>(req).await.unwrap_err();
 
         assert!(
-            matches!(err, ClientError::ServerError(501, _)),
-            "expected 501, got: {err}"
+            matches!(err, ClientError::ServerError(status, _) if status >= 400),
+            "expected client/server error, got: {err}"
         );
 
         client.shutdown().await.unwrap();
         let _ = handle.await;
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&db_path);
     }
 }
