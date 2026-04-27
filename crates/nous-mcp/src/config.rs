@@ -26,6 +26,7 @@ pub struct Config {
     pub classification: ClassificationConfig,
     pub encryption: EncryptionConfig,
     pub rooms: RoomsConfig,
+    pub daemon: DaemonConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -113,6 +114,30 @@ pub struct RoomsConfig {
     pub max_messages_per_room: usize,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    pub socket_path: String,
+    pub pid_file: String,
+    pub log_file: String,
+    pub mcp_transport: String,
+    pub mcp_port: u16,
+    pub shutdown_timeout_secs: u64,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            socket_path: "~/.cache/nous/daemon.sock".into(),
+            pid_file: "~/.cache/nous/daemon.pid".into(),
+            log_file: "~/.cache/nous/daemon.log".into(),
+            mcp_transport: "stdio".into(),
+            mcp_port: 8377,
+            shutdown_timeout_secs: 30,
+        }
+    }
+}
+
 impl Default for RoomsConfig {
     fn default() -> Self {
         Self {
@@ -144,6 +169,14 @@ db_key_file = "~/.config/nous/db.key"
 [rooms]
 max_rooms = 1000
 max_messages_per_room = 10000
+
+[daemon]
+socket_path = "~/.cache/nous/daemon.sock"
+pid_file = "~/.cache/nous/daemon.pid"
+log_file = "~/.cache/nous/daemon.log"
+mcp_transport = "stdio"
+mcp_port = 8377
+shutdown_timeout_secs = 30
 "#;
 
 fn default_config_path() -> std::result::Result<PathBuf, ConfigError> {
@@ -204,6 +237,11 @@ impl Config {
         {
             cfg.rooms.max_messages_per_room = n;
         }
+        if let Ok(val) = std::env::var("NOUS_DAEMON_SOCKET")
+            && !val.is_empty()
+        {
+            cfg.daemon.socket_path = val;
+        }
     }
 }
 
@@ -246,6 +284,14 @@ db_key_file = "~/.config/nous/db.key"
 [rooms]
 max_rooms = 1000
 max_messages_per_room = 10000
+
+[daemon]
+socket_path = "~/.cache/nous/daemon.sock"
+pid_file = "~/.cache/nous/daemon.pid"
+log_file = "~/.cache/nous/daemon.log"
+mcp_transport = "stdio"
+mcp_port = 8377
+shutdown_timeout_secs = 30
 "#;
 
     #[test]
