@@ -2177,7 +2177,7 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
-    fn test_otlp_db() -> (Mutex<OtlpDb>, String) {
+    fn test_otlp_db_path() -> String {
         let path = format!(
             "/tmp/nous-test-otlp-{}-{}.db",
             std::process::id(),
@@ -2186,17 +2186,26 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
         );
-        let db = OtlpDb::open(&path, None).unwrap();
-        (Mutex::new(db), path)
+        OtlpDb::open(&path, None).unwrap();
+        path
+    }
+
+    fn seed_otlp(
+        path: &str,
+        spans: &[nous_otlp::decode::Span],
+        logs: &[nous_otlp::decode::LogEvent],
+    ) {
+        let db = OtlpDb::open(path, None).unwrap();
+        db.store_spans(spans).unwrap();
+        db.store_logs(logs).unwrap();
     }
 
     #[tokio::test]
     async fn otlp_trace_context_returns_correlated_data() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
-        let (otlp_db, otlp_path) = test_otlp_db();
+        let otlp_path = test_otlp_db_path();
 
-        // Store a memory with trace_id
         let store_result = handle_store(
             MemoryStoreParams {
                 title: "Traced memory".into(),
@@ -2222,10 +2231,9 @@ mod tests {
         .await;
         assert!(is_success(&store_result));
 
-        // Store spans and logs in OTLP DB
-        {
-            let db = otlp_db.lock().unwrap();
-            db.store_spans(&[nous_otlp::decode::Span {
+        seed_otlp(
+            &otlp_path,
+            &[nous_otlp::decode::Span {
                 trace_id: "trace-abc".into(),
                 span_id: "span-001".into(),
                 parent_span_id: None,
@@ -2238,9 +2246,8 @@ mod tests {
                 resource_attrs: "{}".into(),
                 span_attrs: "{}".into(),
                 events_json: "[]".into(),
-            }])
-            .unwrap();
-            db.store_logs(&[nous_otlp::decode::LogEvent {
+            }],
+            &[nous_otlp::decode::LogEvent {
                 timestamp: 1500,
                 severity: "INFO".into(),
                 body: "Request processed".into(),
@@ -2250,9 +2257,8 @@ mod tests {
                 session_id: Some("sess-001".into()),
                 trace_id: Some("trace-abc".into()),
                 span_id: None,
-            }])
-            .unwrap();
-        }
+            }],
+        );
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -2261,7 +2267,7 @@ mod tests {
                 trace_id: "trace-abc".into(),
                 session_id: Some("sess-001".into()),
             },
-            &Some(otlp_db),
+            &otlp_path,
             &server.read_pool,
         )
         .await;
@@ -2282,11 +2288,11 @@ mod tests {
     async fn otlp_trace_context_without_session_id_returns_empty_logs() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
-        let (otlp_db, otlp_path) = test_otlp_db();
+        let otlp_path = test_otlp_db_path();
 
-        {
-            let db = otlp_db.lock().unwrap();
-            db.store_spans(&[nous_otlp::decode::Span {
+        seed_otlp(
+            &otlp_path,
+            &[nous_otlp::decode::Span {
                 trace_id: "trace-xyz".into(),
                 span_id: "span-002".into(),
                 parent_span_id: None,
@@ -2299,16 +2305,16 @@ mod tests {
                 resource_attrs: "{}".into(),
                 span_attrs: "{}".into(),
                 events_json: "[]".into(),
-            }])
-            .unwrap();
-        }
+            }],
+            &[],
+        );
 
         let result = handle_otlp_trace_context(
             OtlpTraceContextParams {
                 trace_id: "trace-xyz".into(),
                 session_id: None,
             },
-            &Some(otlp_db),
+            &otlp_path,
             &server.read_pool,
         )
         .await;
@@ -2332,7 +2338,7 @@ mod tests {
                 trace_id: "trace-abc".into(),
                 session_id: None,
             },
-            &None,
+            "",
             &server.read_pool,
         )
         .await;
@@ -2348,7 +2354,7 @@ mod tests {
     async fn otlp_memory_context_returns_correlated_data() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
-        let (otlp_db, otlp_path) = test_otlp_db();
+        let otlp_path = test_otlp_db_path();
 
         let store_result = handle_store(
             MemoryStoreParams {
@@ -2379,9 +2385,9 @@ mod tests {
             .unwrap()
             .to_string();
 
-        {
-            let db = otlp_db.lock().unwrap();
-            db.store_spans(&[nous_otlp::decode::Span {
+        seed_otlp(
+            &otlp_path,
+            &[nous_otlp::decode::Span {
                 trace_id: "trace-mem".into(),
                 span_id: "span-mem".into(),
                 parent_span_id: None,
@@ -2394,9 +2400,8 @@ mod tests {
                 resource_attrs: "{}".into(),
                 span_attrs: "{}".into(),
                 events_json: "[]".into(),
-            }])
-            .unwrap();
-            db.store_logs(&[nous_otlp::decode::LogEvent {
+            }],
+            &[nous_otlp::decode::LogEvent {
                 timestamp: 5500,
                 severity: "DEBUG".into(),
                 body: "Storing memory".into(),
@@ -2406,9 +2411,8 @@ mod tests {
                 session_id: Some("sess-mem".into()),
                 trace_id: Some("trace-mem".into()),
                 span_id: None,
-            }])
-            .unwrap();
-        }
+            }],
+        );
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -2416,7 +2420,7 @@ mod tests {
             OtlpMemoryContextParams {
                 memory_id: memory_id.clone(),
             },
-            &Some(otlp_db),
+            &otlp_path,
             &server.read_pool,
         )
         .await;
@@ -2438,7 +2442,7 @@ mod tests {
     async fn otlp_memory_context_no_correlation_ids_returns_error() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
-        let (otlp_db, otlp_path) = test_otlp_db();
+        let otlp_path = test_otlp_db_path();
 
         let store_result = handle_store(
             MemoryStoreParams {
@@ -2472,7 +2476,7 @@ mod tests {
 
         let result = handle_otlp_memory_context(
             OtlpMemoryContextParams { memory_id },
-            &Some(otlp_db),
+            &otlp_path,
             &server.read_pool,
         )
         .await;
@@ -2491,14 +2495,14 @@ mod tests {
     #[tokio::test]
     async fn otlp_memory_context_no_otlp_db_returns_error() {
         let db_path = test_db_path();
-        let _server = test_server(&db_path);
+        let server = test_server(&db_path);
 
         let result = handle_otlp_memory_context(
             OtlpMemoryContextParams {
                 memory_id: "some-id".into(),
             },
-            &None,
-            &_server.read_pool,
+            "",
+            &server.read_pool,
         )
         .await;
 
@@ -2513,13 +2517,13 @@ mod tests {
     async fn otlp_memory_context_nonexistent_memory_returns_error() {
         let db_path = test_db_path();
         let server = test_server(&db_path);
-        let (otlp_db, otlp_path) = test_otlp_db();
+        let otlp_path = test_otlp_db_path();
 
         let result = handle_otlp_memory_context(
             OtlpMemoryContextParams {
                 memory_id: "nonexistent-id".into(),
             },
-            &Some(otlp_db),
+            &otlp_path,
             &server.read_pool,
         )
         .await;
