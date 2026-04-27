@@ -16,7 +16,10 @@ fn fresh_db_has_room_schema() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(count, 4, "expected 4 room-related objects (3 tables + 1 FTS), got {count}");
+    assert_eq!(
+        count, 4,
+        "expected 4 room-related objects (3 tables + 1 FTS), got {count}"
+    );
 }
 
 #[test]
