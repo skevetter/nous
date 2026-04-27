@@ -1469,7 +1469,8 @@ mod tests {
     #[tokio::test]
     async fn server_constructs_with_mock_embedding() {
         let db_path = test_db_path();
-        let cfg = config::Config::default();
+        let mut cfg = config::Config::default();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
         let server = NousServer::new(cfg, embedding, &db_path).expect("server should construct");
 
@@ -1486,7 +1487,8 @@ mod tests {
         let (server_transport, client_transport) = tokio::io::duplex(4096);
 
         let db_path = test_db_path();
-        let cfg = config::Config::default();
+        let mut cfg = config::Config::default();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
         let server = NousServer::new(cfg, embedding, &db_path).unwrap();
 
