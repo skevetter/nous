@@ -167,6 +167,46 @@ fn open_connection_with_encryption() {
 }
 
 #[test]
+fn open_connection_migrates_plaintext_to_encrypted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("plaintext.db");
+    let db_str = db_path.to_str().unwrap();
+    let key = "migration-test-key";
+
+    {
+        let conn = sqlite::open_connection(db_str, None).unwrap();
+        conn.execute("CREATE TABLE data (id INTEGER PRIMARY KEY, val TEXT)", [])
+            .unwrap();
+        conn.execute("INSERT INTO data (val) VALUES ('preserved')", [])
+            .unwrap();
+    }
+
+    let header = std::fs::read(db_path.as_path()).unwrap();
+    assert_eq!(&header[..16], b"SQLite format 3\0");
+
+    {
+        let conn = sqlite::open_connection(db_str, Some(key)).unwrap();
+        let val: String = conn
+            .query_row("SELECT val FROM data WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(val, "preserved");
+    }
+
+    let header = std::fs::read(db_path.as_path()).unwrap();
+    assert_ne!(
+        &header[..16],
+        b"SQLite format 3\0",
+        "file should be encrypted after migration"
+    );
+
+    let backup = tmp.path().join("plaintext.db.pre-encryption.bak");
+    assert!(backup.exists(), "backup should exist after migration");
+
+    let result = sqlite::open_connection(db_str, Some("wrong-key"));
+    assert!(result.is_err(), "wrong key should fail on migrated DB");
+}
+
+#[test]
 fn open_connection_wrong_key_returns_encryption_error() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("encrypted2.db");

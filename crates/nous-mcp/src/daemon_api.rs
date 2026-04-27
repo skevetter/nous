@@ -369,8 +369,9 @@ async fn handle_export(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
     let db_path = state.server.db_path.clone();
     let dim = state.server.embedding.dimensions();
+    let db_key = state.server.db_key.clone();
     match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, dim)?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), dim)?;
         build_export_data(&db).map_err(|e| nous_shared::NousError::Internal(e.to_string()))
     })
     .await
@@ -393,10 +394,11 @@ async fn handle_import(
     let db_path = state.server.db_path.clone();
     let embedding = state.server.embedding.clone();
     let chunker = state.server.chunker.clone();
+    let db_key = state.server.db_key.clone();
     let memory_count = data.memories.len();
 
     match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, embedding.dimensions())?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), embedding.dimensions())?;
         import_data(&db, &data, embedding.as_ref(), &chunker)
             .map_err(|e| nous_shared::NousError::Internal(e.to_string()))
     })

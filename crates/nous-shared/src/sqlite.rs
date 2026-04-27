@@ -13,7 +13,60 @@ const WAL_PRAGMAS: &[&str] = &[
     "PRAGMA foreign_keys = ON",
 ];
 
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+fn is_plaintext_sqlite(path: &str) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    use std::io::Read;
+    let mut header = [0u8; 16];
+    matches!(file.read_exact(&mut header), Ok(()) if header == *SQLITE_HEADER)
+}
+
+fn migrate_plaintext_to_encrypted(path: &str, key: &str) -> Result<()> {
+    let backup_path = format!("{path}.pre-encryption.bak");
+    std::fs::copy(path, &backup_path)?;
+    eprintln!(
+        "warning: plaintext database detected at {path}, migrating to encrypted format (backup at {backup_path})"
+    );
+
+    let conn = Connection::open(path)?;
+    for pragma in WAL_PRAGMAS {
+        conn.execute_batch(pragma)?;
+    }
+
+    conn.execute_batch("PRAGMA writable_schema = ON")?;
+    conn.execute_batch(
+        "DELETE FROM sqlite_master WHERE type='table' AND name LIKE 'memory_embeddings%'",
+    )?;
+    conn.execute_batch("PRAGMA writable_schema = OFF")?;
+    conn.execute_batch("VACUUM")?;
+
+    let encrypted_path = format!("{path}.encrypted");
+    conn.execute_batch(&format!(
+        "ATTACH DATABASE '{}' AS encrypted KEY '{}'",
+        encrypted_path,
+        key.replace('\'', "''")
+    ))?;
+    conn.execute_batch("SELECT sqlcipher_export('encrypted')")?;
+    conn.execute_batch("DETACH DATABASE encrypted")?;
+    drop(conn);
+
+    std::fs::rename(&encrypted_path, path)?;
+    eprintln!("info: database successfully migrated to encrypted format");
+    Ok(())
+}
+
 pub fn open_connection(path: &str, key: Option<&str>) -> Result<Connection> {
+    if path != ":memory:"
+        && let Some(k) = key
+        && Path::new(path).exists()
+        && is_plaintext_sqlite(path)
+    {
+        migrate_plaintext_to_encrypted(path, k)?;
+    }
+
     let conn = if path == ":memory:" {
         Connection::open_in_memory()?
     } else {
