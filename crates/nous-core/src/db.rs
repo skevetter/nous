@@ -195,7 +195,48 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_messages_room_created ON room_messages(room_id, created_at)",
     // Index: messages by sender
     "CREATE INDEX IF NOT EXISTS idx_messages_sender ON room_messages(sender_id)",
+    // schedules
+    "CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT NOT NULL PRIMARY KEY,
+        name TEXT NOT NULL,
+        cron_expr TEXT NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'UTC',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        action_type TEXT NOT NULL CHECK (action_type IN ('mcp_tool', 'shell', 'http')),
+        action_payload TEXT NOT NULL,
+        desired_outcome TEXT DEFAULT NULL,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        timeout_secs INTEGER,
+        max_output_bytes INTEGER NOT NULL DEFAULT 65536,
+        max_runs INTEGER NOT NULL DEFAULT 100,
+        next_run_at INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_schedules_enabled_next ON schedules(enabled, next_run_at)",
+    "CREATE INDEX IF NOT EXISTS idx_schedules_name ON schedules(name)",
+    // schedule_runs
+    "CREATE TABLE IF NOT EXISTS schedule_runs (
+        id TEXT NOT NULL PRIMARY KEY,
+        schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        status TEXT NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running', 'completed', 'failed', 'timeout', 'skipped')),
+        exit_code INTEGER,
+        output TEXT,
+        error TEXT,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        duration_ms INTEGER
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_runs_schedule_started ON schedule_runs(schedule_id, started_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_status ON schedule_runs(status)",
 ];
+
+#[cfg(test)]
+pub(crate) fn test_migrations() -> Vec<&'static str> {
+    MIGRATIONS.to_vec()
+}
 
 pub struct MemoryDb {
     conn: Connection,
