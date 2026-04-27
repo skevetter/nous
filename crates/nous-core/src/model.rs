@@ -112,7 +112,7 @@ impl MemoryDb {
         Ok(id)
     }
 
-    fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<Model> {
+    pub(crate) fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<Model> {
         Ok(Model {
             id: row.get(0)?,
             name: row.get(1)?,

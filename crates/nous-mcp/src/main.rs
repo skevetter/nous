@@ -194,6 +194,60 @@ enum Command {
     Schema,
     Workspaces,
     Tags,
+    Model(ModelCmd),
+    Embedding(EmbeddingCmd),
+}
+
+#[derive(Debug, Parser)]
+struct ModelCmd {
+    #[command(subcommand)]
+    command: ModelSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModelSubcommand {
+    List,
+    Info {
+        id: i64,
+    },
+    Register {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        variant: String,
+        #[arg(long)]
+        dimensions: i64,
+        #[arg(long, default_value_t = 512)]
+        chunk_size: i64,
+        #[arg(long, default_value_t = 64)]
+        chunk_overlap: i64,
+    },
+    Activate {
+        id: i64,
+    },
+    Deactivate {
+        id: i64,
+    },
+    Switch {
+        id: i64,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Parser)]
+struct EmbeddingCmd {
+    #[command(subcommand)]
+    command: EmbeddingSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EmbeddingSubcommand {
+    Inspect,
+    Reset {
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -917,6 +971,48 @@ fn run_command(
         Command::Tags => {
             commands::run_tags(config, format)?;
         }
+        Command::Model(model) => match model.command {
+            ModelSubcommand::List => {
+                commands::run_model_list(config, format)?;
+            }
+            ModelSubcommand::Info { id } => {
+                commands::run_model_info(config, id, format)?;
+            }
+            ModelSubcommand::Register {
+                name,
+                variant,
+                dimensions,
+                chunk_size,
+                chunk_overlap,
+            } => {
+                commands::run_model_register(
+                    config,
+                    &name,
+                    &variant,
+                    dimensions,
+                    chunk_size,
+                    chunk_overlap,
+                    format,
+                )?;
+            }
+            ModelSubcommand::Activate { id } => {
+                commands::run_model_activate(config, id, format)?;
+            }
+            ModelSubcommand::Deactivate { id } => {
+                commands::run_model_deactivate(config, id, format)?;
+            }
+            ModelSubcommand::Switch { id, force } => {
+                commands::run_model_switch(config, id, force, format)?;
+            }
+        },
+        Command::Embedding(emb) => match emb.command {
+            EmbeddingSubcommand::Inspect => {
+                commands::run_embedding_inspect(config, format)?;
+            }
+            EmbeddingSubcommand::Reset { force } => {
+                commands::run_embedding_reset(config, force, format)?;
+            }
+        },
         Command::Daemon(daemon) => match daemon.command {
             DaemonSubcommand::Start { foreground } => {
                 run_daemon_start(config, foreground);
@@ -2783,6 +2879,544 @@ mod tests {
 
         let result = commands::run_context(&cfg, "/nonexistent/workspace", None, &format);
         assert!(result.is_err());
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    // --- Model/Embedding clap parsing tests ---
+
+    #[test]
+    fn model_list() {
+        let cli = Cli::try_parse_from(["nous", "model", "list"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::List,
+            }) => {}
+            _ => panic!("expected Model List"),
+        }
+    }
+
+    #[test]
+    fn model_info() {
+        let cli = Cli::try_parse_from(["nous", "model", "info", "1"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::Info { id },
+            }) => {
+                assert_eq!(id, 1);
+            }
+            _ => panic!("expected Model Info"),
+        }
+    }
+
+    #[test]
+    fn model_info_missing_id_errors() {
+        let result = Cli::try_parse_from(["nous", "model", "info"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_register_all_flags() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "model",
+            "register",
+            "--name",
+            "BAAI/bge-small-en-v1.5",
+            "--variant",
+            "onnx/model.onnx",
+            "--dimensions",
+            "384",
+            "--chunk-size",
+            "256",
+            "--chunk-overlap",
+            "32",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command:
+                    ModelSubcommand::Register {
+                        name,
+                        variant,
+                        dimensions,
+                        chunk_size,
+                        chunk_overlap,
+                    },
+            }) => {
+                assert_eq!(name, "BAAI/bge-small-en-v1.5");
+                assert_eq!(variant, "onnx/model.onnx");
+                assert_eq!(dimensions, 384);
+                assert_eq!(chunk_size, 256);
+                assert_eq!(chunk_overlap, 32);
+            }
+            _ => panic!("expected Model Register"),
+        }
+    }
+
+    #[test]
+    fn model_register_defaults() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "model",
+            "register",
+            "--name",
+            "test-model",
+            "--variant",
+            "v1",
+            "--dimensions",
+            "768",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command:
+                    ModelSubcommand::Register {
+                        chunk_size,
+                        chunk_overlap,
+                        ..
+                    },
+            }) => {
+                assert_eq!(chunk_size, 512);
+                assert_eq!(chunk_overlap, 64);
+            }
+            _ => panic!("expected Model Register"),
+        }
+    }
+
+    #[test]
+    fn model_register_missing_name_errors() {
+        let result = Cli::try_parse_from([
+            "nous",
+            "model",
+            "register",
+            "--variant",
+            "v1",
+            "--dimensions",
+            "384",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_register_missing_variant_errors() {
+        let result = Cli::try_parse_from([
+            "nous",
+            "model",
+            "register",
+            "--name",
+            "m",
+            "--dimensions",
+            "384",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_register_missing_dimensions_errors() {
+        let result = Cli::try_parse_from([
+            "nous",
+            "model",
+            "register",
+            "--name",
+            "m",
+            "--variant",
+            "v1",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_activate() {
+        let cli = Cli::try_parse_from(["nous", "model", "activate", "2"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::Activate { id },
+            }) => {
+                assert_eq!(id, 2);
+            }
+            _ => panic!("expected Model Activate"),
+        }
+    }
+
+    #[test]
+    fn model_activate_missing_id_errors() {
+        let result = Cli::try_parse_from(["nous", "model", "activate"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_deactivate() {
+        let cli = Cli::try_parse_from(["nous", "model", "deactivate", "3"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::Deactivate { id },
+            }) => {
+                assert_eq!(id, 3);
+            }
+            _ => panic!("expected Model Deactivate"),
+        }
+    }
+
+    #[test]
+    fn model_deactivate_missing_id_errors() {
+        let result = Cli::try_parse_from(["nous", "model", "deactivate"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn model_switch_no_force() {
+        let cli = Cli::try_parse_from(["nous", "model", "switch", "5"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::Switch { id, force },
+            }) => {
+                assert_eq!(id, 5);
+                assert!(!force);
+            }
+            _ => panic!("expected Model Switch"),
+        }
+    }
+
+    #[test]
+    fn model_switch_with_force() {
+        let cli = Cli::try_parse_from(["nous", "model", "switch", "5", "--force"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::Switch { id, force },
+            }) => {
+                assert_eq!(id, 5);
+                assert!(force);
+            }
+            _ => panic!("expected Model Switch"),
+        }
+    }
+
+    #[test]
+    fn model_switch_missing_id_errors() {
+        let result = Cli::try_parse_from(["nous", "model", "switch"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn embedding_inspect() {
+        let cli = Cli::try_parse_from(["nous", "embedding", "inspect"]).unwrap();
+        match cli.command {
+            Command::Embedding(EmbeddingCmd {
+                command: EmbeddingSubcommand::Inspect,
+            }) => {}
+            _ => panic!("expected Embedding Inspect"),
+        }
+    }
+
+    #[test]
+    fn embedding_reset_with_force() {
+        let cli = Cli::try_parse_from(["nous", "embedding", "reset", "--force"]).unwrap();
+        match cli.command {
+            Command::Embedding(EmbeddingCmd {
+                command: EmbeddingSubcommand::Reset { force },
+            }) => {
+                assert!(force);
+            }
+            _ => panic!("expected Embedding Reset"),
+        }
+    }
+
+    #[test]
+    fn embedding_reset_without_force() {
+        let cli = Cli::try_parse_from(["nous", "embedding", "reset"]).unwrap();
+        match cli.command {
+            Command::Embedding(EmbeddingCmd {
+                command: EmbeddingSubcommand::Reset { force },
+            }) => {
+                assert!(!force);
+            }
+            _ => panic!("expected Embedding Reset"),
+        }
+    }
+
+    #[test]
+    fn model_list_with_format() {
+        let cli = Cli::try_parse_from(["nous", "--format", "json", "model", "list"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::List,
+            }) => {}
+            _ => panic!("expected Model List"),
+        }
+    }
+
+    #[test]
+    fn embedding_inspect_with_format() {
+        let cli = Cli::try_parse_from(["nous", "--format", "csv", "embedding", "inspect"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Csv));
+        match cli.command {
+            Command::Embedding(EmbeddingCmd {
+                command: EmbeddingSubcommand::Inspect,
+            }) => {}
+            _ => panic!("expected Embedding Inspect"),
+        }
+    }
+
+    // --- Model/Embedding integration tests ---
+
+    #[test]
+    fn integration_model_register_and_list() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(
+            &cfg,
+            "BAAI/bge-small-en-v1.5",
+            "onnx/model.onnx",
+            384,
+            512,
+            64,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_model_list(&cfg, &format).unwrap();
+        commands::run_model_list(&cfg, &OutputFormat::Csv).unwrap();
+        commands::run_model_list(&cfg, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_model_info() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
+
+        commands::run_model_info(&cfg, model_id, &format).unwrap();
+        commands::run_model_info(&cfg, model_id, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_model_info_not_found() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        // Initialize DB
+        let db_key = cfg.resolve_db_key().ok();
+        let _db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+
+        let result = commands::run_model_info(&cfg, 99999, &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 3);
+        } else {
+            panic!("expected NousError::NotFound");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_model_activate_deactivate() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
+
+        commands::run_model_activate(&cfg, model_id, &format).unwrap();
+
+        let model = db.get_model(model_id).unwrap();
+        assert!(model.active);
+
+        commands::run_model_deactivate(&cfg, model_id, &format).unwrap();
+
+        let model = db.get_model(model_id).unwrap();
+        assert!(!model.active);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_model_switch_same_dims() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "model-a", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "model-b", "v1", 384, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let id_a = models.iter().find(|m| m.name == "model-a").unwrap().id;
+        let id_b = models.iter().find(|m| m.name == "model-b").unwrap().id;
+
+        commands::run_model_activate(&cfg, id_a, &format).unwrap();
+        commands::run_model_switch(&cfg, id_b, true, &format).unwrap();
+
+        let model = db.get_model(id_b).unwrap();
+        assert!(model.active);
+        let model_a = db.get_model(id_a).unwrap();
+        assert!(!model_a.active);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_model_switch_diff_dims_force() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "small", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "large", "v1", 768, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let id_small = models.iter().find(|m| m.name == "small").unwrap().id;
+        let id_large = models.iter().find(|m| m.name == "large").unwrap().id;
+
+        commands::run_model_activate(&cfg, id_small, &format).unwrap();
+        commands::run_model_switch(&cfg, id_large, true, &format).unwrap();
+
+        let model = db.get_model(id_large).unwrap();
+        assert!(model.active);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_embedding_inspect() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
+        commands::run_model_activate(&cfg, model_id, &format).unwrap();
+
+        commands::run_embedding_inspect(&cfg, &format).unwrap();
+        commands::run_embedding_inspect(&cfg, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_embedding_reset_requires_force() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        // Initialize DB
+        let db_key = cfg.resolve_db_key().ok();
+        let _db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+
+        let result = commands::run_embedding_reset(&cfg, false, &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_embedding_reset_force() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
+        commands::run_model_activate(&cfg, model_id, &format).unwrap();
+
+        commands::run_embedding_reset(&cfg, true, &format).unwrap();
+        commands::run_embedding_reset(&cfg, true, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_full_model_lifecycle() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_model_register(
+            &cfg,
+            "BAAI/bge-small-en-v1.5",
+            "onnx/model.onnx",
+            384,
+            512,
+            64,
+            &format,
+        )
+        .unwrap();
+        commands::run_model_register(
+            &cfg,
+            "BAAI/bge-base-en-v1.5",
+            "onnx/model.onnx",
+            768,
+            512,
+            64,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let models = db.list_models().unwrap();
+        let id_small = models
+            .iter()
+            .find(|m| m.name == "BAAI/bge-small-en-v1.5")
+            .unwrap()
+            .id;
+        let id_large = models
+            .iter()
+            .find(|m| m.name == "BAAI/bge-base-en-v1.5")
+            .unwrap()
+            .id;
+
+        commands::run_model_activate(&cfg, id_small, &format).unwrap();
+        commands::run_model_list(&cfg, &format).unwrap();
+        commands::run_model_info(&cfg, id_small, &format).unwrap();
+        commands::run_embedding_inspect(&cfg, &format).unwrap();
+
+        commands::run_model_switch(&cfg, id_large, true, &format).unwrap();
+
+        let active = db.active_model().unwrap().unwrap();
+        assert_eq!(active.id, id_large);
+        assert_eq!(active.dimensions, 768);
+
+        commands::run_embedding_inspect(&cfg, &format).unwrap();
+        commands::run_embedding_reset(&cfg, true, &format).unwrap();
 
         let _ = std::fs::remove_file(&cfg.memory.db_path);
     }

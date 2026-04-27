@@ -230,6 +230,64 @@ impl MemoryDb {
         Ok(())
     }
 
+    pub fn get_model(&self, id: i64) -> Result<crate::types::Model> {
+        self.conn
+            .query_row(
+                "SELECT id, name, dimensions, max_tokens, variant, chunk_size, chunk_overlap, active, created_at FROM models WHERE id = ?1",
+                params![id],
+                Self::row_to_model,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    NousError::NotFound(format!("model not found: {id}"))
+                }
+                other => NousError::Sqlite(other),
+            })
+    }
+
+    pub fn embedding_count(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM memory_embeddings", [], |row| {
+                row.get(0)
+            })?)
+    }
+
+    pub fn vec0_dimensions(&self) -> Result<Option<i64>> {
+        let exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memory_embeddings'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(None);
+        }
+        match self.conn.query_row(
+            "SELECT length(embedding) / 4 FROM memory_embeddings LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(dims) => Ok(Some(dims)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                let sql = self.conn.query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_embeddings'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?;
+                if let Some(start) = sql.find("float[") {
+                    let rest = &sql[start + 6..];
+                    if let Some(end) = rest.find(']')
+                        && let Ok(d) = rest[..end].parse::<i64>()
+                    {
+                        return Ok(Some(d));
+                    }
+                }
+                Ok(None)
+            }
+            Err(e) => Err(NousError::Sqlite(e)),
+        }
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
