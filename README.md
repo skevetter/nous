@@ -62,7 +62,7 @@ nous-mcp rotate-key         Rotate SQLCipher encryption key
 
 ## First Run
 
-On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. The default model configured in code is `BAAI/bge-small-en-v1.5` (~30MB). If `config.toml` specifies a different model (e.g., `Qwen3-Embedding-0.6B-ONNX` as shown in the Configuration section), that model is downloaded instead (~600MB for quantized variants).
+On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. The default model is `onnx-community/Qwen3-Embedding-0.6B-ONNX` (variant `model_q4f16.onnx`, ~600MB for quantized variants, decoder architecture). If `config.toml` specifies a different model, that model is downloaded instead.
 
 - **Network required** — the first run must reach `huggingface.co` to fetch the model
 - **Cache location** — models are cached by the `hf-hub` crate at `~/.cache/huggingface/hub` (the standard Hugging Face cache directory); subsequent runs load from cache
@@ -72,7 +72,7 @@ On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. T
 
 Semantic search uses ONNX-format embedding models loaded via the `ort` crate. The model is configured in `config.toml` under the `[embedding]` section (`model` and `variant` fields).
 
-**Default model in code:** `BAAI/bge-small-en-v1.5` (encoder architecture, variant `onnx/model.onnx`)
+**Default model:** `onnx-community/Qwen3-Embedding-0.6B-ONNX` (decoder architecture, variant `model_q4f16.onnx`)
 
 Nous auto-detects model architecture by inspecting the ONNX graph inputs for KV-cache tensors:
 

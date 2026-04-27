@@ -293,6 +293,11 @@ db_key_file = "~/.config/nous/db.key"
         assert!(config_path.exists());
 
         assert_eq!(cfg.memory.db_path, "~/.cache/nous/memory.db");
+        assert_eq!(
+            cfg.embedding.model,
+            "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+        );
+        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
 
         let _ = std::fs::remove_dir_all(&dir);
