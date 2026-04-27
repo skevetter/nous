@@ -290,6 +290,75 @@ impl NousServer {
     ) -> CallToolResult {
         handle_otlp_memory_context(params.0, &self.config.otlp.db_path, &self.read_pool).await
     }
+
+    #[tool(name = "room_create", description = "Create a new conversation room")]
+    async fn room_create(&self, params: Parameters<RoomCreateParams>) -> CallToolResult {
+        handle_room_create(params.0, &self.write_channel).await
+    }
+
+    #[tool(
+        name = "room_list",
+        description = "List rooms. Set archived=true to list archived rooms."
+    )]
+    async fn room_list(&self, params: Parameters<RoomListParams>) -> CallToolResult {
+        handle_room_list(params.0, &self.read_pool).await
+    }
+
+    #[tool(name = "room_get", description = "Get a room by ID (UUIDv7) or name")]
+    async fn room_get(&self, params: Parameters<RoomGetParams>) -> CallToolResult {
+        handle_room_get(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "room_delete",
+        description = "Archive or hard-delete a room. Set hard=true to permanently delete."
+    )]
+    async fn room_delete(&self, params: Parameters<RoomDeleteParams>) -> CallToolResult {
+        handle_room_delete(params.0, &self.write_channel).await
+    }
+
+    #[tool(
+        name = "room_post_message",
+        description = "Post a message to a room. Room can be specified by ID or name."
+    )]
+    async fn room_post_message(&self, params: Parameters<RoomPostMessageParams>) -> CallToolResult {
+        handle_room_post_message(params.0, &self.write_channel, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "room_read_messages",
+        description = "Read messages from a room with optional pagination. Room can be specified by ID or name."
+    )]
+    async fn room_read_messages(
+        &self,
+        params: Parameters<RoomReadMessagesParams>,
+    ) -> CallToolResult {
+        handle_room_read_messages(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "room_search",
+        description = "Search messages within a room using full-text search. Room can be specified by ID or name."
+    )]
+    async fn room_search(&self, params: Parameters<RoomSearchParams>) -> CallToolResult {
+        handle_room_search(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "room_info",
+        description = "Get room details including participants and message count. Room can be specified by ID or name."
+    )]
+    async fn room_info(&self, params: Parameters<RoomInfoParams>) -> CallToolResult {
+        handle_room_info(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "room_join",
+        description = "Add a participant to a room with a role (owner, member, observer). Room can be specified by ID or name."
+    )]
+    async fn room_join(&self, params: Parameters<RoomJoinParams>) -> CallToolResult {
+        handle_room_join(params.0, &self.write_channel, &self.read_pool).await
+    }
 }
 
 #[tool_handler(name = "nous-mcp", version = "0.1.0")]

@@ -76,6 +76,12 @@ pub enum WriteOp {
     },
     DeleteRoom(String, bool, oneshot::Sender<Result<bool>>),
     ArchiveRoom(String, oneshot::Sender<Result<bool>>),
+    JoinRoom {
+        room_id: String,
+        agent_id: String,
+        role: String,
+        resp: oneshot::Sender<Result<()>>,
+    },
 }
 
 #[derive(Clone)]
@@ -340,6 +346,22 @@ impl WriteChannel {
             .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
     }
 
+    pub async fn join_room(&self, room_id: String, agent_id: String, role: String) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::JoinRoom {
+                room_id,
+                agent_id,
+                role,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
     pub fn batch_count(&self) -> usize {
         self.batch_count.load(Ordering::Relaxed)
     }
@@ -507,6 +529,15 @@ async fn write_worker(
                     }
                     WriteOp::ArchiveRoom(id, resp) => {
                         let result = MemoryDb::archive_room_on(&tx, &id);
+                        let _ = resp.send(result);
+                    }
+                    WriteOp::JoinRoom {
+                        room_id,
+                        agent_id,
+                        role,
+                        resp,
+                    } => {
+                        let result = MemoryDb::join_room_on(&tx, &room_id, &agent_id, &role);
                         let _ = resp.send(result);
                     }
                 }

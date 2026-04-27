@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_lists_all_21_tools() {
+    async fn server_lists_all_30_tools() {
         use rmcp::model::CallToolRequestParams;
         use rmcp::{ClientHandler, ServiceExt};
 
@@ -686,12 +686,21 @@ mod tests {
             "memory_sql",
             "otlp_trace_context",
             "otlp_memory_context",
+            "room_create",
+            "room_list",
+            "room_get",
+            "room_delete",
+            "room_post_message",
+            "room_read_messages",
+            "room_search",
+            "room_info",
+            "room_join",
         ];
 
         assert_eq!(
             tools_result.tools.len(),
-            21,
-            "expected 21 tools, got {:?}",
+            30,
+            "expected 30 tools, got {:?}",
             tool_names
         );
 

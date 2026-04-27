@@ -884,6 +884,19 @@ impl MemoryDb {
         Ok(rows > 0)
     }
 
+    pub(crate) fn join_room_on(
+        conn: &Connection,
+        room_id: &str,
+        agent_id: &str,
+        role: &str,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO room_participants (room_id, agent_id, role) VALUES (?1, ?2, ?3)",
+            params![room_id, agent_id, role],
+        )?;
+        Ok(())
+    }
+
     pub fn log_access(&self, memory_id: &MemoryId, tool_name: &str) -> Result<()> {
         Self::log_access_on(&self.conn, memory_id, tool_name)
     }
