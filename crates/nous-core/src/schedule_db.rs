@@ -1,6 +1,7 @@
 use chrono::Utc;
 use nous_shared::{NousError, Result};
 use rusqlite::{Connection, params};
+use serde_json;
 
 use crate::cron_parser::CronExpr;
 use crate::types::{ActionType, RunPatch, RunStatus, Schedule, SchedulePatch, ScheduleRun};
@@ -371,6 +372,109 @@ impl ScheduleDb {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn query_runs(
+        conn: &Connection,
+        schedule_id: Option<&str>,
+        status_filter: Option<&RunStatus>,
+        since: Option<i64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<ScheduleRun>> {
+        let limit = limit.unwrap_or(50) as i64;
+        let mut sql = "SELECT id, schedule_id, started_at, finished_at, status,
+                               exit_code, output, error, attempt, duration_ms
+                        FROM schedule_runs WHERE 1=1"
+            .to_string();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(sid) = schedule_id {
+            param_values.push(Box::new(sid.to_string()));
+            sql.push_str(&format!(" AND schedule_id = ?{}", param_values.len()));
+        }
+        if let Some(status) = status_filter {
+            param_values.push(Box::new(status.to_string()));
+            sql.push_str(&format!(" AND status = ?{}", param_values.len()));
+        }
+        if let Some(since_ts) = since {
+            param_values.push(Box::new(since_ts));
+            sql.push_str(&format!(" AND started_at >= ?{}", param_values.len()));
+        }
+
+        param_values.push(Box::new(limit));
+        sql.push_str(&format!(
+            " ORDER BY started_at DESC LIMIT ?{}",
+            param_values.len()
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(params_ref.as_slice(), Self::row_to_run)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn health(conn: &Connection) -> Result<serde_json::Value> {
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM schedules", [], |row| row.get(0))?;
+
+        let active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM schedules WHERE enabled = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let failing: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT s.id) FROM schedules s
+             INNER JOIN schedule_runs r ON r.schedule_id = s.id
+             WHERE r.status IN ('failed', 'timeout')
+               AND r.id = (
+                   SELECT r2.id FROM schedule_runs r2
+                   WHERE r2.schedule_id = s.id
+                   ORDER BY r2.started_at DESC LIMIT 1
+               )",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let outcome_mismatches: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM schedule_runs
+             WHERE status = 'failed' AND error LIKE 'outcome mismatch:%'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, cron_expr, timezone, enabled, action_type, action_payload,
+                    desired_outcome, max_retries, timeout_secs, max_output_bytes, max_runs,
+                    next_run_at, created_at, updated_at
+             FROM schedules
+             WHERE enabled = 1 AND next_run_at IS NOT NULL
+             ORDER BY next_run_at ASC LIMIT 5",
+        )?;
+        let upcoming: Vec<Schedule> = stmt
+            .query_map([], Self::row_to_schedule)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let upcoming_json: Vec<serde_json::Value> = upcoming
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "name": s.name,
+                    "next_run_at": s.next_run_at,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "total_schedules": total,
+            "active_count": active,
+            "failing_count": failing,
+            "outcome_mismatches": outcome_mismatches,
+            "next_upcoming": upcoming_json,
+        }))
     }
 
     fn row_to_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {

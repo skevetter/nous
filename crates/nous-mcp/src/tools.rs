@@ -8,10 +8,11 @@ use nous_core::cron_parser::CronExpr;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
 use nous_core::schedule_db::ScheduleDb;
+use nous_core::scheduler::{ScheduleConfig, execute_schedule};
 use nous_core::types::{
     ActionType, CategorySource, Confidence, Importance, MemoryPatch, MemoryType,
-    MemoryWithRelations, NewMemory, RelationType, Schedule, SchedulePatch, SearchFilters,
-    SearchMode,
+    MemoryWithRelations, NewMemory, RelationType, RunStatus, Schedule, SchedulePatch,
+    SearchFilters, SearchMode,
 };
 use nous_otlp::db::OtlpDb;
 use nous_shared::ids::MemoryId;
@@ -1850,5 +1851,165 @@ pub async fn handle_schedule_resume(
         }
         Ok(false) => err_result(&format!("schedule not found: {}", params.id)),
         Err(e) => err_result(&format!("schedule_resume failed: {e}")),
+    }
+}
+
+// ── Phase 2: Execution History tool parameter structs ──
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleRunsParams {
+    pub schedule_id: Option<String>,
+    pub status: Option<String>,
+    pub since: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleRunGetParams {
+    pub run_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleTriggerParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleHealthParams {}
+
+// ── Phase 2: Execution History tool handlers ──
+
+fn run_to_json(r: &nous_core::types::ScheduleRun) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.id,
+        "schedule_id": r.schedule_id,
+        "started_at": format_epoch(Some(r.started_at)),
+        "finished_at": format_epoch(r.finished_at),
+        "status": r.status.to_string(),
+        "exit_code": r.exit_code,
+        "duration_ms": r.duration_ms,
+        "attempt": r.attempt,
+    })
+}
+
+fn run_to_json_full(r: &nous_core::types::ScheduleRun) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.id,
+        "schedule_id": r.schedule_id,
+        "started_at": format_epoch(Some(r.started_at)),
+        "finished_at": format_epoch(r.finished_at),
+        "status": r.status.to_string(),
+        "exit_code": r.exit_code,
+        "output": r.output,
+        "error": r.error,
+        "attempt": r.attempt,
+        "duration_ms": r.duration_ms,
+    })
+}
+
+pub async fn handle_schedule_runs(
+    params: ScheduleRunsParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let status_filter = match params.status.as_deref() {
+        Some(v) => match parse_enum::<RunStatus>(v, "status") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+
+    let since = match params.since.as_deref() {
+        Some(s) => match s.parse::<i64>() {
+            Ok(v) => Some(v),
+            Err(e) => return err_result(&format!("invalid since: {e}")),
+        },
+        None => None,
+    };
+    let schedule_id = params.schedule_id.clone();
+    let limit = params.limit;
+
+    match read_pool
+        .with_conn(move |conn| {
+            ScheduleDb::query_runs(
+                conn,
+                schedule_id.as_deref(),
+                status_filter.as_ref(),
+                since,
+                limit,
+            )
+        })
+        .await
+    {
+        Ok(runs) => {
+            let list: Vec<serde_json::Value> = runs.iter().map(run_to_json).collect();
+            ok_json(&serde_json::json!({
+                "runs": list,
+                "count": list.len(),
+            }))
+        }
+        Err(e) => err_result(&format!("schedule_runs failed: {e}")),
+    }
+}
+
+pub async fn handle_schedule_run_get(
+    params: ScheduleRunGetParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let run_id = params.run_id.clone();
+
+    match read_pool
+        .with_conn(move |conn| ScheduleDb::get_run(conn, &run_id))
+        .await
+    {
+        Ok(Some(run)) => ok_json(&run_to_json_full(&run)),
+        Ok(None) => err_result(&format!("run not found: {}", params.run_id)),
+        Err(e) => err_result(&format!("schedule_run_get failed: {e}")),
+    }
+}
+
+pub async fn handle_schedule_trigger(
+    params: ScheduleTriggerParams,
+    write_channel: &WriteChannel,
+    read_pool: &ReadPool,
+    config: &ScheduleConfig,
+    otlp_db_path: Option<&str>,
+) -> CallToolResult {
+    let id = params.id.clone();
+    let id_clone = id.clone();
+
+    let schedule = match read_pool
+        .with_conn(move |conn| ScheduleDb::get(conn, &id_clone))
+        .await
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => return err_result(&format!("schedule not found: {id}")),
+        Err(e) => return err_result(&format!("schedule_trigger failed: {e}")),
+    };
+
+    execute_schedule(&schedule, write_channel, read_pool, config, otlp_db_path).await;
+
+    let schedule_id = id.clone();
+    let runs = match read_pool
+        .with_conn(move |conn| ScheduleDb::get_runs(conn, &schedule_id, None, Some(1)))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return err_result(&format!("get_runs after trigger failed: {e}")),
+    };
+
+    let last_run = runs.first().map(run_to_json_full);
+
+    ok_json(&serde_json::json!({
+        "id": id,
+        "status": "triggered",
+        "last_run": last_run,
+    }))
+}
+
+pub async fn handle_schedule_health(read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.with_conn(ScheduleDb::health).await {
+        Ok(health) => ok_json(&health),
+        Err(e) => err_result(&format!("schedule_health failed: {e}")),
     }
 }

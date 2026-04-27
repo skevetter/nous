@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Notify;
@@ -38,6 +39,7 @@ pub struct Scheduler {
     read_pool: ReadPool,
     notify: Arc<Notify>,
     config: ScheduleConfig,
+    otlp_db_path: Option<String>,
 }
 
 impl Scheduler {
@@ -46,12 +48,22 @@ impl Scheduler {
         rp: ReadPool,
         config: ScheduleConfig,
     ) -> (Arc<Notify>, tokio::task::JoinHandle<()>) {
+        Self::spawn_with_otlp(wc, rp, config, None)
+    }
+
+    pub fn spawn_with_otlp(
+        wc: WriteChannel,
+        rp: ReadPool,
+        config: ScheduleConfig,
+        otlp_db_path: Option<String>,
+    ) -> (Arc<Notify>, tokio::task::JoinHandle<()>) {
         let notify = Arc::new(Notify::new());
         let scheduler = Scheduler {
             write_channel: wc,
             read_pool: rp,
             notify: notify.clone(),
             config,
+            otlp_db_path,
         };
         let handle = tokio::spawn(scheduler.run());
         (notify, handle)
@@ -85,6 +97,7 @@ impl Scheduler {
                             let running = Arc::clone(&running);
                             let semaphore = Arc::clone(&semaphore);
                             let config = self.config.clone();
+                            let otlp_path = self.otlp_db_path.clone();
 
                             tokio::spawn(async move {
                                 let schedule_id = schedule.id.clone();
@@ -105,7 +118,7 @@ impl Scheduler {
                                     }
                                 };
 
-                                execute_schedule(&schedule, &wc, &rp, &config).await;
+                                execute_schedule(&schedule, &wc, &rp, &config, otlp_path.as_deref()).await;
                                 running.lock().await.remove(&schedule_id);
                             });
                         }
@@ -163,11 +176,12 @@ async fn record_skipped(wc: &WriteChannel, schedule_id: &str) -> nous_shared::Re
     wc.record_run(run).await
 }
 
-async fn execute_schedule(
+pub async fn execute_schedule(
     schedule: &Schedule,
     wc: &WriteChannel,
     rp: &ReadPool,
     config: &ScheduleConfig,
+    otlp_db_path: Option<&str>,
 ) {
     let timeout_secs = schedule
         .timeout_secs
@@ -210,15 +224,38 @@ async fn execute_schedule(
         let finished_at = Utc::now().timestamp();
         let duration_ms = instant.elapsed().as_millis() as i64;
 
-        let patch = match result {
-            Ok(Ok(output)) => RunPatch {
-                finished_at: Some(finished_at),
-                status: Some(RunStatus::Completed),
-                exit_code: Some(0),
-                output: Some(truncate_output(&output, schedule.max_output_bytes as usize)),
-                error: None,
-                duration_ms: Some(duration_ms),
-            },
+        let (patch, status_str, exit_code, event_name) = match result {
+            Ok(Ok(output)) => {
+                let truncated = truncate_output(&output, schedule.max_output_bytes as usize);
+                match evaluate_desired_outcome(schedule.desired_outcome.as_deref(), &output) {
+                    OutcomeResult::Pass => (
+                        RunPatch {
+                            finished_at: Some(finished_at),
+                            status: Some(RunStatus::Completed),
+                            exit_code: Some(0),
+                            output: Some(truncated),
+                            error: None,
+                            duration_ms: Some(duration_ms),
+                        },
+                        "completed",
+                        Some(0i64),
+                        "complete",
+                    ),
+                    OutcomeResult::Mismatch(ref err) => (
+                        RunPatch {
+                            finished_at: Some(finished_at),
+                            status: Some(RunStatus::Failed),
+                            exit_code: Some(0),
+                            output: Some(truncated),
+                            error: Some(err.clone()),
+                            duration_ms: Some(duration_ms),
+                        },
+                        "failed",
+                        Some(0),
+                        "outcome_mismatch",
+                    ),
+                }
+            }
             Ok(Err(error)) => {
                 let patch = RunPatch {
                     finished_at: Some(finished_at),
@@ -229,7 +266,19 @@ async fn execute_schedule(
                     duration_ms: Some(duration_ms),
                 };
 
-                let _ = wc.update_run(run_id, patch).await;
+                let _ = wc.update_run(run_id.clone(), patch).await;
+
+                emit_otlp_span(
+                    otlp_db_path,
+                    schedule,
+                    attempt,
+                    started_at,
+                    finished_at,
+                    duration_ms,
+                    "failed",
+                    Some(1),
+                    "fail",
+                );
 
                 if attempt < max_retries {
                     let backoff = 2u64.saturating_pow(attempt.min(20) as u32);
@@ -238,17 +287,33 @@ async fn execute_schedule(
                 }
                 return;
             }
-            Err(_) => RunPatch {
-                finished_at: Some(finished_at),
-                status: Some(RunStatus::Timeout),
-                exit_code: None,
-                output: None,
-                error: Some(format!("timeout after {timeout_secs}s")),
-                duration_ms: Some(duration_ms),
-            },
+            Err(_) => (
+                RunPatch {
+                    finished_at: Some(finished_at),
+                    status: Some(RunStatus::Timeout),
+                    exit_code: None,
+                    output: None,
+                    error: Some(format!("timeout after {timeout_secs}s")),
+                    duration_ms: Some(duration_ms),
+                },
+                "timeout",
+                None,
+                "timeout",
+            ),
         };
 
         let _ = wc.update_run(run_id, patch).await;
+        emit_otlp_span(
+            otlp_db_path,
+            schedule,
+            attempt,
+            started_at,
+            finished_at,
+            duration_ms,
+            status_str,
+            exit_code,
+            event_name,
+        );
         return;
     }
 }
@@ -362,6 +427,127 @@ async fn dispatch_mcp_tool(
             Ok("delayed".to_string())
         }
         other => Err(format!("unsupported mcp_tool: {other}")),
+    }
+}
+
+// OTLP span context requires passing schedule metadata, timing, and result fields individually.
+#[allow(clippy::too_many_arguments)]
+fn emit_otlp_span(
+    otlp_db_path: Option<&str>,
+    schedule: &Schedule,
+    attempt: i64,
+    started_at: i64,
+    finished_at: i64,
+    duration_ms: i64,
+    status: &str,
+    exit_code: Option<i64>,
+    event_name: &str,
+) {
+    let Some(path) = otlp_db_path else { return };
+    if path.is_empty() {
+        return;
+    }
+
+    let trace_id = uuid::Uuid::now_v7().to_string();
+    let run_span_id = uuid::Uuid::now_v7().to_string();
+    let action_span_id = uuid::Uuid::now_v7().to_string();
+
+    let run_attrs = serde_json::json!({
+        "schedule.id": schedule.id,
+        "schedule.name": schedule.name,
+        "schedule.cron_expr": schedule.cron_expr,
+        "action_type": schedule.action_type.to_string(),
+        "attempt": attempt,
+    })
+    .to_string();
+
+    let action_attrs = serde_json::json!({
+        "action_type": schedule.action_type.to_string(),
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+    })
+    .to_string();
+
+    let status_code = if status == "completed" { 1 } else { 2 };
+    let events = serde_json::json!([{"name": event_name, "timestamp": finished_at}]).to_string();
+
+    let run_span = nous_otlp::decode::Span {
+        trace_id: trace_id.clone(),
+        span_id: run_span_id.clone(),
+        parent_span_id: None,
+        name: "schedule.run".to_string(),
+        kind: 1,
+        start_time: started_at,
+        end_time: finished_at,
+        status_code,
+        status_message: if status == "completed" {
+            None
+        } else {
+            Some(status.to_string())
+        },
+        resource_attrs: "{}".to_string(),
+        span_attrs: run_attrs,
+        events_json: events.clone(),
+    };
+
+    let action_span = nous_otlp::decode::Span {
+        trace_id,
+        span_id: action_span_id,
+        parent_span_id: Some(run_span_id),
+        name: "schedule.action".to_string(),
+        kind: 1,
+        start_time: started_at,
+        end_time: finished_at,
+        status_code,
+        status_message: None,
+        resource_attrs: "{}".to_string(),
+        span_attrs: action_attrs,
+        events_json: events,
+    };
+
+    let path = path.to_owned();
+    std::thread::spawn(move || {
+        if let Ok(db) = nous_otlp::db::OtlpDb::open(&path, None) {
+            let _ = db.store_spans(&[run_span, action_span]);
+        }
+    });
+}
+
+enum OutcomeResult {
+    Pass,
+    Mismatch(String),
+}
+
+fn evaluate_desired_outcome(desired: Option<&str>, output: &str) -> OutcomeResult {
+    let desired = match desired {
+        Some(d) if !d.is_empty() => d,
+        _ => return OutcomeResult::Pass,
+    };
+
+    if desired.starts_with('/') && desired.ends_with('/') && desired.len() > 2 {
+        let pattern = &desired[1..desired.len() - 1];
+        match Regex::new(pattern) {
+            Ok(re) => {
+                if re.is_match(output) {
+                    OutcomeResult::Pass
+                } else {
+                    let summary = truncate_output(output, 100);
+                    OutcomeResult::Mismatch(format!(
+                        "outcome mismatch: expected {desired}, got {summary}"
+                    ))
+                }
+            }
+            Err(e) => {
+                OutcomeResult::Mismatch(format!("outcome mismatch: invalid regex {desired}: {e}"))
+            }
+        }
+    } else if output.contains(desired) {
+        OutcomeResult::Pass
+    } else {
+        let summary = truncate_output(output, 100);
+        OutcomeResult::Mismatch(format!(
+            "outcome mismatch: expected {desired}, got {summary}"
+        ))
     }
 }
 
