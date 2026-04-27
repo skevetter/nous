@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use http_body_util::BodyExt;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::daemon_api::{ShutdownResponse, StatusResponse};
@@ -46,6 +47,26 @@ impl DaemonClient {
         self.post("/shutdown").await
     }
 
+    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        self.get(path).await
+    }
+
+    pub async fn post_json<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let json = serde_json::to_vec(body).map_err(|e| ClientError::Http(e.to_string()))?;
+        let req = hyper::Request::builder()
+            .method("POST")
+            .uri(format!("http://localhost{path}"))
+            .header("content-type", "application/json")
+            .body(http_body_util::Full::new(bytes::Bytes::from(json)))
+            .map_err(|e: hyper::http::Error| ClientError::Http(e.to_string()))?;
+
+        self.send_full(req).await
+    }
+
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         let req = hyper::Request::builder()
             .method("GET")
@@ -69,6 +90,52 @@ impl DaemonClient {
     pub(crate) async fn send<T: DeserializeOwned>(
         &self,
         req: hyper::Request<http_body_util::Empty<bytes::Bytes>>,
+    ) -> Result<T, ClientError> {
+        let stream = tokio::net::UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::NotFound
+                {
+                    ClientError::ConnectionRefused
+                } else {
+                    ClientError::Io(e)
+                }
+            })?;
+
+        let io = hyper_util::rt::TokioIo::new(stream);
+
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
+
+        tokio::spawn(conn);
+
+        let resp = sender
+            .send_request(req)
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
+
+        let status = resp.status().as_u16();
+
+        let body_bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?
+            .to_bytes();
+
+        if status >= 400 {
+            let msg = String::from_utf8_lossy(&body_bytes).into_owned();
+            return Err(ClientError::ServerError(status, msg));
+        }
+
+        serde_json::from_slice(&body_bytes).map_err(|e| ClientError::Http(e.to_string()))
+    }
+
+    async fn send_full<T: DeserializeOwned>(
+        &self,
+        req: hyper::Request<http_body_util::Full<bytes::Bytes>>,
     ) -> Result<T, ClientError> {
         let stream = tokio::net::UnixStream::connect(&self.socket_path)
             .await
