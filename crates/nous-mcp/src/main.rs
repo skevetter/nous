@@ -11,6 +11,13 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[derive(Debug, Clone, ValueEnum)]
+enum SearchMode {
+    Fts,
+    Semantic,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
 enum Transport {
     Stdio,
     Http,
@@ -84,6 +91,97 @@ enum Command {
         memory_id: Option<String>,
         #[arg(long, requires = "trace_id")]
         session_id: Option<String>,
+    },
+    Store {
+        #[arg(long)]
+        title: String,
+        #[arg(long, allow_hyphen_values = true)]
+        content: String,
+        #[arg(long, default_value = "observation")]
+        r#type: String,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long)]
+        trace_id: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        agent_model: Option<String>,
+        #[arg(long)]
+        valid_from: Option<String>,
+        #[arg(long)]
+        category_id: Option<i64>,
+    },
+    Recall {
+        id: String,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        content: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        valid_until: Option<String>,
+    },
+    Forget {
+        id: String,
+        #[arg(long)]
+        hard: bool,
+    },
+    Unarchive {
+        id: String,
+    },
+    Relate {
+        source: String,
+        target: String,
+        r#type: String,
+    },
+    Unrelate {
+        source: String,
+        target: String,
+        r#type: String,
+    },
+    Search {
+        query: String,
+        #[arg(long, default_value = "hybrid")]
+        mode: SearchMode,
+        #[arg(long)]
+        r#type: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        archived: bool,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long)]
+        valid_only: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
 }
 
@@ -667,6 +765,130 @@ fn run_command(
                 trace_id.as_deref(),
                 memory_id.as_deref(),
                 session_id.as_deref(),
+            )?;
+        }
+        Command::Store {
+            title,
+            content,
+            r#type,
+            source,
+            importance,
+            confidence,
+            tags,
+            workspace,
+            session_id,
+            trace_id,
+            agent_id,
+            agent_model,
+            valid_from,
+            category_id,
+        } => {
+            let actual_content = if content == "-" {
+                std::io::read_to_string(std::io::stdin())?
+            } else {
+                content
+            };
+            commands::run_store(
+                config,
+                &title,
+                &actual_content,
+                &r#type,
+                source.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                &tags.unwrap_or_default(),
+                workspace.as_deref(),
+                session_id.as_deref(),
+                trace_id.as_deref(),
+                agent_id.as_deref(),
+                agent_model.as_deref(),
+                valid_from.as_deref(),
+                category_id,
+                format,
+            )?;
+        }
+        Command::Recall { id } => {
+            commands::run_recall(config, &id, format)?;
+        }
+        Command::Update {
+            id,
+            title,
+            content,
+            importance,
+            confidence,
+            tags,
+            valid_until,
+        } => {
+            let actual_content = match content.as_deref() {
+                Some("-") => Some(std::io::read_to_string(std::io::stdin())?),
+                other => other.map(String::from),
+            };
+            commands::run_update(
+                config,
+                &id,
+                title.as_deref(),
+                actual_content.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                tags.as_deref(),
+                valid_until.as_deref(),
+                format,
+            )?;
+        }
+        Command::Forget { id, hard } => {
+            commands::run_forget(config, &id, hard, format)?;
+        }
+        Command::Unarchive { id } => {
+            commands::run_unarchive(config, &id, format)?;
+        }
+        Command::Relate {
+            source,
+            target,
+            r#type,
+        } => {
+            commands::run_relate(config, &source, &target, &r#type, format)?;
+        }
+        Command::Unrelate {
+            source,
+            target,
+            r#type,
+        } => {
+            commands::run_unrelate(config, &source, &target, &r#type, format)?;
+        }
+        Command::Search {
+            query,
+            mode,
+            r#type,
+            importance,
+            confidence,
+            workspace,
+            tags,
+            archived,
+            since,
+            until,
+            valid_only,
+            limit,
+        } => {
+            let mode_str = match mode {
+                SearchMode::Fts => "fts",
+                SearchMode::Semantic => "semantic",
+                SearchMode::Hybrid => "hybrid",
+            };
+            commands::run_search(
+                config,
+                &query,
+                mode_str,
+                r#type.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                workspace.as_deref(),
+                tags.as_deref(),
+                archived,
+                since.as_deref(),
+                until.as_deref(),
+                valid_only,
+                limit,
+                format,
             )?;
         }
         Command::Daemon(daemon) => match daemon.command {
@@ -1484,5 +1706,699 @@ mod tests {
         assert!(try_daemon_client(&cfg).is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- Memory CRUD clap parsing tests ---
+
+    #[test]
+    fn store_minimal() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "store",
+            "--title",
+            "Test",
+            "--content",
+            "Body",
+            "--type",
+            "decision",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Store {
+                title,
+                content,
+                r#type,
+                importance,
+                tags,
+                ..
+            } => {
+                assert_eq!(title, "Test");
+                assert_eq!(content, "Body");
+                assert_eq!(r#type, "decision");
+                assert!(importance.is_none());
+                assert!(tags.is_none());
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn store_with_all_flags() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "store",
+            "--title",
+            "Full",
+            "--content",
+            "All flags",
+            "--type",
+            "bugfix",
+            "--importance",
+            "high",
+            "--confidence",
+            "low",
+            "--tags",
+            "a,b,c",
+            "--workspace",
+            "/tmp",
+            "--source",
+            "test",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Store {
+                title,
+                content,
+                r#type,
+                importance,
+                confidence,
+                tags,
+                workspace,
+                source,
+                ..
+            } => {
+                assert_eq!(title, "Full");
+                assert_eq!(content, "All flags");
+                assert_eq!(r#type, "bugfix");
+                assert_eq!(importance.as_deref(), Some("high"));
+                assert_eq!(confidence.as_deref(), Some("low"));
+                assert_eq!(tags, Some(vec!["a".into(), "b".into(), "c".into()]));
+                assert_eq!(workspace.as_deref(), Some("/tmp"));
+                assert_eq!(source.as_deref(), Some("test"));
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn store_stdin_content() {
+        let cli =
+            Cli::try_parse_from(["nous", "store", "--title", "Stdin", "--content", "-"]).unwrap();
+        match cli.command {
+            Command::Store { content, .. } => {
+                assert_eq!(content, "-");
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn store_default_type() {
+        let cli =
+            Cli::try_parse_from(["nous", "store", "--title", "Def", "--content", "Body"]).unwrap();
+        match cli.command {
+            Command::Store { r#type, .. } => {
+                assert_eq!(r#type, "observation");
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn recall_by_id() {
+        let cli = Cli::try_parse_from(["nous", "recall", "mem_abc123"]).unwrap();
+        match cli.command {
+            Command::Recall { id } => {
+                assert_eq!(id, "mem_abc123");
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn update_with_title() {
+        let cli =
+            Cli::try_parse_from(["nous", "update", "mem_abc123", "--title", "New title"]).unwrap();
+        match cli.command {
+            Command::Update {
+                id,
+                title,
+                content,
+                importance,
+                ..
+            } => {
+                assert_eq!(id, "mem_abc123");
+                assert_eq!(title.as_deref(), Some("New title"));
+                assert!(content.is_none());
+                assert!(importance.is_none());
+            }
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn update_multiple_fields() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "update",
+            "mem_abc123",
+            "--importance",
+            "high",
+            "--tags",
+            "x,y",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Update {
+                importance, tags, ..
+            } => {
+                assert_eq!(importance.as_deref(), Some("high"));
+                assert_eq!(tags, Some(vec!["x".into(), "y".into()]));
+            }
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn forget_soft() {
+        let cli = Cli::try_parse_from(["nous", "forget", "mem_abc123"]).unwrap();
+        match cli.command {
+            Command::Forget { id, hard } => {
+                assert_eq!(id, "mem_abc123");
+                assert!(!hard);
+            }
+            _ => panic!("expected Forget"),
+        }
+    }
+
+    #[test]
+    fn forget_hard() {
+        let cli = Cli::try_parse_from(["nous", "forget", "mem_abc123", "--hard"]).unwrap();
+        match cli.command {
+            Command::Forget { id, hard } => {
+                assert_eq!(id, "mem_abc123");
+                assert!(hard);
+            }
+            _ => panic!("expected Forget"),
+        }
+    }
+
+    #[test]
+    fn unarchive_by_id() {
+        let cli = Cli::try_parse_from(["nous", "unarchive", "mem_abc123"]).unwrap();
+        match cli.command {
+            Command::Unarchive { id } => {
+                assert_eq!(id, "mem_abc123");
+            }
+            _ => panic!("expected Unarchive"),
+        }
+    }
+
+    #[test]
+    fn relate_three_args() {
+        let cli = Cli::try_parse_from(["nous", "relate", "mem_a", "mem_b", "supersedes"]).unwrap();
+        match cli.command {
+            Command::Relate {
+                source,
+                target,
+                r#type,
+            } => {
+                assert_eq!(source, "mem_a");
+                assert_eq!(target, "mem_b");
+                assert_eq!(r#type, "supersedes");
+            }
+            _ => panic!("expected Relate"),
+        }
+    }
+
+    #[test]
+    fn unrelate_three_args() {
+        let cli =
+            Cli::try_parse_from(["nous", "unrelate", "mem_a", "mem_b", "supersedes"]).unwrap();
+        match cli.command {
+            Command::Unrelate {
+                source,
+                target,
+                r#type,
+            } => {
+                assert_eq!(source, "mem_a");
+                assert_eq!(target, "mem_b");
+                assert_eq!(r#type, "supersedes");
+            }
+            _ => panic!("expected Unrelate"),
+        }
+    }
+
+    #[test]
+    fn search_minimal() {
+        let cli = Cli::try_parse_from(["nous", "search", "pool size"]).unwrap();
+        match cli.command {
+            Command::Search {
+                query,
+                mode,
+                r#type,
+                limit,
+                archived,
+                ..
+            } => {
+                assert_eq!(query, "pool size");
+                assert!(matches!(mode, SearchMode::Hybrid));
+                assert!(r#type.is_none());
+                assert_eq!(limit, 20);
+                assert!(!archived);
+            }
+            _ => panic!("expected Search"),
+        }
+    }
+
+    #[test]
+    fn search_with_filters() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "search",
+            "db pool",
+            "--mode",
+            "fts",
+            "--type",
+            "decision",
+            "--limit",
+            "10",
+            "--importance",
+            "high",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Search {
+                query,
+                mode,
+                r#type,
+                limit,
+                importance,
+                ..
+            } => {
+                assert_eq!(query, "db pool");
+                assert!(matches!(mode, SearchMode::Fts));
+                assert_eq!(r#type.as_deref(), Some("decision"));
+                assert_eq!(limit, 10);
+                assert_eq!(importance.as_deref(), Some("high"));
+            }
+            _ => panic!("expected Search"),
+        }
+    }
+
+    #[test]
+    fn store_missing_title_errors() {
+        let result = Cli::try_parse_from(["nous", "store", "--content", "Body"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_missing_content_errors() {
+        let result = Cli::try_parse_from(["nous", "store", "--title", "T"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn recall_missing_id_errors() {
+        let result = Cli::try_parse_from(["nous", "recall"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn relate_missing_type_errors() {
+        let result = Cli::try_parse_from(["nous", "relate", "a", "b"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn search_missing_query_errors() {
+        let result = Cli::try_parse_from(["nous", "search"]);
+        assert!(result.is_err());
+    }
+
+    // --- Integration tests ---
+
+    fn make_test_config() -> config::Config {
+        let mut cfg = config::Config::default();
+        cfg.memory.db_path = test_db_path();
+        cfg
+    }
+
+    #[test]
+    fn integration_store_and_recall() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Test memory",
+            "Integration test content",
+            "decision",
+            Some("cli"),
+            Some("high"),
+            Some("moderate"),
+            &["test".to_string(), "integration".to_string()],
+            Some("/tmp/test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let conn = db.connection();
+        let id: String = conn
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'Test memory'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        commands::run_recall(&cfg, &id, &format).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_store_update_recall() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Original",
+            "Original content",
+            "fact",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'Original'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        commands::run_update(
+            &cfg,
+            &id,
+            Some("Updated title"),
+            None,
+            Some("high"),
+            None,
+            Some(&["new-tag".to_string()]),
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let recalled = db
+            .recall(&id.parse().unwrap())
+            .unwrap()
+            .expect("memory should exist");
+        assert_eq!(recalled.memory.title, "Updated title");
+        assert_eq!(
+            recalled.memory.importance,
+            nous_core::types::Importance::High
+        );
+        assert!(recalled.tags.contains(&"new-tag".to_string()));
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_forget_and_unarchive() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "To archive",
+            "Will be archived",
+            "observation",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'To archive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        commands::run_forget(&cfg, &id, false, &format).unwrap();
+
+        let archived: bool = db
+            .connection()
+            .query_row(
+                "SELECT archived FROM memories WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get::<_, i64>(0).map(|v| v != 0),
+            )
+            .unwrap();
+        assert!(archived);
+
+        commands::run_unarchive(&cfg, &id, &format).unwrap();
+
+        let archived_after: bool = db
+            .connection()
+            .query_row(
+                "SELECT archived FROM memories WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get::<_, i64>(0).map(|v| v != 0),
+            )
+            .unwrap();
+        assert!(!archived_after);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_forget_hard_deletes() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "To delete",
+            "Will be hard deleted",
+            "observation",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'To delete'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        commands::run_forget(&cfg, &id, true, &format).unwrap();
+
+        let exists: bool = db
+            .connection()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_relate_and_unrelate() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Source",
+            "Source content",
+            "decision",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+        commands::run_store(
+            &cfg,
+            "Target",
+            "Target content",
+            "decision",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let src_id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'Source'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let tgt_id: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM memories WHERE title = 'Target'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        commands::run_relate(&cfg, &src_id, &tgt_id, "supersedes", &format).unwrap();
+
+        let rel_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rel_count, 1);
+
+        commands::run_unrelate(&cfg, &src_id, &tgt_id, "supersedes", &format).unwrap();
+
+        let rel_count_after: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rel_count_after, 0);
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_search_after_store() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Database pool increase",
+            "Increased database connection pool from 10 to 50",
+            "decision",
+            None,
+            Some("high"),
+            None,
+            &["database".to_string()],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_search(
+            &cfg,
+            "database pool",
+            "fts",
+            Some("decision"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            false,
+            10,
+            &format,
+        )
+        .unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_not_found_exits_3() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_recall(&cfg, "mem_nonexistent_id_12345", &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 3);
+        } else {
+            panic!("expected NousError::NotFound");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
     }
 }
