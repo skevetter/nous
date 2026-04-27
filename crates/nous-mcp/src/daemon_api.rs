@@ -339,6 +339,7 @@ async fn handle_search_memories(
         &state.server.db_path,
         state.server.config.embedding.dimensions,
         &state.server.embedding,
+        state.server.db_key.as_deref(),
     )
     .await;
 
@@ -354,6 +355,7 @@ async fn handle_list_categories(State(state): State<Arc<AppState>>) -> impl Into
         &state.server.db_path,
         state.server.config.embedding.dimensions,
         None,
+        state.server.db_key.as_deref(),
     )
     .await;
     call_tool_result_to_response(result)

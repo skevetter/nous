@@ -110,6 +110,7 @@ async fn semantic_search_ranks_closest_match_first() {
         &db_path,
         384,
         &server.embedding,
+        None,
     )
     .await;
 
