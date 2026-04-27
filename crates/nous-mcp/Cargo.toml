@@ -25,7 +25,12 @@ tokio = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 axum = { workspace = true }
+bytes = "1"
+http-body-util = "0.1"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
 rmcp = { workspace = true, features = ["client"] }
+tower = "0.5"
