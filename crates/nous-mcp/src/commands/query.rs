@@ -9,7 +9,7 @@ fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     Ok(MemoryDb::open(
         &config.memory.db_path,
         db_key.as_deref(),
-        384,
+        config.embedding.dimensions,
     )?)
 }
 

@@ -9,7 +9,7 @@ fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     Ok(MemoryDb::open(
         &config.memory.db_path,
         db_key.as_deref(),
-        384,
+        config.embedding.dimensions,
     )?)
 }
 
@@ -390,7 +390,10 @@ pub fn run_embedding_reset(
     let embed_count = db.embedding_count().unwrap_or(0);
     let active = db.active_model()?;
 
-    let new_dims = active.as_ref().map(|m| m.dimensions).unwrap_or(384);
+    let new_dims = active
+        .as_ref()
+        .map(|m| m.dimensions)
+        .unwrap_or(config.embedding.dimensions as i64);
     db.reset_embeddings(new_dims as usize)?;
 
     match format {

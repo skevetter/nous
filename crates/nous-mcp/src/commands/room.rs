@@ -9,7 +9,11 @@ pub fn run_room_create(
     purpose: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let id = MemoryId::new().to_string();
     MemoryDb::create_room_on(db.connection(), &id, name, purpose, None)?;
     println!("{id}");
@@ -22,7 +26,11 @@ pub fn run_room_list(
     limit: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
     let limit = limit.unwrap_or(100) as i64;
     let mut stmt = conn.prepare(
@@ -54,7 +62,11 @@ pub fn run_room_list(
 
 pub fn run_room_get(config: &Config, id_or_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
 
     let room_id = resolve_room_id_sync(conn, id_or_name)?;
@@ -106,7 +118,11 @@ pub fn run_room_post(
     reply_to: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
     let room_id = resolve_room_id_sync(conn, room)?;
     let msg_id = MemoryId::new().to_string();
@@ -123,7 +139,11 @@ pub fn run_room_read(
     since: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
     let room_id = resolve_room_id_sync(conn, room)?;
     let limit = limit.unwrap_or(50) as i64;
@@ -160,7 +180,11 @@ pub fn run_room_search(
     limit: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
     let room_id = resolve_room_id_sync(conn, room)?;
     let limit = limit.unwrap_or(50) as i64;
@@ -191,7 +215,11 @@ pub fn run_room_delete(
     hard: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     let conn = db.connection();
     let room_id = resolve_room_id_sync(conn, id_or_name)?;
 

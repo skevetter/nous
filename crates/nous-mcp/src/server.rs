@@ -130,7 +130,13 @@ impl NousServer {
         description = "Search memories using FTS, semantic, or hybrid search"
     )]
     async fn memory_search(&self, params: Parameters<MemorySearchParams>) -> CallToolResult {
-        handle_search(params.0, &self.db_path, &self.embedding).await
+        handle_search(
+            params.0,
+            &self.db_path,
+            self.config.embedding.dimensions,
+            &self.embedding,
+        )
+        .await
     }
 
     #[tool(
@@ -138,7 +144,7 @@ impl NousServer {
         description = "Get context-relevant memories for a workspace"
     )]
     async fn memory_context(&self, params: Parameters<MemoryContextParams>) -> CallToolResult {
-        handle_context(params.0, &self.db_path).await
+        handle_context(params.0, &self.db_path, self.config.embedding.dimensions).await
     }
 
     #[tool(
@@ -208,7 +214,12 @@ impl NousServer {
         &self,
         params: Parameters<MemoryCategoryListParams>,
     ) -> CallToolResult {
-        handle_category_list(&self.db_path, params.0.source).await
+        handle_category_list(
+            &self.db_path,
+            self.config.embedding.dimensions,
+            params.0.source,
+        )
+        .await
     }
 
     #[tool(
@@ -219,7 +230,13 @@ impl NousServer {
         &self,
         params: Parameters<MemoryCategoryAddParams>,
     ) -> CallToolResult {
-        handle_category_add(params.0, &self.db_path, &self.embedding).await
+        handle_category_add(
+            params.0,
+            &self.db_path,
+            self.config.embedding.dimensions,
+            &self.embedding,
+        )
+        .await
     }
 
     #[tool(
@@ -1582,6 +1599,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -1678,6 +1696,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -1741,6 +1760,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -1804,6 +1824,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -1854,6 +1875,7 @@ mod tests {
                 summary: false,
             },
             &db_path,
+            384,
         )
         .await;
 
@@ -1890,6 +1912,7 @@ mod tests {
                 summary: true,
             },
             &db_path,
+            384,
         )
         .await;
 
@@ -1934,6 +1957,7 @@ mod tests {
                 summary: false,
             },
             &db_path,
+            384,
         )
         .await;
 
@@ -2070,6 +2094,7 @@ mod tests {
                 summary: false,
             },
             &db_path,
+            384,
         )
         .await;
 
@@ -2105,6 +2130,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -2138,6 +2164,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -2220,6 +2247,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -2276,6 +2304,7 @@ mod tests {
                 limit: Some(2),
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -2325,6 +2354,7 @@ mod tests {
                 limit: None,
             },
             &db_path,
+            384,
             &server.embedding,
         )
         .await;
@@ -2370,6 +2400,7 @@ mod tests {
                 summary: false,
             },
             &db_path,
+            384,
         )
         .await;
 

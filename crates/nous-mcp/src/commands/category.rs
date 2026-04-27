@@ -16,7 +16,11 @@ pub fn run_category_list(
     format: &OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
 
     let source_filter = match source {
         Some(s) => {
@@ -103,7 +107,11 @@ pub fn run_category_add(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
 
     let parent_id = match parent {
         Some(parent_name) => {
@@ -139,7 +147,11 @@ pub fn run_category_add(
 
 pub fn run_category_delete(config: &Config, name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
     db.category_delete(name)?;
     println!("Deleted category '{name}'");
     Ok(())
@@ -152,7 +164,11 @@ pub fn run_category_rename(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
 
     let desc: Option<String> = db.connection().query_row(
         "SELECT description FROM categories WHERE name = ?1",
@@ -193,7 +209,11 @@ pub fn run_category_update(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
 
     let final_name = new_name.unwrap_or(name);
     let embedding_blob = if new_name.is_some() || description.is_some() {
@@ -244,7 +264,11 @@ pub fn run_category_suggest(
     })?;
 
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+    let db = MemoryDb::open(
+        &config.memory.db_path,
+        db_key.as_deref(),
+        config.embedding.dimensions,
+    )?;
 
     let exists: bool = db
         .connection()

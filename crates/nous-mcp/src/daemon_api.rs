@@ -334,7 +334,13 @@ async fn handle_search_memories(
         limit: body.limit,
     };
 
-    let result = handle_search(params, &state.server.db_path, &state.server.embedding).await;
+    let result = handle_search(
+        params,
+        &state.server.db_path,
+        state.server.config.embedding.dimensions,
+        &state.server.embedding,
+    )
+    .await;
 
     call_tool_result_to_response(result)
 }
@@ -344,7 +350,12 @@ async fn handle_search_memories(
 async fn handle_list_categories(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use crate::tools::handle_category_list;
 
-    let result = handle_category_list(&state.server.db_path, None).await;
+    let result = handle_category_list(
+        &state.server.db_path,
+        state.server.config.embedding.dimensions,
+        None,
+    )
+    .await;
     call_tool_result_to_response(result)
 }
 
