@@ -46,6 +46,7 @@ enum Command {
         since: Option<String>,
     },
     Category(CategoryCmd),
+    Room(RoomCmd),
     Export {
         #[arg(long, default_value = "json")]
         format: String,
@@ -102,6 +103,56 @@ enum CategorySubcommand {
         description: Option<String>,
         #[arg(long)]
         threshold: Option<f32>,
+    },
+}
+
+#[derive(Debug, Parser)]
+struct RoomCmd {
+    #[command(subcommand)]
+    command: RoomSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RoomSubcommand {
+    Create {
+        name: String,
+        #[arg(long)]
+        purpose: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        archived: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    Get {
+        id: String,
+    },
+    Post {
+        room: String,
+        content: String,
+        #[arg(long)]
+        sender: Option<String>,
+        #[arg(long)]
+        reply_to: Option<String>,
+    },
+    Read {
+        room: String,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        since: Option<String>,
+    },
+    Search {
+        room: String,
+        query: String,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    Delete {
+        id: String,
+        #[arg(long)]
+        hard: bool,
     },
 }
 
@@ -198,6 +249,47 @@ fn main() {
                     embedding.as_ref(),
                 )
                 .unwrap_or_else(|e| eprintln!("category update failed: {e}"));
+            }
+        },
+        Command::Room(room) => match room.command {
+            RoomSubcommand::Create { name, purpose } => {
+                commands::run_room_create(&config, &name, purpose.as_deref())
+                    .unwrap_or_else(|e| eprintln!("room create failed: {e}"));
+            }
+            RoomSubcommand::List { archived, limit } => {
+                commands::run_room_list(&config, archived, limit)
+                    .unwrap_or_else(|e| eprintln!("room list failed: {e}"));
+            }
+            RoomSubcommand::Get { id } => {
+                commands::run_room_get(&config, &id)
+                    .unwrap_or_else(|e| eprintln!("room show failed: {e}"));
+            }
+            RoomSubcommand::Post {
+                room,
+                content,
+                sender,
+                reply_to,
+            } => {
+                commands::run_room_post(
+                    &config,
+                    &room,
+                    &content,
+                    sender.as_deref(),
+                    reply_to.as_deref(),
+                )
+                .unwrap_or_else(|e| eprintln!("room post failed: {e}"));
+            }
+            RoomSubcommand::Read { room, limit, since } => {
+                commands::run_room_read(&config, &room, limit, since.as_deref())
+                    .unwrap_or_else(|e| eprintln!("room read failed: {e}"));
+            }
+            RoomSubcommand::Search { room, query, limit } => {
+                commands::run_room_search(&config, &room, &query, limit)
+                    .unwrap_or_else(|e| eprintln!("room search failed: {e}"));
+            }
+            RoomSubcommand::Delete { id, hard } => {
+                commands::run_room_delete(&config, &id, hard)
+                    .unwrap_or_else(|e| eprintln!("room delete failed: {e}"));
             }
         },
         Command::Export { format: _ } => {
@@ -610,6 +702,147 @@ mod tests {
     fn import_missing_file_errors() {
         let result = Cli::try_parse_from(["nous-mcp", "import"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn room_create() {
+        let cli = Cli::try_parse_from(["nous-mcp", "room", "create", "test-room"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Create { name, purpose },
+            }) => {
+                assert_eq!(name, "test-room");
+                assert!(purpose.is_none());
+            }
+            _ => panic!("expected Room Create"),
+        }
+    }
+
+    #[test]
+    fn room_create_with_purpose() {
+        let cli = Cli::try_parse_from([
+            "nous-mcp",
+            "room",
+            "create",
+            "dev-chat",
+            "--purpose",
+            "Dev discussion",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Create { name, purpose },
+            }) => {
+                assert_eq!(name, "dev-chat");
+                assert_eq!(purpose.as_deref(), Some("Dev discussion"));
+            }
+            _ => panic!("expected Room Create"),
+        }
+    }
+
+    #[test]
+    fn room_list_defaults() {
+        let cli = Cli::try_parse_from(["nous-mcp", "room", "list"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::List { archived, limit },
+            }) => {
+                assert!(!archived);
+                assert!(limit.is_none());
+            }
+            _ => panic!("expected Room List"),
+        }
+    }
+
+    #[test]
+    fn room_get() {
+        let cli = Cli::try_parse_from(["nous-mcp", "room", "get", "my-room"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Get { id },
+            }) => {
+                assert_eq!(id, "my-room");
+            }
+            _ => panic!("expected Room Get"),
+        }
+    }
+
+    #[test]
+    fn room_post() {
+        let cli = Cli::try_parse_from([
+            "nous-mcp",
+            "room",
+            "post",
+            "my-room",
+            "Hello, world!",
+            "--sender",
+            "agent-1",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command:
+                    RoomSubcommand::Post {
+                        room,
+                        content,
+                        sender,
+                        reply_to,
+                    },
+            }) => {
+                assert_eq!(room, "my-room");
+                assert_eq!(content, "Hello, world!");
+                assert_eq!(sender.as_deref(), Some("agent-1"));
+                assert!(reply_to.is_none());
+            }
+            _ => panic!("expected Room Post"),
+        }
+    }
+
+    #[test]
+    fn room_read() {
+        let cli =
+            Cli::try_parse_from(["nous-mcp", "room", "read", "dev-chat", "--limit", "10"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Read { room, limit, since },
+            }) => {
+                assert_eq!(room, "dev-chat");
+                assert_eq!(limit, Some(10));
+                assert!(since.is_none());
+            }
+            _ => panic!("expected Room Read"),
+        }
+    }
+
+    #[test]
+    fn room_search() {
+        let cli =
+            Cli::try_parse_from(["nous-mcp", "room", "search", "dev-chat", "linter"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Search { room, query, limit },
+            }) => {
+                assert_eq!(room, "dev-chat");
+                assert_eq!(query, "linter");
+                assert!(limit.is_none());
+            }
+            _ => panic!("expected Room Search"),
+        }
+    }
+
+    #[test]
+    fn room_delete() {
+        let cli =
+            Cli::try_parse_from(["nous-mcp", "room", "delete", "old-room", "--hard"]).unwrap();
+        match cli.command {
+            Command::Room(RoomCmd {
+                command: RoomSubcommand::Delete { id, hard },
+            }) => {
+                assert_eq!(id, "old-room");
+                assert!(hard);
+            }
+            _ => panic!("expected Room Delete"),
+        }
     }
 
     fn test_db_path() -> String {
