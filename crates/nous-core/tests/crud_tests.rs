@@ -5,7 +5,7 @@ use rusqlite::params;
 use std::str::FromStr;
 
 fn open_test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).expect("failed to open in-memory db")
+    MemoryDb::open(":memory:", None, 384).expect("failed to open in-memory db")
 }
 
 fn minimal_memory() -> NewMemory {

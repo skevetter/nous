@@ -8,7 +8,7 @@ use rusqlite::params;
 fn session_id_links_memory_to_otlp_log() {
     let session_id = "sess-corr-001";
 
-    let memory_db = MemoryDb::open(":memory:", None).unwrap();
+    let memory_db = MemoryDb::open(":memory:", None, 384).unwrap();
     let otlp_db = OtlpDb::open(":memory:", None).unwrap();
 
     let memory = NewMemory {
@@ -54,7 +54,7 @@ fn session_id_links_memory_to_otlp_log() {
 fn trace_id_links_memory_to_otlp_span() {
     let trace_id = "trace-corr-001";
 
-    let memory_db = MemoryDb::open(":memory:", None).unwrap();
+    let memory_db = MemoryDb::open(":memory:", None, 384).unwrap();
     let otlp_db = OtlpDb::open(":memory:", None).unwrap();
 
     let memory = NewMemory {
@@ -104,7 +104,7 @@ fn session_and_trace_ids_together() {
     let session_id = "sess-corr-002";
     let trace_id = "trace-corr-002";
 
-    let memory_db = MemoryDb::open(":memory:", None).unwrap();
+    let memory_db = MemoryDb::open(":memory:", None, 384).unwrap();
     let otlp_db = OtlpDb::open(":memory:", None).unwrap();
 
     let memory = NewMemory {
@@ -169,7 +169,7 @@ fn session_and_trace_ids_together() {
 
 #[test]
 fn correlation_ids_isolate_across_sessions() {
-    let memory_db = MemoryDb::open(":memory:", None).unwrap();
+    let memory_db = MemoryDb::open(":memory:", None, 384).unwrap();
     let otlp_db = OtlpDb::open(":memory:", None).unwrap();
 
     for i in 0..3 {

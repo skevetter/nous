@@ -31,7 +31,15 @@ impl NousServer {
         embedding: Box<dyn EmbeddingBackend>,
         db_path: &str,
     ) -> nous_shared::Result<Self> {
-        let db = MemoryDb::open(db_path, None)?;
+        let db = MemoryDb::open(db_path, None, embedding.dimensions())?;
+        db.register_and_activate_model(
+            embedding.model_id(),
+            None,
+            embedding.dimensions() as i64,
+            embedding.max_tokens() as i64,
+            config.embedding.chunk_size as i64,
+            config.embedding.chunk_overlap as i64,
+        )?;
         let classifier = CategoryClassifier::new(&db, embedding.as_ref())?;
         let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
         let (write_channel, write_handle) = WriteChannel::new(db);
@@ -1984,7 +1992,7 @@ mod tests {
         let json = extract_json(&result);
         assert!(!json["results"].as_array().unwrap().is_empty());
 
-        let db = MemoryDb::open(&db_path, None).unwrap();
+        let db = MemoryDb::open(&db_path, None, 384).unwrap();
         let count: i64 = db
             .connection()
             .query_row(
@@ -2028,7 +2036,7 @@ mod tests {
         let json = extract_json(&result);
         assert!(!json["entries"].as_array().unwrap().is_empty());
 
-        let db = MemoryDb::open(&db_path, None).unwrap();
+        let db = MemoryDb::open(&db_path, None, 384).unwrap();
         let count: i64 = db
             .connection()
             .query_row(

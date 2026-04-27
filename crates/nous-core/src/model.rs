@@ -78,6 +78,40 @@ impl MemoryDb {
         Ok(models)
     }
 
+    pub fn register_and_activate_model(
+        &self,
+        name: &str,
+        variant: Option<&str>,
+        dimensions: i64,
+        max_tokens: i64,
+        chunk_size: i64,
+        chunk_overlap: i64,
+    ) -> Result<i64> {
+        let existing: Option<i64> = match self.connection().query_row(
+            "SELECT id FROM models WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ) {
+            Ok(id) => Some(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
+
+        let id = match existing {
+            Some(id) => id,
+            None => self.register_model(
+                name,
+                variant,
+                dimensions,
+                max_tokens,
+                chunk_size,
+                chunk_overlap,
+            )?,
+        };
+        self.activate_model(id)?;
+        Ok(id)
+    }
+
     fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<Model> {
         Ok(Model {
             id: row.get(0)?,

@@ -7,7 +7,7 @@ use tempfile::NamedTempFile;
 
 fn temp_db_with_data() -> NamedTempFile {
     let file = NamedTempFile::new().expect("failed to create temp file");
-    let _db = MemoryDb::open(file.path().to_str().unwrap(), None).expect("failed to open db");
+    let _db = MemoryDb::open(file.path().to_str().unwrap(), None, 384).expect("failed to open db");
     file
 }
 

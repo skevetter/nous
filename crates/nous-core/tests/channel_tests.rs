@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 fn temp_db() -> (MemoryDb, NamedTempFile) {
     let file = NamedTempFile::new().expect("failed to create temp file");
-    let db = MemoryDb::open(file.path().to_str().unwrap(), None).expect("failed to open db");
+    let db = MemoryDb::open(file.path().to_str().unwrap(), None, 384).expect("failed to open db");
     (db, file)
 }
 
@@ -148,7 +148,7 @@ async fn update_via_channel() {
     drop(ch);
     handle.await.unwrap();
 
-    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None).unwrap();
+    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None, 384).unwrap();
     let recalled = verify_db.recall(&id).unwrap().expect("should find memory");
     assert_eq!(recalled.memory.title, "updated title");
     assert_eq!(recalled.memory.importance, Importance::High);
@@ -166,7 +166,7 @@ async fn forget_via_channel() {
     drop(ch);
     handle.await.unwrap();
 
-    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None).unwrap();
+    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None, 384).unwrap();
     let recalled = verify_db
         .recall(&id)
         .unwrap()
@@ -188,7 +188,7 @@ async fn relate_via_channel() {
     drop(ch);
     handle.await.unwrap();
 
-    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None).unwrap();
+    let verify_db = MemoryDb::open(file.path().to_str().unwrap(), None, 384).unwrap();
     let recalled = verify_db.recall(&id1).unwrap().expect("should find memory");
     assert!(
         recalled

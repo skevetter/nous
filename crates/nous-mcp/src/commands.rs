@@ -59,7 +59,7 @@ pub struct ExportCategory {
 
 pub fn run_export(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
 
     let data = build_export_data(&db)?;
     serde_json::to_writer_pretty(io::stdout().lock(), &data)?;
@@ -211,7 +211,7 @@ pub fn run_import(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
     let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
 
     let reader = std::fs::File::open(file)?;
@@ -316,7 +316,7 @@ pub fn import_data(
 
 pub fn run_status(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
     let conn = db.connection();
 
     let memory_count: i64 = conn.query_row(
@@ -354,7 +354,7 @@ pub fn run_category_list(
     source: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
 
     let source_filter = match source {
         Some(s) => {
@@ -396,7 +396,7 @@ pub fn run_category_add(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
 
     let parent_id = match parent {
         Some(parent_name) => {
@@ -435,7 +435,7 @@ pub fn run_re_embed(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
     let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
 
     let model_id = db.register_model(
@@ -500,7 +500,7 @@ pub fn run_re_classify(
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref())?;
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
     let classifier = CategoryClassifier::new(&db, embedding)?;
 
     let conn = db.connection();
@@ -568,7 +568,7 @@ mod tests {
     use nous_core::types::RelationType;
 
     fn test_db() -> MemoryDb {
-        MemoryDb::open(":memory:", None).unwrap()
+        MemoryDb::open(":memory:", None, 384).unwrap()
     }
 
     fn mock_embedding() -> MockEmbedding {

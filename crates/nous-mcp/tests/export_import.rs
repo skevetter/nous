@@ -6,7 +6,7 @@ use nous_mcp::commands::{build_export_data, import_data};
 use rusqlite::params;
 
 fn test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).unwrap()
+    MemoryDb::open(":memory:", None, 384).unwrap()
 }
 
 fn mock_embedding() -> MockEmbedding {
