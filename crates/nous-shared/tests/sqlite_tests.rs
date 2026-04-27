@@ -200,7 +200,10 @@ fn open_connection_migrates_plaintext_to_encrypted() {
     );
 
     let backup = tmp.path().join("plaintext.db.pre-encryption.bak");
-    assert!(backup.exists(), "backup should exist after migration");
+    assert!(
+        !backup.exists(),
+        "plaintext backup should be deleted after successful migration"
+    );
 
     let result = sqlite::open_connection(db_str, Some("wrong-key"));
     assert!(result.is_err(), "wrong key should fail on migrated DB");

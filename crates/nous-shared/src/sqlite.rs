@@ -64,9 +64,14 @@ fn migrate_plaintext_to_encrypted(path: &str, key: &str) -> Result<()> {
 
     let _ = std::fs::remove_file(&work_path);
 
+    if result.is_err() {
+        let _ = std::fs::remove_file(&encrypted_path);
+    }
+
     result?;
 
     std::fs::rename(&encrypted_path, path)?;
+    std::fs::remove_file(&backup_path)?;
     eprintln!("info: database successfully migrated to encrypted format");
     Ok(())
 }
