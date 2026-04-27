@@ -1,20 +1,19 @@
 use rusqlite::Connection;
 
-#[test]
-fn vec0_knn_round_trip() {
+fn vec0_knn_round_trip_with_dim(dim: usize) {
     let conn = Connection::open_in_memory().unwrap();
     nous_core::sqlite_vec::load(&conn).unwrap();
 
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE test_vecs USING vec0(id TEXT PRIMARY KEY, embedding float[384])",
-    )
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE test_vecs USING vec0(id TEXT PRIMARY KEY, embedding float[{dim}])"
+    ))
     .unwrap();
 
     let vectors: Vec<(&str, Vec<f32>)> = vec![
-        ("a", vec![1.0; 384]),
-        ("b", vec![0.0; 384]),
+        ("a", vec![1.0; dim]),
+        ("b", vec![0.0; dim]),
         ("c", {
-            let mut v = vec![0.5; 384];
+            let mut v = vec![0.5; dim];
             v[0] = 1.0;
             v
         }),
@@ -29,8 +28,7 @@ fn vec0_knn_round_trip() {
         .unwrap();
     }
 
-    // Query nearest to [1.0; 384] — should return "a" first (distance 0), then "c", then "b"
-    let query_vec: Vec<u8> = vec![1.0f32; 384]
+    let query_vec: Vec<u8> = vec![1.0f32; dim]
         .iter()
         .flat_map(|f| f.to_le_bytes())
         .collect();
@@ -56,4 +54,14 @@ fn vec0_knn_round_trip() {
     );
     assert_eq!(results[1].0, "c");
     assert_eq!(results[2].0, "b");
+}
+
+#[test]
+fn vec0_knn_round_trip() {
+    vec0_knn_round_trip_with_dim(384);
+}
+
+#[test]
+fn vec0_knn_round_trip_1024() {
+    vec0_knn_round_trip_with_dim(1024);
 }

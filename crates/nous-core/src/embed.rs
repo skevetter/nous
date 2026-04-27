@@ -149,7 +149,7 @@ impl OnnxBackendBuilder {
     }
 }
 
-fn detect_max_tokens(tokenizer_path: &Path) -> nous_shared::Result<usize> {
+pub fn detect_max_tokens(tokenizer_path: &Path) -> nous_shared::Result<usize> {
     let raw = std::fs::read_to_string(tokenizer_path)
         .map_err(|e| NousError::Embedding(format!("read tokenizer.json: {e}")))?;
     let json: serde_json::Value = serde_json::from_str(&raw)
@@ -361,7 +361,11 @@ fn last_real_token(encoding: &tokenizers::Encoding) -> usize {
         .unwrap_or(mask.len().saturating_sub(1))
 }
 
-fn mean_pool(encodings: &[tokenizers::Encoding], data: &[f32], dims: &[usize]) -> Vec<Vec<f32>> {
+pub fn mean_pool(
+    encodings: &[tokenizers::Encoding],
+    data: &[f32],
+    dims: &[usize],
+) -> Vec<Vec<f32>> {
     let seq_len = dims[1];
     let hidden = dims[2];
     encodings
