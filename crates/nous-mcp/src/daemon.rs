@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use axum::Router;
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
@@ -22,7 +23,7 @@ type Result<T> = std::result::Result<T, DaemonError>;
 pub struct Daemon {
     pid_file: PathBuf,
     socket_path: PathBuf,
-    listener: UnixListener,
+    listener: Option<UnixListener>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
     shutdown_timeout_secs: u64,
@@ -55,7 +56,7 @@ impl Daemon {
         Ok(Self {
             pid_file,
             socket_path,
-            listener,
+            listener: Some(listener),
             shutdown_tx,
             shutdown_rx,
             shutdown_timeout_secs: config.shutdown_timeout_secs,
@@ -86,7 +87,11 @@ impl Daemon {
     }
 
     pub fn listener(&self) -> &UnixListener {
-        &self.listener
+        self.listener.as_ref().expect("listener already taken")
+    }
+
+    fn take_listener(&mut self) -> UnixListener {
+        self.listener.take().expect("listener already taken")
     }
 
     pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
@@ -118,6 +123,32 @@ impl Daemon {
                 }
             }
         });
+    }
+
+    pub fn shutdown_sender(&self) -> watch::Sender<bool> {
+        self.shutdown_tx.clone()
+    }
+
+    pub async fn run(mut self, router: Router) -> Result<()> {
+        self.install_signal_handlers().await;
+
+        let mut shutdown_rx = self.shutdown_rx.clone();
+        let pid_file = self.pid_file.clone();
+        let socket_path = self.socket_path.clone();
+
+        let listener = self.take_listener();
+
+        let server =
+            axum::serve(listener, router.into_make_service()).with_graceful_shutdown(async move {
+                let _ = shutdown_rx.wait_for(|&v| v).await;
+            });
+
+        let result = server.await.map_err(DaemonError::Io);
+
+        let _ = fs::remove_file(&pid_file);
+        let _ = fs::remove_file(&socket_path);
+
+        result
     }
 
     pub fn shutdown(&self) -> Result<()> {
