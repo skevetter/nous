@@ -9,7 +9,7 @@ name = "nous_mcp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "nous-mcp"
+name = "nous"
 path = "src/main.rs"
 
 [dependencies]
@@ -19,6 +19,7 @@ nous-shared = { path = "../nous-shared" }
 rmcp = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
+csv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
