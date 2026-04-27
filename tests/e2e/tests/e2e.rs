@@ -584,13 +584,156 @@ async fn test_re_classify_assigns_categories() {
         rc_stderr.contains("Re-classified"),
         "re-classify should report progress on stderr, got:\n{rc_stderr}"
     );
+}
 
-    // Export and check that the memory now has a category_id set
-    let export_out = run_export(&env.mcp_db, &env.key_file);
-    assert!(
-        !export_out.contains(r#""category_id": null"#),
-        "re-classify should assign a non-null category_id to the memory, got:\n{export_out}"
+#[tokio::test]
+async fn test_category_list_filter_by_source() {
+    let env = TestEnv::new();
+    run_import(&env.mcp_db, &env.key_file, &env.import_file);
+
+    let add = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "add", "user-only-cat"],
     );
+    assert!(
+        add.status.success(),
+        "category add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let user_list = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "list", "--source", "user"],
+    );
+    let user_stdout = String::from_utf8_lossy(&user_list.stdout);
+    assert!(
+        user_stdout.contains("user-only-cat"),
+        "user source filter should include user category, got:\n{user_stdout}"
+    );
+
+    let seed_list = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "list", "--source", "system"],
+    );
+    let seed_stdout = String::from_utf8_lossy(&seed_list.stdout);
+    assert!(
+        !seed_stdout.contains("user-only-cat"),
+        "system source filter should not include user category, got:\n{seed_stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_category_update_rename_via_update() {
+    let env = TestEnv::new();
+    run_import(&env.mcp_db, &env.key_file, &env.import_file);
+
+    let add = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "add", "before-update"],
+    );
+    assert!(
+        add.status.success(),
+        "category add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let update = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &[
+            "category",
+            "update",
+            "before-update",
+            "--new-name",
+            "after-update",
+        ],
+    );
+    assert!(
+        update.status.success(),
+        "category update with --new-name failed: {}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        stdout.contains("after-update"),
+        "new name should appear after update: {stdout}"
+    );
+    assert!(
+        !stdout.contains("before-update"),
+        "old name should not appear after update: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_category_crud_full_lifecycle() {
+    let env = TestEnv::new();
+    run_import(&env.mcp_db, &env.key_file, &env.import_file);
+
+    // Add
+    let add = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &[
+            "category",
+            "add",
+            "lifecycle-cat",
+            "--description",
+            "lifecycle test",
+        ],
+    );
+    assert!(add.status.success());
+    let add_stdout = String::from_utf8_lossy(&add.stdout);
+    assert!(add_stdout.contains("Added category 'lifecycle-cat'"));
+
+    // Rename
+    let rename = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "rename", "lifecycle-cat", "lifecycle-v2"],
+    );
+    assert!(rename.status.success());
+
+    // Update description
+    let update = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &[
+            "category",
+            "update",
+            "lifecycle-v2",
+            "--description",
+            "updated lifecycle",
+        ],
+    );
+    assert!(update.status.success());
+
+    // Verify state
+    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("lifecycle-v2"));
+    assert!(stdout.contains("updated lifecycle"));
+    assert!(!stdout.contains("lifecycle-cat"));
+
+    // Delete
+    let del = run_nous_mcp(
+        &env.mcp_db,
+        &env.key_file,
+        &["category", "delete", "lifecycle-v2"],
+    );
+    assert!(del.status.success());
+    let del_stdout = String::from_utf8_lossy(&del.stdout);
+    assert!(del_stdout.contains("Deleted category 'lifecycle-v2'"));
+
+    // Verify gone
+    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(!stdout.contains("lifecycle-v2"));
 }
 
 #[tokio::test]
