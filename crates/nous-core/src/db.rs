@@ -576,6 +576,128 @@ impl MemoryDb {
         Ok(id)
     }
 
+    pub fn category_delete(&self, name: &str) -> Result<()> {
+        Self::category_delete_on(&self.conn, name)
+    }
+
+    pub(crate) fn category_delete_on(conn: &Connection, name: &str) -> Result<()> {
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    NousError::Internal(format!("category '{name}' not found"))
+                }
+                other => other.into(),
+            })?;
+
+        let child_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM categories WHERE parent_id = ?1",
+            params![cat_id],
+            |row| row.get(0),
+        )?;
+        if child_count > 0 {
+            return Err(NousError::Internal(
+                "cannot delete category with children; delete children first".into(),
+            ));
+        }
+
+        conn.execute(
+            "UPDATE memories SET category_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE category_id = ?1",
+            params![cat_id],
+        )?;
+        conn.execute("DELETE FROM categories WHERE id = ?1", params![cat_id])?;
+        Ok(())
+    }
+
+    pub fn category_rename(&self, old_name: &str, new_name: &str) -> Result<()> {
+        Self::category_rename_on(&self.conn, old_name, new_name)
+    }
+
+    pub(crate) fn category_rename_on(
+        conn: &Connection,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<()> {
+        let changed = conn.execute(
+            "UPDATE categories SET name = ?1 WHERE name = ?2",
+            params![new_name, old_name],
+        )?;
+        if changed == 0 {
+            return Err(NousError::Internal(format!(
+                "category '{old_name}' not found"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn category_update(
+        &self,
+        name: &str,
+        new_name: Option<&str>,
+        description: Option<&str>,
+        threshold: Option<f32>,
+    ) -> Result<()> {
+        Self::category_update_on(&self.conn, name, new_name, description, threshold)
+    }
+
+    pub(crate) fn category_update_on(
+        conn: &Connection,
+        name: &str,
+        new_name: Option<&str>,
+        description: Option<&str>,
+        threshold: Option<f32>,
+    ) -> Result<()> {
+        let cat_id: i64 = conn
+            .query_row(
+                "SELECT id FROM categories WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    NousError::Internal(format!("category '{name}' not found"))
+                }
+                other => other.into(),
+            })?;
+
+        let mut sets = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(n) = new_name {
+            sets.push(format!("name = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(n.to_string()));
+        }
+        if let Some(d) = description {
+            sets.push(format!("description = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(d.to_string()));
+        }
+        if let Some(t) = threshold {
+            sets.push(format!("threshold = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(t as f64));
+        }
+
+        if sets.is_empty() {
+            return Ok(());
+        }
+
+        let idx = param_values.len() + 1;
+        param_values.push(Box::new(cat_id));
+
+        let sql = format!(
+            "UPDATE categories SET {} WHERE id = ?{}",
+            sets.join(", "),
+            idx
+        );
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        conn.execute(&sql, params_ref.as_slice())?;
+        Ok(())
+    }
+
     fn row_to_category(row: &rusqlite::Row<'_>) -> rusqlite::Result<Category> {
         Ok(Category {
             id: row.get(0)?,

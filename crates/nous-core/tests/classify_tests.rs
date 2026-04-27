@@ -310,3 +310,160 @@ fn per_category_threshold_none_uses_global() {
         "high global threshold should reject when no per-category override"
     );
 }
+
+#[test]
+fn category_delete_removes_category() {
+    let db = open_test_db();
+    let _id = db
+        .category_add(
+            "to-delete",
+            None,
+            Some("will be deleted"),
+            CategorySource::User,
+        )
+        .unwrap();
+
+    db.category_delete("to-delete").unwrap();
+
+    let trees = db.category_list(None).unwrap();
+    let found = trees.iter().any(|t| t.category.name == "to-delete");
+    assert!(!found, "deleted category should not appear in list");
+}
+
+#[test]
+fn category_delete_refuses_when_children_exist() {
+    let db = open_test_db();
+    let parent_id = db
+        .category_add("parent-del", None, None, CategorySource::User)
+        .unwrap();
+    db.category_add("child-del", Some(parent_id), None, CategorySource::User)
+        .unwrap();
+
+    let result = db.category_delete("parent-del");
+    assert!(
+        result.is_err(),
+        "should refuse to delete category with children"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("children"),
+        "error should mention children"
+    );
+}
+
+#[test]
+fn category_delete_orphans_memories() {
+    let db = open_test_db();
+    let cat_id = db
+        .category_add("cat-orphan", None, None, CategorySource::User)
+        .unwrap();
+
+    let mem_id = db
+        .store(&NewMemory {
+            title: "categorized".into(),
+            content: "memory with category".into(),
+            memory_type: MemoryType::Fact,
+            source: None,
+            importance: Default::default(),
+            confidence: Default::default(),
+            tags: vec![],
+            workspace_path: None,
+            session_id: None,
+            trace_id: None,
+            agent_id: None,
+            agent_model: None,
+            valid_from: None,
+            category_id: Some(cat_id),
+        })
+        .unwrap();
+
+    db.category_delete("cat-orphan").unwrap();
+
+    let recalled = db.recall(&mem_id).unwrap().unwrap();
+    assert_eq!(
+        recalled.memory.category_id, None,
+        "orphaned memory should have category_id set to NULL"
+    );
+}
+
+#[test]
+fn category_delete_not_found() {
+    let db = open_test_db();
+    let result = db.category_delete("nonexistent");
+    assert!(result.is_err(), "should error for nonexistent category");
+}
+
+#[test]
+fn category_rename_changes_name() {
+    let db = open_test_db();
+    db.category_add("old-name", None, Some("desc"), CategorySource::User)
+        .unwrap();
+
+    db.category_rename("old-name", "new-name").unwrap();
+
+    let trees = db.category_list(None).unwrap();
+    let has_old = trees.iter().any(|t| t.category.name == "old-name");
+    let has_new = trees.iter().any(|t| t.category.name == "new-name");
+    assert!(!has_old, "old name should be gone");
+    assert!(has_new, "new name should exist");
+}
+
+#[test]
+fn category_rename_not_found() {
+    let db = open_test_db();
+    let result = db.category_rename("nonexistent", "new");
+    assert!(result.is_err(), "should error for nonexistent category");
+}
+
+#[test]
+fn category_update_changes_fields() {
+    let db = open_test_db();
+    db.category_add("update-me", None, Some("old desc"), CategorySource::User)
+        .unwrap();
+
+    db.category_update(
+        "update-me",
+        Some("updated-name"),
+        Some("new desc"),
+        Some(0.8),
+    )
+    .unwrap();
+
+    let trees = db.category_list(None).unwrap();
+    let cat = trees
+        .iter()
+        .find(|t| t.category.name == "updated-name")
+        .expect("renamed category should exist");
+    assert_eq!(cat.category.description.as_deref(), Some("new desc"));
+    assert!((cat.category.threshold.unwrap() - 0.8).abs() < 0.01);
+}
+
+#[test]
+fn category_update_partial_fields() {
+    let db = open_test_db();
+    db.category_add(
+        "partial-update",
+        None,
+        Some("original"),
+        CategorySource::User,
+    )
+    .unwrap();
+
+    db.category_update("partial-update", None, None, Some(0.5))
+        .unwrap();
+
+    let trees = db.category_list(None).unwrap();
+    let cat = trees
+        .iter()
+        .find(|t| t.category.name == "partial-update")
+        .expect("category should still exist with same name");
+    assert_eq!(cat.category.description.as_deref(), Some("original"));
+    assert!((cat.category.threshold.unwrap() - 0.5).abs() < 0.01);
+}
+
+#[test]
+fn category_update_not_found() {
+    let db = open_test_db();
+    let result = db.category_update("nonexistent", Some("new"), None, None);
+    assert!(result.is_err(), "should error for nonexistent category");
+}

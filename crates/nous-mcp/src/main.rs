@@ -79,6 +79,22 @@ enum CategorySubcommand {
         #[arg(long)]
         description: Option<String>,
     },
+    Delete {
+        name: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
+    Update {
+        name: String,
+        #[arg(long)]
+        new_name: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        threshold: Option<f32>,
+    },
 }
 
 fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::EmbeddingBackend> {
@@ -148,6 +164,32 @@ fn main() {
                     embedding.as_ref(),
                 )
                 .unwrap_or_else(|e| eprintln!("category add failed: {e}"));
+            }
+            CategorySubcommand::Delete { name } => {
+                commands::run_category_delete(&config, &name)
+                    .unwrap_or_else(|e| eprintln!("category delete failed: {e}"));
+            }
+            CategorySubcommand::Rename { old, new } => {
+                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                commands::run_category_rename(&config, &old, &new, embedding.as_ref())
+                    .unwrap_or_else(|e| eprintln!("category rename failed: {e}"));
+            }
+            CategorySubcommand::Update {
+                name,
+                new_name,
+                description,
+                threshold,
+            } => {
+                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                commands::run_category_update(
+                    &config,
+                    &name,
+                    new_name.as_deref(),
+                    description.as_deref(),
+                    threshold,
+                    embedding.as_ref(),
+                )
+                .unwrap_or_else(|e| eprintln!("category update failed: {e}"));
             }
         },
         Command::Export { format: _ } => {
@@ -503,7 +545,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_lists_all_15_tools() {
+    async fn server_lists_all_19_tools() {
         use rmcp::model::CallToolRequestParams;
         use rmcp::{ClientHandler, ServiceExt};
 
@@ -538,6 +580,10 @@ mod tests {
             "memory_relate",
             "memory_unrelate",
             "memory_category_suggest",
+            "memory_category_list",
+            "memory_category_add",
+            "memory_category_delete",
+            "memory_category_update",
             "memory_workspaces",
             "memory_tags",
             "memory_stats",
@@ -547,8 +593,8 @@ mod tests {
 
         assert_eq!(
             tools_result.tools.len(),
-            15,
-            "expected 15 tools, got {:?}",
+            19,
+            "expected 19 tools, got {:?}",
             tool_names
         );
 

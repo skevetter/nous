@@ -7,8 +7,8 @@ use nous_core::classify::CategoryClassifier;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
 use nous_core::types::{
-    Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations, NewMemory, RelationType,
-    SearchFilters, SearchMode,
+    CategorySource, Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations,
+    NewMemory, RelationType, SearchFilters, SearchMode,
 };
 use nous_shared::ids::MemoryId;
 use rmcp::model::CallToolResult;
@@ -121,6 +121,32 @@ pub struct MemoryWorkspacesParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MemoryTagsParams {
     pub prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryCategoryListParams {
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryCategoryAddParams {
+    pub name: String,
+    pub parent: Option<String>,
+    pub description: Option<String>,
+    pub threshold: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryCategoryDeleteParams {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryCategoryUpdateParams {
+    pub name: String,
+    pub new_name: Option<String>,
+    pub description: Option<String>,
+    pub threshold: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -536,6 +562,184 @@ pub async fn handle_category_suggest(
     {
         Ok(id) => ok_json(&serde_json::json!({"category_id": id})),
         Err(e) => err_result(&format!("category_suggest failed: {e}")),
+    }
+}
+
+pub async fn handle_category_list(db_path: &str, source: Option<String>) -> CallToolResult {
+    let source_filter = match source.as_deref() {
+        Some(s) => match s.parse::<CategorySource>() {
+            Ok(v) => Some(v),
+            Err(e) => return err_result(&format!("invalid source: {e}")),
+        },
+        None => None,
+    };
+
+    let db_path = db_path.to_owned();
+    match nous_shared::sqlite::spawn_blocking(move || {
+        let db = MemoryDb::open(&db_path, None, 384)?;
+        db.category_list(source_filter)
+    })
+    .await
+    {
+        Ok(trees) => {
+            fn tree_to_json(tree: &nous_core::types::CategoryTree) -> serde_json::Value {
+                serde_json::json!({
+                    "id": tree.category.id,
+                    "name": tree.category.name,
+                    "source": tree.category.source.to_string(),
+                    "description": tree.category.description,
+                    "threshold": tree.category.threshold,
+                    "children": tree.children.iter().map(tree_to_json).collect::<Vec<_>>(),
+                })
+            }
+            let list: Vec<serde_json::Value> = trees.iter().map(tree_to_json).collect();
+            ok_json(&serde_json::json!({"categories": list}))
+        }
+        Err(e) => err_result(&format!("category_list failed: {e}")),
+    }
+}
+
+pub async fn handle_category_add(
+    params: MemoryCategoryAddParams,
+    db_path: &str,
+    embedding: &Arc<dyn EmbeddingBackend>,
+) -> CallToolResult {
+    let db_path = db_path.to_owned();
+    let name = params.name;
+    let parent = params.parent;
+    let description = params.description;
+    let threshold = params.threshold;
+
+    let embed_text = match description.as_deref() {
+        Some(d) if !d.is_empty() => format!("{name} {d}"),
+        _ => name.clone(),
+    };
+    let embedding_blob = match embedding.embed_one(&embed_text) {
+        Ok(emb) => emb
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect::<Vec<u8>>(),
+        Err(e) => return err_result(&format!("embedding failed: {e}")),
+    };
+
+    match nous_shared::sqlite::spawn_blocking(move || {
+        let db = MemoryDb::open(&db_path, None, 384)?;
+
+        let parent_id = match parent.as_deref() {
+            Some(pname) => {
+                let id: i64 = db
+                    .connection()
+                    .query_row(
+                        "SELECT id FROM categories WHERE name = ?1 AND parent_id IS NULL",
+                        rusqlite::params![pname],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| {
+                        nous_shared::NousError::Internal(format!(
+                            "parent category '{pname}' not found"
+                        ))
+                    })?;
+                Some(id)
+            }
+            None => None,
+        };
+
+        let cat_id = db.category_add(
+            &name,
+            parent_id,
+            description.as_deref(),
+            CategorySource::User,
+        )?;
+
+        if let Some(t) = threshold {
+            db.connection().execute(
+                "UPDATE categories SET threshold = ?1 WHERE id = ?2",
+                rusqlite::params![t as f64, cat_id],
+            )?;
+        }
+
+        db.connection().execute(
+            "UPDATE categories SET embedding = ?1 WHERE id = ?2",
+            rusqlite::params![embedding_blob, cat_id],
+        )?;
+
+        Ok(serde_json::json!({"category_id": cat_id, "name": name}))
+    })
+    .await
+    {
+        Ok(json) => ok_json(&json),
+        Err(e) => err_result(&format!("category_add failed: {e}")),
+    }
+}
+
+pub async fn handle_category_delete(
+    params: MemoryCategoryDeleteParams,
+    write_channel: &WriteChannel,
+) -> CallToolResult {
+    match write_channel.category_delete(params.name.clone()).await {
+        Ok(()) => ok_json(&serde_json::json!({"status": "deleted", "name": params.name})),
+        Err(e) => err_result(&format!("{e}")),
+    }
+}
+
+pub async fn handle_category_update(
+    params: MemoryCategoryUpdateParams,
+    write_channel: &WriteChannel,
+    read_pool: &ReadPool,
+    embedding: &Arc<dyn EmbeddingBackend>,
+) -> CallToolResult {
+    let final_name = params
+        .new_name
+        .as_deref()
+        .unwrap_or(&params.name)
+        .to_owned();
+
+    let embedding_blob = if params.new_name.is_some() || params.description.is_some() {
+        let desc_for_embed = if params.description.is_some() {
+            params.description.clone()
+        } else {
+            let cat_name = params.name.clone();
+            read_pool
+                .with_conn(move |conn| {
+                    conn.query_row(
+                        "SELECT description FROM categories WHERE name = ?1",
+                        rusqlite::params![cat_name],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .map_err(Into::into)
+                })
+                .await
+                .ok()
+                .flatten()
+        };
+        let embed_text = match desc_for_embed.as_deref() {
+            Some(d) if !d.is_empty() => format!("{final_name} {d}"),
+            _ => final_name.clone(),
+        };
+        match embedding.embed_one(&embed_text) {
+            Ok(emb) => Some(
+                emb.iter()
+                    .flat_map(|f| f.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            ),
+            Err(e) => return err_result(&format!("embedding failed: {e}")),
+        }
+    } else {
+        None
+    };
+
+    match write_channel
+        .category_update(
+            params.name.clone(),
+            params.new_name.clone(),
+            params.description.clone(),
+            params.threshold,
+            embedding_blob,
+        )
+        .await
+    {
+        Ok(()) => ok_json(&serde_json::json!({"status": "updated", "name": final_name})),
+        Err(e) => err_result(&format!("{e}")),
     }
 }
 
