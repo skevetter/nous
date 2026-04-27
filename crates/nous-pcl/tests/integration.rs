@@ -119,15 +119,28 @@ fn end_to_end_git_collector_and_transform() {
         .unwrap();
     assert!(diff_count >= 1, "last commit changed hello.txt");
 
-    // Verify commit data
-    let message: String = conn
+    // Verify commit data by reading a known SHA from bronze, then querying silver
+    let first_line = std::fs::read_to_string(bronze_git.join("commit.jsonl"))
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let first_record: serde_json::Value = serde_json::from_str(&first_line).unwrap();
+    let known_sha = first_record["data"]["sha"].as_str().unwrap().to_string();
+    let known_msg = first_record["data"]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let db_message: String = conn
         .query_row(
-            "SELECT message FROM git_commits ORDER BY date DESC LIMIT 1",
-            [],
+            "SELECT message FROM git_commits WHERE sha = ?1",
+            rusqlite::params![known_sha],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(message, "update hello");
+    assert_eq!(db_message, known_msg);
 
     // Test metadata save/load
     let metadata = RunMetadata {
