@@ -1229,4 +1229,224 @@ mod tests {
         assert_eq!(data.memories.len(), 0);
         assert!(!data.categories.is_empty());
     }
+
+    fn test_file_db_path(suffix: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!(
+            "/tmp/nous-cmd-test-{}-{}-{}-{}.db",
+            suffix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            seq,
+        )
+    }
+
+    /// Create a test config with a dedicated encryption key file.
+    /// The key file is created with a fixed test key so both the test setup
+    /// and `run_trace` (which calls `resolve_db_key`) use the same key.
+    fn test_config(memory_db_path: &str, otlp_db_path: &str) -> (Config, String) {
+        let key_path = test_file_db_path("key");
+        let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        std::fs::write(&key_path, test_key).unwrap();
+
+        let mut config = Config::default();
+        config.memory.db_path = memory_db_path.to_string();
+        config.otlp.db_path = otlp_db_path.to_string();
+        config.encryption.db_key_file = key_path.clone();
+        (config, test_key.to_string())
+    }
+
+    fn store_traced_memory(
+        db: &MemoryDb,
+        title: &str,
+        content: &str,
+        trace_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> MemoryId {
+        let memory = NewMemory {
+            title: title.into(),
+            content: content.into(),
+            memory_type: nous_core::types::MemoryType::Decision,
+            source: Some("test".into()),
+            importance: nous_core::types::Importance::Moderate,
+            confidence: nous_core::types::Confidence::Moderate,
+            tags: vec![],
+            workspace_path: None,
+            session_id: session_id.map(String::from),
+            trace_id: trace_id.map(String::from),
+            agent_id: None,
+            agent_model: None,
+            valid_from: None,
+            category_id: None,
+        };
+        db.store(&memory).unwrap()
+    }
+
+    #[test]
+    fn run_trace_by_trace_id() {
+        let mem_path = test_file_db_path("mem");
+        let otlp_path = test_file_db_path("otlp");
+
+        let (config, test_key) = test_config(&mem_path, &otlp_path);
+
+        let mem_db = MemoryDb::open(&mem_path, Some(&test_key), 384).unwrap();
+        store_traced_memory(
+            &mem_db,
+            "Traced decision",
+            "A decision linked to a trace",
+            Some("trace-cmd-001"),
+            Some("sess-cmd-001"),
+        );
+        drop(mem_db);
+
+        let otlp_db = nous_otlp::db::OtlpDb::open(&otlp_path, None).unwrap();
+        otlp_db
+            .store_spans(&[nous_otlp::decode::Span {
+                trace_id: "trace-cmd-001".into(),
+                span_id: "span-cmd-001".into(),
+                parent_span_id: None,
+                name: "CLI test span".into(),
+                kind: 1,
+                start_time: 1000,
+                end_time: 2000,
+                status_code: 0,
+                status_message: None,
+                resource_attrs: "{}".into(),
+                span_attrs: "{}".into(),
+                events_json: "[]".into(),
+            }])
+            .unwrap();
+        otlp_db
+            .store_logs(&[nous_otlp::decode::LogEvent {
+                timestamp: 1500,
+                severity: "INFO".into(),
+                body: "CLI test log".into(),
+                resource_attrs: "{}".into(),
+                scope_attrs: "{}".into(),
+                log_attrs: "{}".into(),
+                session_id: Some("sess-cmd-001".into()),
+                trace_id: Some("trace-cmd-001".into()),
+                span_id: None,
+            }])
+            .unwrap();
+        drop(otlp_db);
+
+        let result = run_trace(&config, Some("trace-cmd-001"), None, Some("sess-cmd-001"));
+        assert!(result.is_ok(), "run_trace by trace_id should succeed");
+
+        let _ = std::fs::remove_file(&mem_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[test]
+    fn run_trace_by_memory_id() {
+        let mem_path = test_file_db_path("mem");
+        let otlp_path = test_file_db_path("otlp");
+
+        let (config, test_key) = test_config(&mem_path, &otlp_path);
+
+        let mem_db = MemoryDb::open(&mem_path, Some(&test_key), 384).unwrap();
+        let mid = store_traced_memory(
+            &mem_db,
+            "Memory for reverse trace",
+            "Decision with trace and session",
+            Some("trace-cmd-002"),
+            Some("sess-cmd-002"),
+        );
+        drop(mem_db);
+
+        let otlp_db = nous_otlp::db::OtlpDb::open(&otlp_path, None).unwrap();
+        otlp_db
+            .store_spans(&[nous_otlp::decode::Span {
+                trace_id: "trace-cmd-002".into(),
+                span_id: "span-cmd-002".into(),
+                parent_span_id: None,
+                name: "reverse trace span".into(),
+                kind: 2,
+                start_time: 3000,
+                end_time: 4000,
+                status_code: 0,
+                status_message: None,
+                resource_attrs: "{}".into(),
+                span_attrs: "{}".into(),
+                events_json: "[]".into(),
+            }])
+            .unwrap();
+        drop(otlp_db);
+
+        let result = run_trace(&config, None, Some(&mid.to_string()), None);
+        assert!(result.is_ok(), "run_trace by memory_id should succeed");
+
+        let _ = std::fs::remove_file(&mem_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[test]
+    fn run_trace_missing_otlp_db_errors() {
+        let (config, _) = test_config("/tmp/unused.db", "/tmp/nonexistent-otlp-db-12345.db");
+        let result = run_trace(&config, Some("trace-abc"), None, None);
+        assert!(result.is_err(), "run_trace should error when OTLP DB does not exist");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found"),
+            "error should mention OTLP DB not found, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn run_trace_no_args_errors() {
+        let mem_path = test_file_db_path("mem");
+        let otlp_path = test_file_db_path("otlp");
+
+        // Create the OTLP DB so the path exists
+        let _otlp_db = nous_otlp::db::OtlpDb::open(&otlp_path, None).unwrap();
+
+        let (config, _) = test_config(&mem_path, &otlp_path);
+        let result = run_trace(&config, None, None, None);
+        assert!(result.is_err(), "run_trace without trace_id or memory_id should error");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("--trace-id") || err_msg.contains("--memory-id"),
+            "error should mention required args, got: {err_msg}"
+        );
+
+        let _ = std::fs::remove_file(&mem_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[test]
+    fn run_trace_memory_without_correlation_ids_errors() {
+        let mem_path = test_file_db_path("mem");
+        let otlp_path = test_file_db_path("otlp");
+
+        let (config, test_key) = test_config(&mem_path, &otlp_path);
+
+        let mem_db = MemoryDb::open(&mem_path, Some(&test_key), 384).unwrap();
+        let mid = store_traced_memory(
+            &mem_db,
+            "No correlation IDs",
+            "Memory without trace or session",
+            None,
+            None,
+        );
+        drop(mem_db);
+
+        let _otlp_db = nous_otlp::db::OtlpDb::open(&otlp_path, None).unwrap();
+
+        let result = run_trace(&config, None, Some(&mid.to_string()), None);
+        assert!(result.is_err(), "run_trace should error when memory has no correlation IDs");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("no trace_id or session_id"),
+            "error should mention missing IDs, got: {err_msg}"
+        );
+
+        let _ = std::fs::remove_file(&mem_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
 }

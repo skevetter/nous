@@ -2519,4 +2519,218 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(&otlp_path);
     }
+
+    #[tokio::test]
+    async fn otlp_trace_context_nonexistent_trace_returns_empty() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+        let otlp_path = test_otlp_db_path();
+
+        let result = handle_otlp_trace_context(
+            OtlpTraceContextParams {
+                trace_id: "nonexistent-trace-id".into(),
+                session_id: Some("nonexistent-session".into()),
+            },
+            &otlp_path,
+            &server.read_pool,
+        )
+        .await;
+
+        assert!(is_success(&result), "non-existent trace should succeed with empty results");
+        let json = extract_json(&result);
+        assert!(json["memories"].as_array().unwrap().is_empty());
+        assert!(json["spans"].as_array().unwrap().is_empty());
+        assert!(json["logs"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_trace_id() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        // Store a memory with trace_id
+        handle_store(
+            MemoryStoreParams {
+                title: "traced search target".into(),
+                content: "memory searchable with trace filter".into(),
+                memory_type: "fact".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: None,
+                trace_id: Some("trace-search-001".into()),
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+
+        // Store another memory without trace_id
+        handle_store(
+            MemoryStoreParams {
+                title: "untraced search target".into(),
+                content: "memory searchable without trace".into(),
+                memory_type: "fact".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: None,
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "searchable".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                trace_id: Some("trace-search-001".into()),
+                session_id: None,
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1, "only the memory with matching trace_id should be returned");
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("traced search target")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_session_id() {
+        let db_path = test_db_path();
+        let server = test_server(&db_path);
+
+        // Store a memory with session_id
+        handle_store(
+            MemoryStoreParams {
+                title: "sessioned search target".into(),
+                content: "memory searchable with session filter".into(),
+                memory_type: "fact".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: Some("sess-search-001".into()),
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+
+        // Store another memory with a different session_id
+        handle_store(
+            MemoryStoreParams {
+                title: "other session target".into(),
+                content: "memory searchable different session".into(),
+                memory_type: "fact".into(),
+                tags: vec![],
+                source: None,
+                importance: None,
+                confidence: None,
+                workspace_path: None,
+                session_id: Some("sess-search-other".into()),
+                trace_id: None,
+                agent_id: None,
+                agent_model: None,
+                valid_from: None,
+                category_id: None,
+            },
+            &server.write_channel,
+            &server.embedding,
+            &server.classifier,
+            &server.chunker,
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let result = handle_search(
+            MemorySearchParams {
+                query: "searchable".into(),
+                mode: Some("fts".into()),
+                memory_type: None,
+                category_id: None,
+                workspace_id: None,
+                trace_id: None,
+                session_id: Some("sess-search-001".into()),
+                importance: None,
+                confidence: None,
+                tags: None,
+                archived: None,
+                since: None,
+                until: None,
+                valid_only: None,
+                limit: None,
+            },
+            &db_path,
+            &server.embedding,
+        )
+        .await;
+
+        assert!(is_success(&result));
+        let json = extract_json(&result);
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1, "only the memory with matching session_id should be returned");
+        assert!(
+            results[0]["memory"]["title"]
+                .as_str()
+                .unwrap()
+                .contains("sessioned search target")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
 }
