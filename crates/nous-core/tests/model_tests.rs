@@ -142,3 +142,54 @@ fn activate_nonexistent_model_errors() {
         .expect("original model still active");
     assert_eq!(active.id, a);
 }
+
+#[test]
+fn register_model_stores_separate_max_tokens() {
+    let db = open_test_db();
+    let id = db
+        .register_model("bge-small", Some("fp16"), 384, 512, 256, 32)
+        .unwrap();
+
+    let model = db
+        .list_models()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap();
+
+    assert_eq!(model.dimensions, 384);
+    assert_eq!(model.max_tokens, 512);
+    assert_ne!(
+        model.dimensions, model.max_tokens,
+        "dimensions and max_tokens should be stored independently"
+    );
+}
+
+#[test]
+fn multi_model_isolation() {
+    let db = open_test_db();
+    let a = db
+        .register_model("model-encoder", None, 384, 512, 256, 32)
+        .unwrap();
+    let b = db
+        .register_model("model-decoder", Some("q4f16"), 1024, 8192, 512, 64)
+        .unwrap();
+
+    db.activate_model(a).unwrap();
+    let active = db.active_model().unwrap().expect("should have active");
+    assert_eq!(active.id, a);
+    assert_eq!(active.name, "model-encoder");
+    assert_eq!(active.dimensions, 384);
+
+    db.activate_model(b).unwrap();
+    let active = db.active_model().unwrap().expect("should have active");
+    assert_eq!(active.id, b);
+    assert_eq!(active.name, "model-decoder");
+    assert_eq!(active.dimensions, 1024);
+    assert_eq!(active.max_tokens, 8192);
+
+    // Verify model A is no longer active
+    let models = db.list_models().unwrap();
+    let model_a = models.iter().find(|m| m.id == a).unwrap();
+    assert!(!model_a.active, "model-encoder should be deactivated");
+}
