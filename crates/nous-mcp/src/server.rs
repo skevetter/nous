@@ -188,6 +188,14 @@ impl NousServer {
     async fn memory_sql(&self, params: Parameters<MemorySqlParams>) -> CallToolResult {
         handle_sql(params.0, &self.read_pool).await
     }
+
+    #[tool(
+        name = "pcl_snapshot",
+        description = "Get a pre-computed snapshot of a code entity (branch, repo). Returns agent-ready markdown at the requested detail level."
+    )]
+    async fn pcl_snapshot(&self, params: Parameters<PclSnapshotParams>) -> CallToolResult {
+        handle_pcl_snapshot(params.0).await
+    }
 }
 
 #[tool_handler(name = "nous-mcp", version = "0.1.0")]

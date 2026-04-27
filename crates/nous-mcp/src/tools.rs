@@ -126,6 +126,13 @@ pub struct MemorySqlParams {
     pub query: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PclSnapshotParams {
+    pub subject: String,
+    pub level: Option<String>,
+    pub scope: Option<String>,
+}
+
 fn ok_json(value: &serde_json::Value) -> CallToolResult {
     CallToolResult::success(vec![rmcp::model::Content::text(value.to_string())])
 }
@@ -841,5 +848,52 @@ pub async fn handle_context(params: MemoryContextParams, db_path: &str) -> CallT
     ok_json(&serde_json::json!({
         "entries": entries_json,
         "count": entries_json.len(),
+    }))
+}
+
+pub async fn handle_pcl_snapshot(params: PclSnapshotParams) -> CallToolResult {
+    let level =
+        nous_pcl::SnapshotLevel::from_str_loose(params.level.as_deref().unwrap_or("standard"));
+
+    let pcl_dir = nous_pcl::PclDirectory::default();
+    let gold_dir = pcl_dir.gold_dir();
+
+    let index_path = gold_dir.join("_index.json");
+    if let Ok(content) = std::fs::read_to_string(&index_path)
+        && let Ok(index) = serde_json::from_str::<nous_pcl::snapshot::SnapshotIndex>(&content)
+        && let Some(meta) = index.entries.iter().find(|e| e.subject == params.subject)
+        && !meta.is_stale()
+        && let Ok(snapshot_content) = std::fs::read_to_string(gold_dir.join(&meta.path))
+    {
+        return ok_json(&serde_json::json!({
+            "content": snapshot_content,
+            "generated_at": meta.generated_at,
+            "is_fresh": true,
+        }));
+    }
+
+    let silver_path = pcl_dir.silver_dir().join("silver.db");
+    let conn = match rusqlite::Connection::open(&silver_path) {
+        Ok(c) => c,
+        Err(e) => return err_result(&format!("failed to open silver DB: {e}")),
+    };
+
+    let snap = nous_pcl::SnapshotGenerator::new(&pcl_dir, &conn);
+
+    let snapshot_content = match snap.generate_task_snapshot(&params.subject, level) {
+        Ok(c) => c,
+        Err(e) => return err_result(&format!("snapshot generation failed: {e}")),
+    };
+
+    match snap.write_snapshot(&params.subject, &snapshot_content, level) {
+        Ok(_) => {}
+        Err(e) => return err_result(&format!("failed to write gold snapshot: {e}")),
+    }
+
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    ok_json(&serde_json::json!({
+        "content": snapshot_content,
+        "generated_at": generated_at,
+        "is_fresh": true,
     }))
 }

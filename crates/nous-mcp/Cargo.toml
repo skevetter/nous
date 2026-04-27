@@ -14,9 +14,11 @@ path = "src/main.rs"
 
 [dependencies]
 nous-core = { path = "../nous-core" }
+nous-pcl = { path = "../nous-pcl" }
 nous-shared = { path = "../nous-shared" }
 rmcp = { workspace = true }
 rusqlite = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

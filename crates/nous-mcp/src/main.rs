@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_lists_all_15_tools() {
+    async fn server_lists_all_16_tools() {
         use rmcp::model::CallToolRequestParams;
         use rmcp::{ClientHandler, ServiceExt};
 
@@ -543,12 +543,13 @@ mod tests {
             "memory_stats",
             "memory_schema",
             "memory_sql",
+            "pcl_snapshot",
         ];
 
         assert_eq!(
             tools_result.tools.len(),
-            15,
-            "expected 15 tools, got {:?}",
+            16,
+            "expected 16 tools, got {:?}",
             tool_names
         );
 
