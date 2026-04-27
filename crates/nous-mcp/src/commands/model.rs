@@ -150,11 +150,13 @@ pub fn run_model_info(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_model_register(
     config: &Config,
     name: &str,
     variant: &str,
     dimensions: i64,
+    max_tokens: i64,
     chunk_size: i64,
     chunk_overlap: i64,
     format: &OutputFormat,
@@ -164,7 +166,7 @@ pub fn run_model_register(
         name,
         Some(variant),
         dimensions,
-        dimensions,
+        max_tokens,
         chunk_size,
         chunk_overlap,
     )?;
@@ -264,12 +266,15 @@ pub fn run_model_switch(
         }
     }
 
+    if dims_differ {
+        db.reset_embeddings(target.dimensions as usize)?;
+    }
+
     db.activate_model(id)?;
 
     let mut messages = vec![format!("Model switched: {} ({})", target.id, target.name)];
 
     if dims_differ {
-        db.reset_embeddings(target.dimensions as usize)?;
         messages.push(format!(
             "Embeddings reset: vec0 table recreated with {} dimensions",
             target.dimensions
