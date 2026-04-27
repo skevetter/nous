@@ -34,9 +34,10 @@ impl NousServer {
         config: Config,
         embedding: Box<dyn EmbeddingBackend>,
         db_path: &str,
+        key: Option<&str>,
     ) -> nous_shared::Result<Self> {
         let new_dim = embedding.dimensions();
-        let db = MemoryDb::open(db_path, None, new_dim)?;
+        let db = MemoryDb::open(db_path, key, new_dim)?;
 
         let old_dim = db
             .active_model()
@@ -69,7 +70,7 @@ impl NousServer {
         )?;
         let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
         let (write_channel, write_handle) = WriteChannel::new(db);
-        let read_pool = ReadPool::new(db_path, None, 4)?;
+        let read_pool = ReadPool::new(db_path, key, 4)?;
         let embedding = Arc::from(embedding);
 
         let otlp_path = if config.otlp.db_path.is_empty() {
@@ -564,7 +565,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        NousServer::new(cfg, embedding, db_path).unwrap()
+        NousServer::new(cfg, embedding, db_path, None).unwrap()
     }
 
     fn extract_json(result: &CallToolResult) -> serde_json::Value {
@@ -2777,5 +2778,51 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn server_and_cli_use_same_encryption_key() {
+        let db_path = test_db_path();
+        let key = "test-encryption-key-abc123";
+
+        {
+            let db = MemoryDb::open(&db_path, Some(key), 384).unwrap();
+            db.connection()
+                .execute(
+                    "INSERT INTO memories (id, title, content, memory_type, importance, confidence, archived, created_at, updated_at)
+                     VALUES ('test-id', 'test', 'content', 'fact', 'moderate', 'moderate', 0, datetime('now'), datetime('now'))",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let mut cfg = Config::default();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
+        let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+        let _server = NousServer::new(cfg, embedding, &db_path, Some(key)).unwrap();
+
+        let db = MemoryDb::open(&db_path, Some(key), 384).unwrap();
+        let count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            count >= 1,
+            "CLI path should read server-created encrypted DB"
+        );
+
+        let wrong_key_result = MemoryDb::open(&db_path, Some("wrong-key"), 384);
+        assert!(
+            wrong_key_result.is_err(),
+            "wrong key should fail to open encrypted DB"
+        );
+
+        let no_key_result = MemoryDb::open(&db_path, None, 384);
+        assert!(
+            no_key_result.is_err(),
+            "opening encrypted DB without key should fail"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }

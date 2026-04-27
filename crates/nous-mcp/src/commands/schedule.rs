@@ -8,9 +8,10 @@ use crate::commands::{OutputFormat, print_json};
 use crate::config::Config;
 
 fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
     Ok(MemoryDb::open(
-        &config.memory.db_path,
+        &db_path,
         db_key.as_deref(),
         config.embedding.dimensions,
     )?)

@@ -15,12 +15,9 @@ use crate::config::Config;
 use super::{ExportCategory, ExportData, ExportMemory, ExportRelationship, print_csv, print_json};
 
 pub fn run_export(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(
-        &config.memory.db_path,
-        db_key.as_deref(),
-        config.embedding.dimensions,
-    )?;
+    let db = MemoryDb::open(&db_path, db_key.as_deref(), config.embedding.dimensions)?;
 
     let data = build_export_data(&db)?;
     serde_json::to_writer_pretty(io::stdout().lock(), &data)?;
@@ -172,12 +169,9 @@ pub fn run_import(
     file: &Path,
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(
-        &config.memory.db_path,
-        db_key.as_deref(),
-        config.embedding.dimensions,
-    )?;
+    let db = MemoryDb::open(&db_path, db_key.as_deref(), config.embedding.dimensions)?;
     let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
 
     let reader = std::fs::File::open(file)?;
@@ -282,12 +276,9 @@ pub fn run_status(
     config: &Config,
     format: &OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(
-        &config.memory.db_path,
-        db_key.as_deref(),
-        config.embedding.dimensions,
-    )?;
+    let db = MemoryDb::open(&db_path, db_key.as_deref(), config.embedding.dimensions)?;
     let conn = db.connection();
 
     let memory_count: i64 = conn.query_row(
@@ -360,12 +351,9 @@ pub fn run_re_embed(
     config: &Config,
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(
-        &config.memory.db_path,
-        db_key.as_deref(),
-        config.embedding.dimensions,
-    )?;
+    let db = MemoryDb::open(&db_path, db_key.as_deref(), config.embedding.dimensions)?;
     let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
 
     let model_id = db.register_model(
@@ -433,12 +421,9 @@ pub fn run_re_classify(
     since: Option<&str>,
     embedding: &dyn EmbeddingBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = super::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let db = MemoryDb::open(
-        &config.memory.db_path,
-        db_key.as_deref(),
-        config.embedding.dimensions,
-    )?;
+    let db = MemoryDb::open(&db_path, db_key.as_deref(), config.embedding.dimensions)?;
     let classifier = CategoryClassifier::new(
         &db,
         embedding,
@@ -497,7 +482,8 @@ pub fn run_rotate_key(
         return Err("new key must differ from current key".into());
     }
 
-    let db_path = std::path::Path::new(&config.memory.db_path);
+    let db_path_str = super::expand_tilde(&config.memory.db_path);
+    let db_path = std::path::Path::new(&db_path_str);
     nous_shared::sqlite::rotate_key(db_path, &current_key, &new_key)?;
     eprintln!("Key rotated successfully");
     Ok(())

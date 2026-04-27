@@ -213,7 +213,7 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(MockEmbedding::new(384));
-        std::sync::Arc::new(NousServer::new(cfg, embedding, db_path).unwrap())
+        std::sync::Arc::new(NousServer::new(cfg, embedding, db_path, None).unwrap())
     }
 
     fn test_config(dir: &std::path::Path) -> DaemonConfig {

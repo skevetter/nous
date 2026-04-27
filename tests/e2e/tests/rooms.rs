@@ -26,6 +26,7 @@ fn test_server(db_path: &str) -> NousServer {
         Config::default(),
         Box::new(MockEmbedding::new(384)),
         db_path,
+        None,
     )
     .unwrap()
 }
