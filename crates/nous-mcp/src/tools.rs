@@ -1919,7 +1919,13 @@ pub async fn handle_schedule_runs(
         None => None,
     };
 
-    let since = params.since.as_deref().and_then(|s| s.parse::<i64>().ok());
+    let since = match params.since.as_deref() {
+        Some(s) => match s.parse::<i64>() {
+            Ok(v) => Some(v),
+            Err(e) => return err_result(&format!("invalid since: {e}")),
+        },
+        None => None,
+    };
     let schedule_id = params.schedule_id.clone();
     let limit = params.limit;
 

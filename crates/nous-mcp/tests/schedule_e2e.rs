@@ -316,3 +316,162 @@ async fn pause_resume_cycle() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+#[tokio::test]
+async fn desired_outcome_string_match() {
+    let (client, db_path) = setup().await;
+
+    let create_result = client
+        .call_tool(call_params(
+            "schedule_create",
+            serde_json::json!({
+                "name": "e2e-outcome-match",
+                "cron_expr": "0 0 * * *",
+                "action_type": "mcp_tool",
+                "action_payload": r#"{"tool":"memory_stats","args":{}}"#,
+                "desired_outcome": "\"total\"",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&create_result, "schedule_create");
+    let id = extract_json(&create_result)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let trigger_result = client
+        .call_tool(call_params(
+            "schedule_trigger",
+            serde_json::json!({"id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&trigger_result, "schedule_trigger");
+
+    let runs_result = client
+        .call_tool(call_params(
+            "schedule_runs",
+            serde_json::json!({"schedule_id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&runs_result, "schedule_runs");
+    let runs = extract_json(&runs_result)["runs"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!runs.is_empty());
+    assert_eq!(
+        runs[0]["status"], "completed",
+        "string match should produce completed status"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn desired_outcome_regex_match() {
+    let (client, db_path) = setup().await;
+
+    let create_result = client
+        .call_tool(call_params(
+            "schedule_create",
+            serde_json::json!({
+                "name": "e2e-outcome-regex",
+                "cron_expr": "0 0 * * *",
+                "action_type": "mcp_tool",
+                "action_payload": r#"{"tool":"memory_stats","args":{}}"#,
+                "desired_outcome": "/\"total\":\\d+/",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&create_result, "schedule_create");
+    let id = extract_json(&create_result)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let trigger_result = client
+        .call_tool(call_params(
+            "schedule_trigger",
+            serde_json::json!({"id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&trigger_result, "schedule_trigger");
+
+    let runs_result = client
+        .call_tool(call_params(
+            "schedule_runs",
+            serde_json::json!({"schedule_id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&runs_result, "schedule_runs");
+    let runs = extract_json(&runs_result)["runs"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!runs.is_empty());
+    assert_eq!(
+        runs[0]["status"], "completed",
+        "regex match should produce completed status"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
+async fn desired_outcome_mismatch_fails() {
+    let (client, db_path) = setup().await;
+
+    let create_result = client
+        .call_tool(call_params(
+            "schedule_create",
+            serde_json::json!({
+                "name": "e2e-outcome-mismatch",
+                "cron_expr": "0 0 * * *",
+                "action_type": "mcp_tool",
+                "action_payload": r#"{"tool":"memory_stats","args":{}}"#,
+                "desired_outcome": "this_string_will_never_appear_in_output",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&create_result, "schedule_create");
+    let id = extract_json(&create_result)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let trigger_result = client
+        .call_tool(call_params(
+            "schedule_trigger",
+            serde_json::json!({"id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&trigger_result, "schedule_trigger");
+
+    let runs_result = client
+        .call_tool(call_params(
+            "schedule_runs",
+            serde_json::json!({"schedule_id": id}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&runs_result, "schedule_runs");
+    let runs = extract_json(&runs_result)["runs"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!runs.is_empty());
+    assert_eq!(
+        runs[0]["status"], "failed",
+        "outcome mismatch should produce failed status"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}

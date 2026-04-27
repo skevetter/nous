@@ -430,6 +430,7 @@ async fn dispatch_mcp_tool(
     }
 }
 
+// OTLP span context requires passing schedule metadata, timing, and result fields individually.
 #[allow(clippy::too_many_arguments)]
 fn emit_otlp_span(
     otlp_db_path: Option<&str>,
@@ -530,11 +531,7 @@ fn evaluate_desired_outcome(desired: Option<&str>, output: &str) -> OutcomeResul
                 if re.is_match(output) {
                     OutcomeResult::Pass
                 } else {
-                    let summary = if output.len() > 100 {
-                        format!("{}...", &output[..100])
-                    } else {
-                        output.to_string()
-                    };
+                    let summary = truncate_output(output, 100);
                     OutcomeResult::Mismatch(format!(
                         "outcome mismatch: expected {desired}, got {summary}"
                     ))
@@ -547,11 +544,7 @@ fn evaluate_desired_outcome(desired: Option<&str>, output: &str) -> OutcomeResul
     } else if output.contains(desired) {
         OutcomeResult::Pass
     } else {
-        let summary = if output.len() > 100 {
-            format!("{}...", &output[..100])
-        } else {
-            output.to_string()
-        };
+        let summary = truncate_output(output, 100);
         OutcomeResult::Mismatch(format!(
             "outcome mismatch: expected {desired}, got {summary}"
         ))
