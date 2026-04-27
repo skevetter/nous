@@ -1,6 +1,7 @@
 pub mod channel;
 pub mod chunk;
 pub mod classify;
+pub mod cron_parser;
 pub mod db;
 pub mod embed;
 pub mod model;
