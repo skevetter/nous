@@ -10,6 +10,7 @@ use nous_core::types::{
     CategorySource, Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations,
     NewMemory, RelationType, SearchFilters, SearchMode,
 };
+use nous_otlp::db::OtlpDb;
 use nous_shared::ids::MemoryId;
 use rmcp::model::CallToolResult;
 use rmcp::schemars;
@@ -152,6 +153,17 @@ pub struct MemoryCategoryUpdateParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MemorySqlParams {
     pub query: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OtlpTraceContextParams {
+    pub trace_id: String,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OtlpMemoryContextParams {
+    pub memory_id: String,
 }
 
 fn ok_json(value: &serde_json::Value) -> CallToolResult {
@@ -1051,5 +1063,165 @@ pub async fn handle_context(params: MemoryContextParams, db_path: &str) -> CallT
     ok_json(&serde_json::json!({
         "entries": entries_json,
         "count": entries_json.len(),
+    }))
+}
+
+fn span_to_json(s: &nous_otlp::decode::Span) -> serde_json::Value {
+    serde_json::json!({
+        "trace_id": s.trace_id,
+        "span_id": s.span_id,
+        "parent_span_id": s.parent_span_id,
+        "name": s.name,
+        "kind": s.kind,
+        "start_time": s.start_time,
+        "end_time": s.end_time,
+        "status_code": s.status_code,
+        "status_message": s.status_message,
+        "resource_attrs": s.resource_attrs,
+        "span_attrs": s.span_attrs,
+        "events_json": s.events_json,
+    })
+}
+
+fn log_to_json(l: &nous_otlp::decode::LogEvent) -> serde_json::Value {
+    serde_json::json!({
+        "timestamp": l.timestamp,
+        "severity": l.severity,
+        "body": l.body,
+        "resource_attrs": l.resource_attrs,
+        "scope_attrs": l.scope_attrs,
+        "log_attrs": l.log_attrs,
+        "session_id": l.session_id,
+        "trace_id": l.trace_id,
+        "span_id": l.span_id,
+    })
+}
+
+pub async fn handle_otlp_trace_context(
+    params: OtlpTraceContextParams,
+    otlp_db_path: &str,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    if otlp_db_path.is_empty() {
+        return err_result("OTLP database not configured");
+    }
+
+    let trace_id = params.trace_id.clone();
+    let session_id = params.session_id.clone();
+
+    let tid = params.trace_id;
+    let memories = match read_pool
+        .with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, content, memory_type, session_id, trace_id, created_at
+                 FROM memories WHERE trace_id = ?1 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![tid], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "content": row.get::<_, String>(2)?,
+                    "memory_type": row.get::<_, String>(3)?,
+                    "session_id": row.get::<_, Option<String>>(4)?,
+                    "trace_id": row.get::<_, Option<String>>(5)?,
+                    "created_at": row.get::<_, String>(6)?,
+                }))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return err_result(&format!("memory query failed: {e}")),
+    };
+
+    let otlp_path = otlp_db_path.to_owned();
+    let trace_id_clone = trace_id.clone();
+    let session_id_clone = session_id.clone();
+    let (spans, logs) = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = OtlpDb::open(&otlp_path, None)?;
+        let spans = db.query_spans(&trace_id_clone, None, None)?;
+        let logs = match &session_id_clone {
+            Some(sid) => db.query_logs(sid, None, None)?,
+            None => vec![],
+        };
+        Ok((spans, logs))
+    })
+    .await
+    {
+        Ok((s, l)) => (s, l),
+        Err(e) => return err_result(&format!("OTLP query failed: {e}")),
+    };
+
+    let spans_json: Vec<serde_json::Value> = spans.iter().map(span_to_json).collect();
+    let logs_json: Vec<serde_json::Value> = logs.iter().map(log_to_json).collect();
+
+    ok_json(&serde_json::json!({
+        "memories": memories,
+        "spans": spans_json,
+        "logs": logs_json,
+    }))
+}
+
+pub async fn handle_otlp_memory_context(
+    params: OtlpMemoryContextParams,
+    otlp_db_path: &str,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    if otlp_db_path.is_empty() {
+        return err_result("OTLP database not configured");
+    }
+
+    let id = match params.memory_id.parse::<MemoryId>() {
+        Ok(v) => v,
+        Err(e) => return err_result(&format!("invalid memory_id: {e}")),
+    };
+
+    let memory = match read_pool
+        .with_conn({
+            let id = id.clone();
+            move |conn| MemoryDb::recall_on(conn, &id)
+        })
+        .await
+    {
+        Ok(Some(m)) => m,
+        Ok(None) => return err_result("memory not found"),
+        Err(e) => return err_result(&format!("recall failed: {e}")),
+    };
+
+    let trace_id = memory.memory.trace_id.clone();
+    let session_id = memory.memory.session_id.clone();
+
+    if trace_id.is_none() && session_id.is_none() {
+        return err_result("memory has no trace_id or session_id for OTLP correlation");
+    }
+
+    let otlp_path = otlp_db_path.to_owned();
+    let (spans, logs) = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = OtlpDb::open(&otlp_path, None)?;
+        let spans = match &trace_id {
+            Some(tid) => db.query_spans(tid, None, None)?,
+            None => vec![],
+        };
+        let logs = match &session_id {
+            Some(sid) => db.query_logs(sid, None, None)?,
+            None => vec![],
+        };
+        Ok((spans, logs))
+    })
+    .await
+    {
+        Ok((s, l)) => (s, l),
+        Err(e) => return err_result(&format!("OTLP query failed: {e}")),
+    };
+
+    let spans_json: Vec<serde_json::Value> = spans.iter().map(span_to_json).collect();
+    let logs_json: Vec<serde_json::Value> = logs.iter().map(log_to_json).collect();
+
+    ok_json(&serde_json::json!({
+        "memory": recall_to_json(&memory),
+        "spans": spans_json,
+        "logs": logs_json,
     }))
 }
