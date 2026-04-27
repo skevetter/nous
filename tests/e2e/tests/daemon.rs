@@ -78,7 +78,7 @@ impl DaemonTestEnv {
     fn server(&self) -> Arc<NousServer> {
         let cfg = Config::default();
         let embedding = Box::new(MockEmbedding::new(384));
-        Arc::new(NousServer::new(cfg, embedding, &self.db_path).unwrap())
+        Arc::new(NousServer::new(cfg, embedding, &self.db_path, None).unwrap())
     }
 
     fn client(&self) -> DaemonClient {

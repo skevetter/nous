@@ -470,18 +470,20 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
             };
 
             let db_path = commands::expand_tilde(&config.memory.db_path);
+            let db_key = config.resolve_db_key().ok();
             let embedding = build_embedding(
                 &config.embedding.model,
                 &config.embedding.variant,
                 config.embedding.dimensions,
             );
-            let server = match NousServer::new(config.clone(), embedding, &db_path) {
-                Ok(s) => Arc::new(s),
-                Err(e) => {
-                    eprintln!("server init failed: {e}");
-                    std::process::exit(1);
-                }
-            };
+            let server =
+                match NousServer::new(config.clone(), embedding, &db_path, db_key.as_deref()) {
+                    Ok(s) => Arc::new(s),
+                    Err(e) => {
+                        eprintln!("server init failed: {e}");
+                        std::process::exit(1);
+                    }
+                };
 
             let router = nous_mcp::daemon_api::daemon_router(daemon.shutdown_sender(), server);
 
@@ -1189,8 +1191,9 @@ async fn run_serve(
     variant: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = commands::expand_tilde(&config.memory.db_path);
+    let db_key = config.resolve_db_key().ok();
     let embedding = build_embedding(model, variant, config.embedding.dimensions);
-    let server = NousServer::new(config, embedding, &db_path)?;
+    let server = NousServer::new(config, embedding, &db_path, db_key.as_deref())?;
 
     match transport {
         Transport::Stdio => {
@@ -1201,6 +1204,7 @@ async fn run_serve(
         Transport::Http => {
             let user_config = server.config.clone();
             let user_db_path = db_path.clone();
+            let user_db_key = db_key.clone();
             let user_model = model.to_owned();
             let user_variant = variant.to_owned();
             let http_config = StreamableHttpServerConfig::default();
@@ -1214,7 +1218,7 @@ async fn run_serve(
                         user_config.embedding.dimensions,
                     );
                     let cfg = user_config.clone();
-                    NousServer::new(cfg, embedding, &user_db_path)
+                    NousServer::new(cfg, embedding, &user_db_path, user_db_key.as_deref())
                         .map_err(|e| std::io::Error::other(e.to_string()))
                 },
                 session_manager,
@@ -1807,7 +1811,8 @@ mod tests {
         let mut cfg = config::Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        let server = NousServer::new(cfg, embedding, &db_path).expect("server should construct");
+        let server =
+            NousServer::new(cfg, embedding, &db_path, None).expect("server should construct");
 
         assert!(server.embedding.dimensions() == 384);
         assert_eq!(server.embedding.model_id(), "mock");
@@ -1825,7 +1830,7 @@ mod tests {
         let mut cfg = config::Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        let server = NousServer::new(cfg, embedding, &db_path).unwrap();
+        let server = NousServer::new(cfg, embedding, &db_path, None).unwrap();
 
         let server_handle = tokio::spawn(async move {
             server.serve(server_transport).await?.waiting().await?;

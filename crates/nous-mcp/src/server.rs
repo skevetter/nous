@@ -34,9 +34,10 @@ impl NousServer {
         config: Config,
         embedding: Box<dyn EmbeddingBackend>,
         db_path: &str,
+        key: Option<&str>,
     ) -> nous_shared::Result<Self> {
         let new_dim = embedding.dimensions();
-        let db = MemoryDb::open(db_path, None, new_dim)?;
+        let db = MemoryDb::open(db_path, key, new_dim)?;
 
         let old_dim = db
             .active_model()
@@ -69,7 +70,7 @@ impl NousServer {
         )?;
         let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
         let (write_channel, write_handle) = WriteChannel::new(db);
-        let read_pool = ReadPool::new(db_path, None, 4)?;
+        let read_pool = ReadPool::new(db_path, key, 4)?;
         let embedding = Arc::from(embedding);
 
         let otlp_path = if config.otlp.db_path.is_empty() {
@@ -564,7 +565,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-        NousServer::new(cfg, embedding, db_path).unwrap()
+        NousServer::new(cfg, embedding, db_path, None).unwrap()
     }
 
     fn extract_json(result: &CallToolResult) -> serde_json::Value {
