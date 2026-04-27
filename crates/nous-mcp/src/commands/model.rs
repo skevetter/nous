@@ -352,7 +352,9 @@ pub fn run_embedding_inspect(
                         "The active model produces {}-dimensional embeddings, but vec0 table expects {} dimensions.",
                         m.dimensions, d
                     );
-                    println!("Run 'nous embedding reset' to recreate the vec0 table, or switch back to a {d}-dim model.");
+                    println!(
+                        "Run 'nous embedding reset' to recreate the vec0 table, or switch back to a {d}-dim model."
+                    );
                 }
                 (Some(_), Some(_)) => {
                     println!();
