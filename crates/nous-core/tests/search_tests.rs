@@ -511,3 +511,101 @@ fn search_logs_access() {
         .unwrap();
     assert!(count > 0, "search should create access log entries");
 }
+
+// --- sanitize_fts_query unit tests ---
+
+use nous_core::search::sanitize_fts_query;
+
+#[test]
+fn sanitize_fts_query_plain_words_unchanged() {
+    assert_eq!(sanitize_fts_query("hello world"), "hello world");
+}
+
+#[test]
+fn sanitize_fts_query_quotes_hyphenated_token() {
+    assert_eq!(sanitize_fts_query("INI-050"), "\"INI-050\"");
+}
+
+#[test]
+fn sanitize_fts_query_quotes_multiple_hyphenated_tokens() {
+    assert_eq!(
+        sanitize_fts_query("INI-050 pre-computation"),
+        "\"INI-050\" \"pre-computation\""
+    );
+}
+
+#[test]
+fn sanitize_fts_query_mixed_plain_and_hyphenated() {
+    assert_eq!(sanitize_fts_query("fix INI-050 bug"), "fix \"INI-050\" bug");
+}
+
+#[test]
+fn sanitize_fts_query_colon_token() {
+    assert_eq!(sanitize_fts_query("key:value"), "\"key:value\"");
+}
+
+#[test]
+fn sanitize_fts_query_empty_input() {
+    assert_eq!(sanitize_fts_query(""), "");
+}
+
+#[test]
+fn sanitize_fts_query_preserves_embedded_quotes() {
+    assert_eq!(sanitize_fts_query("say-\"hello\""), "\"say-\"\"hello\"\"\"");
+}
+
+// --- End-to-end FTS search with hyphenated content ---
+
+#[test]
+fn fts_search_hyphenated_ticket_id() {
+    let db = open_test_db();
+    db.store(&make_memory(
+        "INI-050 scheduler bug",
+        "The INI-050 ticket tracks a scheduler race condition",
+    ))
+    .unwrap();
+    db.store(&make_memory("unrelated", "nothing relevant here"))
+        .unwrap();
+
+    let filters = SearchFilters::default();
+    let results = db
+        .search("INI-050", &[], &filters, SearchMode::Fts)
+        .unwrap();
+
+    assert!(!results.is_empty(), "should find memory with INI-050");
+    assert!(results[0].memory.title.contains("INI-050"));
+}
+
+#[test]
+fn fts_search_hyphenated_compound_word() {
+    let db = open_test_db();
+    db.store(&make_memory(
+        "pre-computation optimization",
+        "pre-computation of lookup tables reduces latency",
+    ))
+    .unwrap();
+
+    let filters = SearchFilters::default();
+    let results = db
+        .search("pre-computation", &[], &filters, SearchMode::Fts)
+        .unwrap();
+
+    assert!(
+        !results.is_empty(),
+        "should find memory with pre-computation"
+    );
+    assert!(results[0].memory.title.contains("pre-computation"));
+}
+
+#[test]
+fn fts_search_plain_query_still_works() {
+    let db = open_test_db();
+    db.store(&make_memory("plain search", "simple words no hyphens"))
+        .unwrap();
+
+    let filters = SearchFilters::default();
+    let results = db.search("simple", &[], &filters, SearchMode::Fts).unwrap();
+
+    assert!(!results.is_empty());
+    assert!(results[0].memory.title.contains("plain"));
+}

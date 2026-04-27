@@ -164,6 +164,7 @@ pub fn run_room_search(
     let conn = db.connection();
     let room_id = resolve_room_id_sync(conn, room)?;
     let limit = limit.unwrap_or(50) as i64;
+    let query = nous_core::search::sanitize_fts_query(query);
 
     let mut stmt = conn.prepare(
         "SELECT m.sender_id, m.content, m.created_at
