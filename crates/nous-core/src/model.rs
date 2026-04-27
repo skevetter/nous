@@ -10,11 +10,15 @@ impl MemoryDb {
         name: &str,
         variant: Option<&str>,
         dimensions: i64,
+        max_tokens: i64,
         chunk_size: i64,
         chunk_overlap: i64,
     ) -> Result<i64> {
         if dimensions <= 0 {
             return Err(NousError::Validation("dimensions must be positive".into()));
+        }
+        if max_tokens <= 0 {
+            return Err(NousError::Validation("max_tokens must be positive".into()));
         }
         if chunk_size <= 0 {
             return Err(NousError::Validation("chunk_size must be positive".into()));
@@ -28,7 +32,7 @@ impl MemoryDb {
         self.connection().execute(
             "INSERT INTO models (name, dimensions, max_tokens, variant, chunk_size, chunk_overlap, active)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
-            params![name, dimensions, dimensions, variant, chunk_size, chunk_overlap],
+            params![name, dimensions, max_tokens, variant, chunk_size, chunk_overlap],
         )?;
         Ok(self.connection().last_insert_rowid())
     }

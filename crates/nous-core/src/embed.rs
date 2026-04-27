@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -11,6 +12,13 @@ use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer, Tr
 pub enum ModelArch {
     Encoder,
     Decoder,
+}
+
+#[derive(Debug, Clone)]
+struct KvInputMeta {
+    name: String,
+    num_heads: usize,
+    head_dim: usize,
 }
 
 pub trait EmbeddingBackend: Send + Sync {
@@ -84,21 +92,36 @@ impl OnnxBackendBuilder {
             .commit_from_file(&model_path)
             .map_err(|e| NousError::Embedding(format!("load ONNX model: {e}")))?;
 
-        let dimensions = detect_dimensions(&session, &model_path)?;
+        let hidden_states_idx = find_hidden_states_output(&session)?;
+        let dimensions = detect_dimensions(&session, &model_path, hidden_states_idx)?;
 
         let needs_token_type_ids = session
             .inputs()
             .iter()
             .any(|i| i.name() == "token_type_ids");
 
-        let arch = if session
+        let kv_inputs: Vec<KvInputMeta> = session
             .inputs()
             .iter()
-            .any(|i| i.name().starts_with("past_key_values"))
-        {
-            ModelArch::Decoder
-        } else {
+            .filter(|i| i.name().starts_with("past_key_values"))
+            .filter_map(|i| {
+                if let ort::value::ValueType::Tensor { shape, .. } = i.dtype()
+                    && shape.len() == 4
+                {
+                    return Some(KvInputMeta {
+                        name: i.name().to_string(),
+                        num_heads: shape[1].max(0) as usize,
+                        head_dim: shape[3].max(0) as usize,
+                    });
+                }
+                None
+            })
+            .collect();
+
+        let arch = if kv_inputs.is_empty() {
             ModelArch::Encoder
+        } else {
+            ModelArch::Decoder
         };
 
         let pad_direction = match arch {
@@ -118,6 +141,8 @@ impl OnnxBackendBuilder {
             batch_size: self.batch_size,
             needs_token_type_ids,
             arch,
+            kv_inputs,
+            hidden_states_idx,
             tokenizer,
             session: Mutex::new(session),
         })
@@ -136,9 +161,13 @@ fn detect_max_tokens(tokenizer_path: &Path) -> nous_shared::Result<usize> {
         .unwrap_or(8192))
 }
 
-fn detect_dimensions(session: &Session, model_path: &Path) -> nous_shared::Result<usize> {
+fn detect_dimensions(
+    session: &Session,
+    model_path: &Path,
+    output_idx: usize,
+) -> nous_shared::Result<usize> {
     let outputs = session.outputs();
-    if let Some(output) = outputs.first()
+    if let Some(output) = outputs.get(output_idx)
         && let ort::value::ValueType::Tensor { shape, .. } = output.dtype()
         && let Some(&dim) = shape.last()
         && dim > 0
@@ -151,6 +180,45 @@ fn detect_dimensions(session: &Session, model_path: &Path) -> nous_shared::Resul
     )))
 }
 
+fn build_position_ids(attention_mask: &ndarray::ArrayView2<i64>) -> ndarray::Array2<i64> {
+    let (batch, seq_len) = attention_mask.dim();
+    let mut positions = ndarray::Array2::<i64>::zeros((batch, seq_len));
+    for b in 0..batch {
+        let mut pos = 0i64;
+        for s in 0..seq_len {
+            if attention_mask[[b, s]] == 1 {
+                positions[[b, s]] = pos;
+                pos += 1;
+            }
+        }
+    }
+    positions
+}
+
+fn find_hidden_states_output(session: &Session) -> nous_shared::Result<usize> {
+    let outputs = session.outputs();
+    let candidates: Vec<_> = outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| !o.name().starts_with("present"))
+        .collect();
+    if candidates.len() == 1 {
+        return Ok(candidates[0].0);
+    }
+    // Fallback: 3D tensor = hidden states, 4D = KV cache
+    outputs
+        .iter()
+        .enumerate()
+        .find(|(_, o)| {
+            matches!(
+                o.dtype(),
+                ort::value::ValueType::Tensor { shape, .. } if shape.len() == 3
+            )
+        })
+        .map(|(i, _)| i)
+        .ok_or_else(|| NousError::Embedding("no hidden-states output found".into()))
+}
+
 pub struct OnnxBackend {
     model_id: String,
     dimensions: usize,
@@ -158,6 +226,8 @@ pub struct OnnxBackend {
     batch_size: usize,
     needs_token_type_ids: bool,
     arch: ModelArch,
+    kv_inputs: Vec<KvInputMeta>,
+    hidden_states_idx: usize,
     tokenizer: Tokenizer,
     session: Mutex<Session>,
 }
@@ -199,28 +269,50 @@ impl OnnxBackend {
         let mask_tensor = TensorRef::from_array_view(mask_array.view())
             .map_err(|e| NousError::Embedding(format!("mask tensor: {e}")))?;
 
-        let token_type_ids = vec![0i64; batch_size * seq_len];
-        let token_type_array =
-            ndarray::Array2::from_shape_vec((batch_size, seq_len), token_type_ids)
-                .map_err(|e| NousError::Embedding(format!("shape token_type_ids: {e}")))?;
-        let token_type_tensor = TensorRef::from_array_view(token_type_array.view())
-            .map_err(|e| NousError::Embedding(format!("token_type tensor: {e}")))?;
+        let mut named_inputs = ort::inputs! {
+            "input_ids" => ids_tensor,
+            "attention_mask" => mask_tensor,
+        };
+
+        let token_type_array;
+        if self.needs_token_type_ids {
+            let token_type_ids = vec![0i64; batch_size * seq_len];
+            token_type_array =
+                ndarray::Array2::from_shape_vec((batch_size, seq_len), token_type_ids)
+                    .map_err(|e| NousError::Embedding(format!("shape token_type_ids: {e}")))?;
+            let token_type_tensor = TensorRef::from_array_view(token_type_array.view())
+                .map_err(|e| NousError::Embedding(format!("token_type tensor: {e}")))?;
+            named_inputs.push((Cow::from("token_type_ids"), token_type_tensor.into()));
+        }
+
+        let position_ids_array;
+        let mut kv_tensors: Vec<ndarray::Array4<f32>> = Vec::new();
+        if self.arch == ModelArch::Decoder {
+            position_ids_array = build_position_ids(&mask_array.view());
+            let pos_tensor = TensorRef::from_array_view(position_ids_array.view())
+                .map_err(|e| NousError::Embedding(format!("position_ids tensor: {e}")))?;
+            named_inputs.push((Cow::from("position_ids"), pos_tensor.into()));
+
+            for kv in &self.kv_inputs {
+                let t = ndarray::Array4::<f32>::zeros((batch_size, kv.num_heads, 0, kv.head_dim));
+                kv_tensors.push(t);
+            }
+            for (i, kv) in self.kv_inputs.iter().enumerate() {
+                let tensor = TensorRef::from_array_view(kv_tensors[i].view())
+                    .map_err(|e| NousError::Embedding(format!("kv tensor: {e}")))?;
+                named_inputs.push((Cow::from(kv.name.clone()), tensor.into()));
+            }
+        }
 
         let mut session = self
             .session
             .lock()
             .map_err(|e| NousError::Embedding(format!("session lock: {e}")))?;
-        let outputs = if self.needs_token_type_ids {
-            session
-                .run(ort::inputs![ids_tensor, mask_tensor, token_type_tensor])
-                .map_err(|e| NousError::Embedding(format!("inference: {e}")))?
-        } else {
-            session
-                .run(ort::inputs![ids_tensor, mask_tensor])
-                .map_err(|e| NousError::Embedding(format!("inference: {e}")))?
-        };
+        let outputs = session
+            .run(named_inputs)
+            .map_err(|e| NousError::Embedding(format!("inference: {e}")))?;
 
-        let output = &outputs[0];
+        let output = &outputs[self.hidden_states_idx];
         let (shape, data) = output
             .try_extract_tensor::<f32>()
             .map_err(|e| NousError::Embedding(format!("extract tensor: {e}")))?;

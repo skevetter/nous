@@ -101,11 +101,6 @@ const MIGRATIONS: &[&str] = &[
         model_id INTEGER NOT NULL REFERENCES models(id),
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )",
-    // vec0 virtual table for KNN embedding search (sqlite-vec)
-    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
-        chunk_id TEXT PRIMARY KEY,
-        embedding float[384]
-    )",
     // FTS triggers
     "CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
         INSERT INTO memories_fts(rowid, title, content, memory_type)
@@ -153,6 +148,7 @@ impl MemoryDb {
         run_migrations(&conn, MIGRATIONS)?;
         migrate_models_columns(&conn)?;
         seed_placeholder_model(&conn)?;
+        ensure_vec0_table(&conn, 384)?;
         migrate_categories_columns(&conn)?;
         seed_categories(&conn)?;
         Ok(Self { conn })
@@ -160,6 +156,18 @@ impl MemoryDb {
 
     pub fn from_connection(conn: Connection) -> Self {
         Self { conn }
+    }
+
+    pub fn reset_embeddings(&self, new_dim: usize) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch("DROP TABLE IF EXISTS memory_embeddings")?;
+        tx.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE memory_embeddings USING vec0(
+                chunk_id TEXT PRIMARY KEY, embedding float[{new_dim}]
+            )"
+        ))?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn connection(&self) -> &Connection {
@@ -1002,6 +1010,23 @@ fn migrate_models_columns(conn: &Connection) -> Result<()> {
         if !has_column(conn, "models", col)? {
             conn.execute_batch(sql)?;
         }
+    }
+    Ok(())
+}
+
+pub fn ensure_vec0_table(conn: &Connection, dimensions: usize) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memory_embeddings'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE memory_embeddings USING vec0(
+                chunk_id TEXT PRIMARY KEY,
+                embedding float[{dimensions}]
+            )"
+        ))?;
     }
     Ok(())
 }
