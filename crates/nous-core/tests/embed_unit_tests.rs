@@ -46,13 +46,13 @@ fn mean_pool_known_tensor() {
     assert_eq!(result[1].len(), 4);
 
     // Sample 0: mean of token 0 and 1 → (1+5)/2=3, (2+6)/2=4, (3+7)/2=5, (4+8)/2=6
-    let expected_0 = vec![3.0, 4.0, 5.0, 6.0];
+    let expected_0 = [3.0, 4.0, 5.0, 6.0];
     for (a, b) in result[0].iter().zip(expected_0.iter()) {
         assert!((a - b).abs() < 1e-6, "sample 0: expected {b}, got {a}");
     }
 
     // Sample 1: mean of all 3 → (3+0+6)/3=3, (6+0+3)/3=3, (9+0+0)/3=3, (12+0+3)/3=5
-    let expected_1 = vec![3.0, 3.0, 3.0, 5.0];
+    let expected_1 = [3.0, 3.0, 3.0, 5.0];
     for (a, b) in result[1].iter().zip(expected_1.iter()) {
         assert!((a - b).abs() < 1e-6, "sample 1: expected {b}, got {a}");
     }
