@@ -500,7 +500,7 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(MockEmbedding::new(384));
-        Arc::new(NousServer::new(cfg, embedding, db_path).unwrap())
+        Arc::new(NousServer::new(cfg, embedding, db_path, None).unwrap())
     }
 
     fn test_router_with_server(server: Arc<NousServer>) -> (Router, watch::Receiver<bool>) {

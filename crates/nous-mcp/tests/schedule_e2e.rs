@@ -54,7 +54,7 @@ async fn setup() -> (
     let mut cfg = nous_mcp::config::Config::default();
     cfg.encryption.db_key_file = format!("{db_path}.key");
     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-    let server = nous_mcp::server::NousServer::new(cfg, embedding, &db_path).unwrap();
+    let server = nous_mcp::server::NousServer::new(cfg, embedding, &db_path, None).unwrap();
 
     tokio::spawn(async move {
         let _ = server

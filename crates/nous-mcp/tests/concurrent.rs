@@ -25,7 +25,7 @@ fn test_server(db_path: &str) -> NousServer {
     let mut cfg = Config::default();
     cfg.encryption.db_key_file = format!("{db_path}.key");
     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-    NousServer::new(cfg, embedding, db_path).unwrap()
+    NousServer::new(cfg, embedding, db_path, None).unwrap()
 }
 
 fn extract_json(result: &rmcp::model::CallToolResult) -> serde_json::Value {
