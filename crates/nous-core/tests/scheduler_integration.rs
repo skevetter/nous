@@ -6,7 +6,7 @@ use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::db::MemoryDb;
 use nous_core::schedule_db::ScheduleDb;
 use nous_core::scheduler::{ScheduleConfig, Scheduler};
-use nous_core::types::{ActionType, RunStatus, Schedule, ScheduleRun};
+use nous_core::types::{ActionType, RunStatus, Schedule};
 
 fn test_db_path() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -117,34 +117,21 @@ async fn scheduler_skips_overlap() {
     let now = chrono::Utc::now().timestamp();
     let mut schedule = make_mcp_schedule("skips-overlap", now + 1);
     schedule.timeout_secs = Some(30);
-    schedule.action_payload = r#"{"tool":"memory_search","args":{"query":"test"}}"#.to_string();
+    schedule.action_payload = r#"{"tool":"__test_delay","args":{"secs":10}}"#.to_string();
 
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let now2 = chrono::Utc::now().timestamp();
-    let patch = nous_core::types::SchedulePatch {
-        ..Default::default()
-    };
-    let _ = h.write_channel.update_schedule(id.clone(), patch).await;
+    let _ = h
+        .write_channel
+        .force_next_run_at(id.clone(), chrono::Utc::now().timestamp())
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    h.scheduler_notify.notify_one();
 
-    let second_run = ScheduleRun {
-        id: String::new(),
-        schedule_id: id.clone(),
-        started_at: now2,
-        finished_at: None,
-        status: RunStatus::Running,
-        exit_code: None,
-        output: None,
-        error: None,
-        attempt: 1,
-        duration_ms: None,
-    };
-    let _ = h.write_channel.record_run(second_run).await;
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let runs = h
         .read_pool
@@ -156,10 +143,12 @@ async fn scheduler_skips_overlap() {
         .unwrap();
 
     assert!(
-        runs.len() >= 1,
-        "expected at least 1 run, got {}",
+        runs.len() >= 2,
+        "expected at least 2 runs, got {}",
         runs.len()
     );
+    let has_skipped = runs.iter().any(|r| r.status == RunStatus::Skipped);
+    assert!(has_skipped, "expected at least one run with Skipped status");
 }
 
 #[tokio::test]
@@ -202,7 +191,7 @@ async fn scheduler_respects_timeout() {
     let mut schedule = make_mcp_schedule("respects-timeout", now + 1);
     schedule.timeout_secs = Some(1);
     schedule.max_retries = 1;
-    schedule.action_payload = r#"{"tool":"memory_stats","args":{}}"#.to_string();
+    schedule.action_payload = r#"{"tool":"__test_delay","args":{"secs":10}}"#.to_string();
 
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
@@ -219,6 +208,8 @@ async fn scheduler_respects_timeout() {
         .unwrap();
 
     assert!(!runs.is_empty(), "expected at least one run");
+    let has_timeout = runs.iter().any(|r| r.status == RunStatus::Timeout);
+    assert!(has_timeout, "expected at least one run with Timeout status");
 }
 
 #[tokio::test]

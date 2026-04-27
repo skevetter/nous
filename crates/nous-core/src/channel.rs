@@ -92,6 +92,7 @@ pub enum WriteOp {
     RecordRun(ScheduleRun, oneshot::Sender<Result<String>>),
     UpdateRun(String, RunPatch, oneshot::Sender<Result<bool>>),
     ComputeNextRun(String, oneshot::Sender<Result<()>>),
+    ForceNextRunAt(String, i64, oneshot::Sender<Result<()>>),
 }
 
 #[derive(Clone)]
@@ -438,6 +439,17 @@ impl WriteChannel {
             .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
     }
 
+    pub async fn force_next_run_at(&self, id: String, ts: i64) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::ForceNextRunAt(id, ts, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
     pub fn batch_count(&self) -> usize {
         self.batch_count.load(Ordering::Relaxed)
     }
@@ -452,6 +464,20 @@ async fn write_worker(
     db: MemoryDb,
     batch_count: Arc<AtomicUsize>,
 ) {
+    let has_table: bool = db
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schedule_runs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if has_table {
+        let _ = db.connection().execute(
+            "UPDATE schedule_runs SET status = 'failed', error = 'process restarted' WHERE status = 'running'",
+            [],
+        );
+    }
     let db = Arc::new(Mutex::new(db));
 
     while let Some(first) = rx.recv().await {
@@ -633,6 +659,16 @@ async fn write_worker(
                     }
                     WriteOp::ComputeNextRun(id, resp) => {
                         let _ = resp.send(ScheduleDb::compute_next_run_on(&tx, &id));
+                    }
+                    WriteOp::ForceNextRunAt(id, ts, resp) => {
+                        let result = tx
+                            .execute(
+                                "UPDATE schedules SET next_run_at = ?1 WHERE id = ?2",
+                                rusqlite::params![ts, id],
+                            )
+                            .map(|_| ())
+                            .map_err(Into::into);
+                        let _ = resp.send(result);
                     }
                 }
             }

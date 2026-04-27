@@ -64,10 +64,7 @@ impl Scheduler {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent));
 
         loop {
-            let next = self
-                .read_pool
-                .with_conn(ScheduleDb::next_pending)
-                .await;
+            let next = self.read_pool.with_conn(ScheduleDb::next_pending).await;
 
             match next {
                 Ok(Some(schedule)) => {
@@ -174,6 +171,7 @@ async fn execute_schedule(
 ) {
     let timeout_secs = schedule
         .timeout_secs
+        .filter(|&s| s > 0)
         .map(|s| s as u64)
         .unwrap_or(config.default_timeout_secs);
 
@@ -181,6 +179,7 @@ async fn execute_schedule(
 
     for attempt in 1..=max_retries {
         let started_at = Utc::now().timestamp();
+        let instant = std::time::Instant::now();
         let run = ScheduleRun {
             id: String::new(),
             schedule_id: schedule.id.clone(),
@@ -209,7 +208,7 @@ async fn execute_schedule(
         .await;
 
         let finished_at = Utc::now().timestamp();
-        let duration_ms = (finished_at - started_at) * 1000;
+        let duration_ms = instant.elapsed().as_millis() as i64;
 
         let patch = match result {
             Ok(Ok(output)) => RunPatch {
@@ -233,7 +232,7 @@ async fn execute_schedule(
                 let _ = wc.update_run(run_id, patch).await;
 
                 if attempt < max_retries {
-                    let backoff = 2u64.pow(attempt as u32);
+                    let backoff = 2u64.saturating_pow(attempt.min(20) as u32);
                     tokio::time::sleep(Duration::from_secs(backoff)).await;
                     continue;
                 }
@@ -312,11 +311,14 @@ async fn dispatch_mcp_tool(
             }
             let result = rp
                 .with_conn(move |conn| {
+                    let pattern = format!("%{query}%");
                     let mut stmt = conn.prepare(
-                        "SELECT id, title, memory_type FROM memories WHERE archived = 0 ORDER BY created_at DESC LIMIT 10",
+                        "SELECT id, title, memory_type FROM memories
+                         WHERE archived = 0 AND (title LIKE ?1 OR content LIKE ?1)
+                         ORDER BY created_at DESC LIMIT 10",
                     )?;
                     let rows = stmt
-                        .query_map([], |row| {
+                        .query_map(rusqlite::params![pattern], |row| {
                             Ok(serde_json::json!({
                                 "id": row.get::<_, String>(0)?,
                                 "title": row.get::<_, String>(1)?,
@@ -349,6 +351,15 @@ async fn dispatch_mcp_tool(
                 .await
                 .map_err(|e| format!("memory_forget failed: {e}"))?;
             Ok(serde_json::json!({"forgotten": result}).to_string())
+        }
+        "__test_delay" => {
+            let secs = payload
+                .args
+                .get("secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5);
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            Ok("delayed".to_string())
         }
         other => Err(format!("unsupported mcp_tool: {other}")),
     }

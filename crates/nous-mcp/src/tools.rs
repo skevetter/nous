@@ -1698,6 +1698,7 @@ pub async fn handle_schedule_get(
 pub async fn handle_schedule_update(
     params: ScheduleUpdateParams,
     write_channel: &WriteChannel,
+    read_pool: &ReadPool,
     scheduler_notify: &Arc<Notify>,
 ) -> CallToolResult {
     if let Some(ref expr) = params.cron_expr
@@ -1707,6 +1708,20 @@ pub async fn handle_schedule_update(
     }
 
     let cron_changed = params.cron_expr.is_some();
+    let enabling = params.enabled == Some(true);
+
+    let was_disabled = if enabling {
+        let check_id = params.id.clone();
+        match read_pool
+            .with_conn(move |conn| ScheduleDb::get(conn, &check_id))
+            .await
+        {
+            Ok(Some(s)) => !s.enabled,
+            _ => false,
+        }
+    } else {
+        false
+    };
 
     let patch = SchedulePatch {
         name: params.name,
@@ -1725,7 +1740,7 @@ pub async fn handle_schedule_update(
         Err(e) => return err_result(&format!("schedule_update failed: {e}")),
     }
 
-    if cron_changed {
+    if cron_changed || was_disabled {
         let _ = write_channel.compute_next_run(id.clone()).await;
     }
 

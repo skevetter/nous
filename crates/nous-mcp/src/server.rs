@@ -406,7 +406,13 @@ impl NousServer {
         description = "Modify a schedule. Recomputes next_run_at if cron_expr changes."
     )]
     async fn schedule_update(&self, params: Parameters<ScheduleUpdateParams>) -> CallToolResult {
-        handle_schedule_update(params.0, &self.write_channel, &self.scheduler_notify).await
+        handle_schedule_update(
+            params.0,
+            &self.write_channel,
+            &self.read_pool,
+            &self.scheduler_notify,
+        )
+        .await
     }
 
     #[tool(
