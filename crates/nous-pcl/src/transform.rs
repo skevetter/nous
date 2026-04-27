@@ -58,7 +58,8 @@ impl<'a> TransformPipeline<'a> {
                     deletions INTEGER NOT NULL DEFAULT 0,
                     repo_path TEXT NOT NULL,
                     commit_sha TEXT,
-                    ingested_at TEXT NOT NULL
+                    ingested_at TEXT NOT NULL,
+                    UNIQUE(repo_path, commit_sha, file)
                 );
                 CREATE INDEX IF NOT EXISTS idx_git_diffs_file ON git_diffs(file);",
             )
@@ -212,7 +213,7 @@ impl<'a> TransformPipeline<'a> {
         let changed = self
             .conn
             .execute(
-                "INSERT INTO git_diffs (file, insertions, deletions, repo_path, commit_sha, ingested_at)
+                "INSERT OR IGNORE INTO git_diffs (file, insertions, deletions, repo_path, commit_sha, ingested_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![file, insertions, deletions, repo_path, commit_sha, ingested_at],
             )

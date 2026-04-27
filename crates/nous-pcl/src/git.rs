@@ -104,7 +104,7 @@ impl GitCollector {
             }
             let is_current = line.ends_with('*');
             let name = line.trim_end_matches(" *").trim_end().to_string();
-            let is_remote = name.starts_with("remotes/") || name.contains('/');
+            let is_remote = name.starts_with("remotes/");
 
             records.push(Record {
                 source: "git".into(),

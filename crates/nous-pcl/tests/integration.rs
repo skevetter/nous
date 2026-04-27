@@ -93,19 +93,31 @@ fn end_to_end_git_collector_and_transform() {
     transform.initialize_silver_tables().unwrap();
 
     let result = transform.transform_git().unwrap();
-    assert_eq!(result.inserted, commit_lines + branch_and_diff_count(&conn));
+    // We created 3 commits, at least 1 branch (master/main), and 1 diff file (hello.txt changed in last commit)
+    // Assert against known test data, not DB state
+    assert!(
+        result.inserted >= 5,
+        "expected at least 3 commits + 1 branch + 1 diff, got {}",
+        result.inserted
+    );
+    assert_eq!(result.skipped, 0);
     assert_eq!(result.errors, 0);
 
-    // Verify SQLite contents
+    // Verify SQLite contents against known test data
     let commit_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM git_commits", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(commit_count, 3);
+    assert_eq!(commit_count, 3, "we made exactly 3 commits");
 
     let branch_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM git_branches", [], |r| r.get(0))
         .unwrap();
     assert!(branch_count >= 1, "should have at least main/master branch");
+
+    let diff_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM git_diffs", [], |r| r.get(0))
+        .unwrap();
+    assert!(diff_count >= 1, "last commit changed hello.txt");
 
     // Verify commit data
     let message: String = conn
@@ -152,14 +164,12 @@ fn end_to_end_git_collector_and_transform() {
         branch_count_after, branch_count,
         "branch count should not increase after dedup"
     );
-}
 
-fn branch_and_diff_count(conn: &Connection) -> usize {
-    let b: i64 = conn
-        .query_row("SELECT COUNT(*) FROM git_branches", [], |r| r.get(0))
-        .unwrap();
-    let d: i64 = conn
+    let diff_count_after: i64 = conn
         .query_row("SELECT COUNT(*) FROM git_diffs", [], |r| r.get(0))
         .unwrap();
-    (b + d) as usize
+    assert_eq!(
+        diff_count_after, diff_count,
+        "diff count should not increase after dedup"
+    );
 }

@@ -24,7 +24,10 @@ impl RunMetadata {
         all.insert(self.collector_name.clone(), self.clone());
 
         let json = serde_json::to_string_pretty(&all)?;
-        std::fs::write(path, json)?;
+        // Atomic rename: write to temp file then rename to avoid partial writes
+        let tmp_path = config_dir.join(".last_run.json.tmp");
+        std::fs::write(&tmp_path, json)?;
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 
