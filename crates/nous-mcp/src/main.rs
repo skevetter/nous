@@ -1670,7 +1670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_lists_all_30_tools() {
+    async fn server_lists_all_37_tools() {
         use rmcp::model::CallToolRequestParams;
         use rmcp::{ClientHandler, ServiceExt};
 
@@ -1726,12 +1726,19 @@ mod tests {
             "room_search",
             "room_info",
             "room_join",
+            "schedule_create",
+            "schedule_list",
+            "schedule_get",
+            "schedule_update",
+            "schedule_delete",
+            "schedule_pause",
+            "schedule_resume",
         ];
 
         assert_eq!(
             tools_result.tools.len(),
-            30,
-            "expected 30 tools, got {:?}",
+            37,
+            "expected 37 tools, got {:?}",
             tool_names
         );
 

@@ -4,11 +4,14 @@ use std::sync::Arc;
 use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::chunk::Chunker;
 use nous_core::classify::CategoryClassifier;
+use nous_core::cron_parser::CronExpr;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
+use nous_core::schedule_db::ScheduleDb;
 use nous_core::types::{
-    CategorySource, Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations,
-    NewMemory, RelationType, SearchFilters, SearchMode,
+    ActionType, CategorySource, Confidence, Importance, MemoryPatch, MemoryType,
+    MemoryWithRelations, NewMemory, RelationType, Schedule, SchedulePatch, SearchFilters,
+    SearchMode,
 };
 use nous_otlp::db::OtlpDb;
 use nous_shared::ids::MemoryId;
@@ -16,6 +19,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use tokio::sync::Notify;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MemoryStoreParams {
@@ -1477,5 +1481,374 @@ pub async fn handle_room_join(
             "role": role,
         })),
         Err(e) => err_result(&format!("room_join failed: {e}")),
+    }
+}
+
+// ── Schedule tool parameter structs ──
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleCreateParams {
+    pub name: String,
+    pub cron_expr: String,
+    pub action_type: String,
+    pub action_payload: String,
+    pub timezone: Option<String>,
+    pub max_retries: Option<i64>,
+    pub timeout_secs: Option<i64>,
+    pub desired_outcome: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleListParams {
+    pub enabled: Option<bool>,
+    pub action_type: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleGetParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleUpdateParams {
+    pub id: String,
+    pub name: Option<String>,
+    pub cron_expr: Option<String>,
+    pub action_payload: Option<String>,
+    pub enabled: Option<bool>,
+    pub max_retries: Option<i64>,
+    pub timeout_secs: Option<i64>,
+    pub desired_outcome: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleDeleteParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SchedulePauseParams {
+    pub id: String,
+    pub duration_secs: Option<u64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleResumeParams {
+    pub id: String,
+}
+
+// ── Schedule tool handlers ──
+
+fn format_epoch(epoch: Option<i64>) -> serde_json::Value {
+    match epoch {
+        Some(ts) => serde_json::Value::Number(ts.into()),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn schedule_to_json(s: &Schedule) -> serde_json::Value {
+    serde_json::json!({
+        "id": s.id,
+        "name": s.name,
+        "cron_expr": s.cron_expr,
+        "timezone": s.timezone,
+        "enabled": s.enabled,
+        "action_type": s.action_type.to_string(),
+        "action_payload": s.action_payload,
+        "desired_outcome": s.desired_outcome,
+        "max_retries": s.max_retries,
+        "timeout_secs": s.timeout_secs,
+        "max_output_bytes": s.max_output_bytes,
+        "max_runs": s.max_runs,
+        "next_run_at": format_epoch(s.next_run_at),
+        "created_at": format_epoch(Some(s.created_at)),
+        "updated_at": format_epoch(Some(s.updated_at)),
+    })
+}
+
+pub async fn handle_schedule_create(
+    params: ScheduleCreateParams,
+    write_channel: &WriteChannel,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    if let Err(e) = CronExpr::parse(&params.cron_expr) {
+        return err_result(&format!("invalid cron expression: {e}"));
+    }
+
+    let action_type = match parse_enum::<ActionType>(&params.action_type, "action_type") {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    if let Some(t) = params.timeout_secs
+        && t <= 0
+    {
+        return err_result("timeout_secs must be positive");
+    }
+
+    let schedule = Schedule {
+        id: String::new(),
+        name: params.name,
+        cron_expr: params.cron_expr,
+        timezone: params.timezone.unwrap_or_else(|| "UTC".to_string()),
+        enabled: true,
+        action_type,
+        action_payload: params.action_payload,
+        desired_outcome: params.desired_outcome,
+        max_retries: params.max_retries.unwrap_or(3),
+        timeout_secs: params.timeout_secs,
+        max_output_bytes: 65536,
+        max_runs: 100,
+        next_run_at: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    let id = match write_channel.create_schedule(schedule).await {
+        Ok(id) => id,
+        Err(e) => return err_result(&format!("schedule_create failed: {e}")),
+    };
+
+    scheduler_notify.notify_one();
+
+    ok_json(&serde_json::json!({
+        "id": id,
+        "status": "created",
+    }))
+}
+
+pub async fn handle_schedule_list(
+    params: ScheduleListParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let enabled_filter = params.enabled;
+    let action_type_filter = match params.action_type.as_deref() {
+        Some(v) => match parse_enum::<ActionType>(v, "action_type") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+    let limit = params.limit;
+
+    match read_pool
+        .with_conn(move |conn| {
+            ScheduleDb::list(conn, enabled_filter, action_type_filter.as_ref(), limit)
+        })
+        .await
+    {
+        Ok(schedules) => {
+            let list: Vec<serde_json::Value> = schedules.iter().map(schedule_to_json).collect();
+            ok_json(&serde_json::json!({
+                "schedules": list,
+                "count": list.len(),
+            }))
+        }
+        Err(e) => err_result(&format!("schedule_list failed: {e}")),
+    }
+}
+
+pub async fn handle_schedule_get(
+    params: ScheduleGetParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let id = params.id;
+    let id_clone = id.clone();
+
+    let schedule = match read_pool
+        .with_conn(move |conn| ScheduleDb::get(conn, &id_clone))
+        .await
+    {
+        Ok(Some(s)) => s,
+        Ok(None) => return err_result(&format!("schedule not found: {id}")),
+        Err(e) => return err_result(&format!("schedule_get failed: {e}")),
+    };
+
+    let schedule_id = id.clone();
+    let runs = match read_pool
+        .with_conn(move |conn| ScheduleDb::get_runs(conn, &schedule_id, None, Some(10)))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return err_result(&format!("get_runs failed: {e}")),
+    };
+
+    let runs_json: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "started_at": format_epoch(Some(r.started_at)),
+                "finished_at": format_epoch(r.finished_at),
+                "status": r.status.to_string(),
+                "exit_code": r.exit_code,
+                "output": r.output,
+                "error": r.error,
+                "attempt": r.attempt,
+                "duration_ms": r.duration_ms,
+            })
+        })
+        .collect();
+
+    let mut json = schedule_to_json(&schedule);
+    json.as_object_mut().unwrap().insert(
+        "recent_runs".to_string(),
+        serde_json::Value::Array(runs_json),
+    );
+
+    ok_json(&json)
+}
+
+pub async fn handle_schedule_update(
+    params: ScheduleUpdateParams,
+    write_channel: &WriteChannel,
+    read_pool: &ReadPool,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    if let Some(ref expr) = params.cron_expr
+        && let Err(e) = CronExpr::parse(expr)
+    {
+        return err_result(&format!("invalid cron expression: {e}"));
+    }
+
+    if let Some(t) = params.timeout_secs
+        && t <= 0
+    {
+        return err_result("timeout_secs must be positive");
+    }
+
+    let cron_changed = params.cron_expr.is_some();
+    let enabling = params.enabled == Some(true);
+
+    let was_disabled = if enabling {
+        let check_id = params.id.clone();
+        match read_pool
+            .with_conn(move |conn| ScheduleDb::get(conn, &check_id))
+            .await
+        {
+            Ok(Some(s)) => !s.enabled,
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    let patch = SchedulePatch {
+        name: params.name,
+        cron_expr: params.cron_expr,
+        action_payload: params.action_payload,
+        enabled: params.enabled,
+        max_retries: params.max_retries,
+        timeout_secs: params.timeout_secs,
+        desired_outcome: params.desired_outcome,
+    };
+
+    let id = params.id;
+    match write_channel.update_schedule(id.clone(), patch).await {
+        Ok(true) => {}
+        Ok(false) => return err_result(&format!("schedule not found: {id}")),
+        Err(e) => return err_result(&format!("schedule_update failed: {e}")),
+    }
+
+    if cron_changed || was_disabled {
+        let _ = write_channel.compute_next_run(id.clone()).await;
+    }
+
+    scheduler_notify.notify_one();
+
+    ok_json(&serde_json::json!({
+        "id": id,
+        "status": "updated",
+    }))
+}
+
+pub async fn handle_schedule_delete(
+    params: ScheduleDeleteParams,
+    write_channel: &WriteChannel,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    match write_channel.delete_schedule(params.id.clone()).await {
+        Ok(true) => {
+            scheduler_notify.notify_one();
+            ok_json(&serde_json::json!({
+                "id": params.id,
+                "success": true,
+            }))
+        }
+        Ok(false) => err_result(&format!("schedule not found: {}", params.id)),
+        Err(e) => err_result(&format!("schedule_delete failed: {e}")),
+    }
+}
+
+pub async fn handle_schedule_pause(
+    params: SchedulePauseParams,
+    write_channel: &WriteChannel,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    let patch = SchedulePatch {
+        enabled: Some(false),
+        ..Default::default()
+    };
+
+    match write_channel
+        .update_schedule(params.id.clone(), patch)
+        .await
+    {
+        Ok(true) => {
+            scheduler_notify.notify_one();
+
+            if let Some(duration) = params.duration_secs {
+                let wc = write_channel.clone();
+                let id = params.id.clone();
+                let notify = scheduler_notify.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(duration)).await;
+                    let resume_patch = SchedulePatch {
+                        enabled: Some(true),
+                        ..Default::default()
+                    };
+                    let _ = wc.update_schedule(id.clone(), resume_patch).await;
+                    let _ = wc.compute_next_run(id).await;
+                    notify.notify_one();
+                });
+            }
+
+            ok_json(&serde_json::json!({
+                "id": params.id,
+                "status": "paused",
+                "reason": params.reason,
+            }))
+        }
+        Ok(false) => err_result(&format!("schedule not found: {}", params.id)),
+        Err(e) => err_result(&format!("schedule_pause failed: {e}")),
+    }
+}
+
+pub async fn handle_schedule_resume(
+    params: ScheduleResumeParams,
+    write_channel: &WriteChannel,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    let patch = SchedulePatch {
+        enabled: Some(true),
+        ..Default::default()
+    };
+
+    match write_channel
+        .update_schedule(params.id.clone(), patch)
+        .await
+    {
+        Ok(true) => {
+            let _ = write_channel.compute_next_run(params.id.clone()).await;
+            scheduler_notify.notify_one();
+            ok_json(&serde_json::json!({
+                "id": params.id,
+                "status": "resumed",
+            }))
+        }
+        Ok(false) => err_result(&format!("schedule not found: {}", params.id)),
+        Err(e) => err_result(&format!("schedule_resume failed: {e}")),
     }
 }
