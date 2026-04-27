@@ -433,6 +433,8 @@ fn search_filters_roundtrip_json() {
         memory_type: Some(MemoryType::Decision),
         category_id: Some(3),
         workspace_id: Some(1),
+        trace_id: Some("abc123".into()),
+        session_id: Some("sess456".into()),
         importance: Some(Importance::High),
         confidence: Some(Confidence::Low),
         tags: Some(vec!["rust".into()]),

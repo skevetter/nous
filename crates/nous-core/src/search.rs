@@ -358,6 +358,16 @@ impl MemoryDb {
             params.push(Box::new(ws_id));
         }
 
+        if let Some(ref trace_id) = filters.trace_id {
+            conditions.push(format!("m.trace_id = ?{}", params.len() + 1));
+            params.push(Box::new(trace_id.clone()));
+        }
+
+        if let Some(ref session_id) = filters.session_id {
+            conditions.push(format!("m.session_id = ?{}", params.len() + 1));
+            params.push(Box::new(session_id.clone()));
+        }
+
         if let Some(ref imp) = filters.importance {
             conditions.push(format!("m.importance = ?{}", params.len() + 1));
             params.push(Box::new(imp.to_string()));
@@ -452,6 +462,18 @@ impl MemoryDb {
 
         if let Some(ws_id) = filters.workspace_id
             && memory.workspace_id != Some(ws_id)
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref trace_id) = filters.trace_id
+            && memory.trace_id.as_deref() != Some(trace_id.as_str())
+        {
+            return Ok(false);
+        }
+
+        if let Some(ref session_id) = filters.session_id
+            && memory.session_id.as_deref() != Some(session_id.as_str())
         {
             return Ok(false);
         }
