@@ -1089,6 +1089,7 @@ fn log_to_json(l: &nous_otlp::decode::LogEvent) -> serde_json::Value {
         "severity": l.severity,
         "body": l.body,
         "resource_attrs": l.resource_attrs,
+        "scope_attrs": l.scope_attrs,
         "log_attrs": l.log_attrs,
         "session_id": l.session_id,
         "trace_id": l.trace_id,
