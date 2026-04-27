@@ -129,10 +129,17 @@ async fn handle_get_room(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if looks_like_uuid(&id)
-        && let Ok(Some(room)) = state.server.read_pool.get_room(&id).await
-    {
-        return (StatusCode::OK, Json(serde_json::json!(room)));
+    if looks_like_uuid(&id) {
+        match state.server.read_pool.get_room(&id).await {
+            Ok(Some(room)) => return (StatusCode::OK, Json(serde_json::json!(room))),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("{e}")})),
+                );
+            }
+            Ok(None) => {}
+        }
     }
     match state.server.read_pool.get_room_by_name(&id).await {
         Ok(Some(room)) => (StatusCode::OK, Json(serde_json::json!(room))),
@@ -348,8 +355,9 @@ async fn handle_export(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     use nous_core::db::MemoryDb;
 
     let db_path = state.server.db_path.clone();
+    let dim = state.server.embedding.dimensions();
     match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, 384)?;
+        let db = MemoryDb::open(&db_path, None, dim)?;
         build_export_data(&db).map_err(|e| nous_shared::NousError::Internal(e.to_string()))
     })
     .await
@@ -398,17 +406,24 @@ async fn handle_import(
 // --- Helpers ---
 
 fn looks_like_uuid(s: &str) -> bool {
-    s.len() == 36 && s.contains('-')
+    uuid::Uuid::try_parse(s).is_ok()
 }
 
 async fn resolve_room_id(
     id_or_name: &str,
     read_pool: &nous_core::channel::ReadPool,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    if looks_like_uuid(id_or_name)
-        && let Ok(Some(room)) = read_pool.get_room(id_or_name).await
-    {
-        return Ok(room.id);
+    if looks_like_uuid(id_or_name) {
+        match read_pool.get_room(id_or_name).await {
+            Ok(Some(room)) => return Ok(room.id),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("{e}")})),
+                ));
+            }
+            Ok(None) => {}
+        }
     }
     match read_pool.get_room_by_name(id_or_name).await {
         Ok(Some(room)) => Ok(room.id),
@@ -427,8 +442,10 @@ fn call_tool_result_to_response(
     result: rmcp::model::CallToolResult,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let is_error = result.is_error == Some(true);
-    let text = result.content[0]
-        .as_text()
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .unwrap_or("{}");
 
