@@ -226,6 +226,7 @@ fn category_roundtrip_json() {
         source: CategorySource::System,
         description: None,
         embedding: None,
+        threshold: None,
         created_at: "2025-01-01T00:00:00Z".into(),
     };
     let json = serde_json::to_string(&cat).unwrap();
@@ -380,6 +381,7 @@ fn category_tree_roundtrip_json() {
             source: CategorySource::System,
             description: None,
             embedding: None,
+            threshold: None,
             created_at: "2025-01-01T00:00:00Z".into(),
         },
         children: vec![CategoryTree {
@@ -390,6 +392,7 @@ fn category_tree_roundtrip_json() {
                 source: CategorySource::System,
                 description: None,
                 embedding: None,
+                threshold: None,
                 created_at: "2025-01-01T00:00:00Z".into(),
             },
             children: vec![],

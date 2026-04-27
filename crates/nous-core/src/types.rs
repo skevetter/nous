@@ -185,6 +185,7 @@ pub struct Category {
     pub description: Option<String>,
     #[serde(skip)]
     pub embedding: Option<Vec<u8>>,
+    pub threshold: Option<f32>,
     pub created_at: String,
 }
 

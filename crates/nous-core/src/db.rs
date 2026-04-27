@@ -530,14 +530,14 @@ impl MemoryDb {
         let categories = match source_filter {
             Some(ref src) => {
                 let mut stmt = self.conn.prepare(
-                    "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories WHERE source = ?1",
+                    "SELECT id, name, parent_id, source, description, embedding, threshold, created_at FROM categories WHERE source = ?1",
                 )?;
                 stmt.query_map(params![src.to_string()], Self::row_to_category)?
                     .collect::<std::result::Result<Vec<_>, _>>()?
             }
             None => {
                 let mut stmt = self.conn.prepare(
-                    "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories",
+                    "SELECT id, name, parent_id, source, description, embedding, threshold, created_at FROM categories",
                 )?;
                 stmt.query_map([], Self::row_to_category)?
                     .collect::<std::result::Result<Vec<_>, _>>()?
@@ -586,7 +586,8 @@ impl MemoryDb {
             })?,
             description: row.get(4)?,
             embedding: row.get(5)?,
-            created_at: row.get(6)?,
+            threshold: row.get(6)?,
+            created_at: row.get(7)?,
         })
     }
 
@@ -637,7 +638,7 @@ impl MemoryDb {
             return Ok(None);
         };
         match conn.query_row(
-            "SELECT id, name, parent_id, source, description, embedding, created_at FROM categories WHERE id = ?1",
+            "SELECT id, name, parent_id, source, description, embedding, threshold, created_at FROM categories WHERE id = ?1",
             params![cat_id],
             |row| {
                 Ok(Category {
@@ -649,7 +650,8 @@ impl MemoryDb {
                     })?,
                     description: row.get(4)?,
                     embedding: row.get(5)?,
-                    created_at: row.get(6)?,
+                    threshold: row.get(6)?,
+                    created_at: row.get(7)?,
                 })
             },
         ) {
@@ -1048,6 +1050,10 @@ fn migrate_categories_columns(conn: &Connection) -> Result<()> {
         (
             "embedding",
             "ALTER TABLE categories ADD COLUMN embedding BLOB",
+        ),
+        (
+            "threshold",
+            "ALTER TABLE categories ADD COLUMN threshold REAL",
         ),
     ];
     for (col, sql) in alters {
