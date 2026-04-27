@@ -22,7 +22,8 @@ fn test_db_path() -> String {
 }
 
 fn test_server(db_path: &str) -> NousServer {
-    let cfg = Config::default();
+    let mut cfg = Config::default();
+    cfg.encryption.db_key_file = format!("{db_path}.key");
     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
     NousServer::new(cfg, embedding, db_path).unwrap()
 }

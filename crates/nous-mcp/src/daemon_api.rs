@@ -486,7 +486,8 @@ mod tests {
     }
 
     fn test_server(db_path: &str) -> Arc<NousServer> {
-        let cfg = crate::config::Config::default();
+        let mut cfg = crate::config::Config::default();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
         let embedding = Box::new(MockEmbedding::new(384));
         Arc::new(NousServer::new(cfg, embedding, db_path).unwrap())
     }
