@@ -881,7 +881,7 @@ impl ReadPool {
         limit: Option<usize>,
     ) -> Result<Vec<Message>> {
         let room_id = room_id.to_string();
-        let query = query.to_string();
+        let query = crate::search::sanitize_fts_query(query);
         let limit = limit.unwrap_or(50);
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(

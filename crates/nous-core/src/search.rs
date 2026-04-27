@@ -6,6 +6,26 @@ use rusqlite::params;
 use crate::db::MemoryDb;
 use crate::types::{ContextEntry, Importance, Memory, SearchFilters, SearchMode, SearchResult};
 
+/// Sanitize a user query for FTS5 MATCH by quoting tokens that contain
+/// characters FTS5 treats as operators (hyphens, colons, etc.).
+/// Without this, queries like `INI-050` fail with "no such column: 050"
+/// because FTS5 interprets the hyphen as a column-prefix operator.
+pub fn sanitize_fts_query(query: &str) -> String {
+    let special_chars: &[char] = &['-', ':', '.', '/', '\\', '@', '#', '!', '+'];
+    query
+        .split_whitespace()
+        .map(|token| {
+            if token.contains(special_chars) {
+                let escaped = token.replace('"', "\"\"");
+                format!("\"{escaped}\"")
+            } else {
+                token.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn now_iso8601() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -144,9 +164,9 @@ impl MemoryDb {
         query: &str,
         filters: &SearchFilters,
     ) -> Result<Vec<SearchResult>> {
+        let sanitized = sanitize_fts_query(query);
         let mut conditions = vec!["memories_fts MATCH ?1".to_owned()];
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(query.to_owned())];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(sanitized)];
 
         self.apply_filter_conditions(filters, &mut conditions, &mut param_values);
 
