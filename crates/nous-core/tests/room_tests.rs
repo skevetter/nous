@@ -120,11 +120,9 @@ fn room_create_and_read_round_trip() {
     assert_eq!(room.3, 0);
 
     let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM rooms WHERE archived = 0",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 0", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(count, 1);
 
@@ -138,8 +136,16 @@ fn room_create_and_read_round_trip() {
     assert_eq!(name_lookup, room_id);
 
     let msg_id = nous_shared::ids::MemoryId::new().to_string();
-    MemoryDb::post_message_on(conn, &msg_id, &room_id, "agent-1", "Hello, world!", None, None)
-        .unwrap();
+    MemoryDb::post_message_on(
+        conn,
+        &msg_id,
+        &room_id,
+        "agent-1",
+        "Hello, world!",
+        None,
+        None,
+    )
+    .unwrap();
 
     let msg_id2 = nous_shared::ids::MemoryId::new().to_string();
     MemoryDb::post_message_on(
@@ -206,20 +212,16 @@ fn room_archive_and_delete() {
     assert!(archived);
 
     let active: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM rooms WHERE archived = 0",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 0", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(active, 0);
 
     let archived_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM rooms WHERE archived = 1",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 1", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(archived_count, 1);
 
@@ -251,7 +253,9 @@ fn room_join_participant() {
     MemoryDb::join_room_on(conn, &room_id, "agent-2", "member").unwrap();
 
     let participants: Vec<(String, String)> = conn
-        .prepare("SELECT agent_id, role FROM room_participants WHERE room_id = ?1 ORDER BY agent_id")
+        .prepare(
+            "SELECT agent_id, role FROM room_participants WHERE room_id = ?1 ORDER BY agent_id",
+        )
         .unwrap()
         .query_map(rusqlite::params![room_id], |row| {
             Ok((row.get(0)?, row.get(1)?))
@@ -261,8 +265,14 @@ fn room_join_participant() {
         .unwrap();
 
     assert_eq!(participants.len(), 2);
-    assert_eq!(participants[0], ("agent-1".to_string(), "owner".to_string()));
-    assert_eq!(participants[1], ("agent-2".to_string(), "member".to_string()));
+    assert_eq!(
+        participants[0],
+        ("agent-1".to_string(), "owner".to_string())
+    );
+    assert_eq!(
+        participants[1],
+        ("agent-2".to_string(), "member".to_string())
+    );
 }
 
 #[test]
