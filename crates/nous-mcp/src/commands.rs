@@ -711,7 +711,7 @@ pub fn run_room_list(
     Ok(())
 }
 
-pub fn run_room_show(config: &Config, id_or_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_room_get(config: &Config, id_or_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
     let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
     let conn = db.connection();

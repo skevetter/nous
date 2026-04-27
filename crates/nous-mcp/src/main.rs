@@ -125,7 +125,7 @@ enum RoomSubcommand {
         #[arg(long)]
         limit: Option<usize>,
     },
-    Show {
+    Get {
         id: String,
     },
     Post {
@@ -260,8 +260,8 @@ fn main() {
                 commands::run_room_list(&config, archived, limit)
                     .unwrap_or_else(|e| eprintln!("room list failed: {e}"));
             }
-            RoomSubcommand::Show { id } => {
-                commands::run_room_show(&config, &id)
+            RoomSubcommand::Get { id } => {
+                commands::run_room_get(&config, &id)
                     .unwrap_or_else(|e| eprintln!("room show failed: {e}"));
             }
             RoomSubcommand::Post {
@@ -755,15 +755,15 @@ mod tests {
     }
 
     #[test]
-    fn room_show() {
-        let cli = Cli::try_parse_from(["nous-mcp", "room", "show", "my-room"]).unwrap();
+    fn room_get() {
+        let cli = Cli::try_parse_from(["nous-mcp", "room", "get", "my-room"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
-                command: RoomSubcommand::Show { id },
+                command: RoomSubcommand::Get { id },
             }) => {
                 assert_eq!(id, "my-room");
             }
-            _ => panic!("expected Room Show"),
+            _ => panic!("expected Room Get"),
         }
     }
 
