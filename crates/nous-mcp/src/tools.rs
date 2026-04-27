@@ -166,6 +166,68 @@ pub struct OtlpMemoryContextParams {
     pub memory_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomCreateParams {
+    pub name: String,
+    pub purpose: Option<String>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomListParams {
+    #[serde(default)]
+    pub archived: bool,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomGetParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomDeleteParams {
+    pub id: String,
+    #[serde(default)]
+    pub hard: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomPostMessageParams {
+    pub room_id: String,
+    pub content: String,
+    pub sender_id: Option<String>,
+    pub reply_to: Option<String>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomReadMessagesParams {
+    pub room_id: String,
+    pub limit: Option<usize>,
+    pub before: Option<String>,
+    pub since: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomSearchParams {
+    pub room_id: String,
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomInfoParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RoomJoinParams {
+    pub room_id: String,
+    pub agent_id: String,
+    pub role: Option<String>,
+}
+
 fn ok_json(value: &serde_json::Value) -> CallToolResult {
     CallToolResult::success(vec![rmcp::model::Content::text(value.to_string())])
 }
@@ -1224,4 +1286,196 @@ pub async fn handle_otlp_memory_context(
         "spans": spans_json,
         "logs": logs_json,
     }))
+}
+
+fn looks_like_uuid(s: &str) -> bool {
+    s.len() == 36 && s.contains('-')
+}
+
+async fn resolve_room_id(id_or_name: &str, read_pool: &ReadPool) -> Result<String, CallToolResult> {
+    if looks_like_uuid(id_or_name)
+        && let Ok(Some(room)) = read_pool.get_room(id_or_name).await
+    {
+        return Ok(room.id);
+    }
+    match read_pool.get_room_by_name(id_or_name).await {
+        Ok(Some(room)) => Ok(room.id),
+        Ok(None) => Err(err_result(&format!("room not found: {id_or_name}"))),
+        Err(e) => Err(err_result(&format!("room lookup failed: {e}"))),
+    }
+}
+
+pub async fn handle_room_create(
+    params: RoomCreateParams,
+    write_channel: &WriteChannel,
+) -> CallToolResult {
+    let id = MemoryId::new().to_string();
+    match write_channel
+        .create_room(
+            id.clone(),
+            params.name.clone(),
+            params.purpose,
+            params.metadata,
+        )
+        .await
+    {
+        Ok(_) => ok_json(&serde_json::json!({
+            "id": id,
+            "name": params.name,
+        })),
+        Err(e) => err_result(&format!("room_create failed: {e}")),
+    }
+}
+
+pub async fn handle_room_list(params: RoomListParams, read_pool: &ReadPool) -> CallToolResult {
+    match read_pool.list_rooms(params.archived, params.limit).await {
+        Ok(rooms) => {
+            let list: Vec<serde_json::Value> = rooms.iter().map(|r| serde_json::json!(r)).collect();
+            ok_json(&serde_json::json!({ "rooms": list }))
+        }
+        Err(e) => err_result(&format!("room_list failed: {e}")),
+    }
+}
+
+pub async fn handle_room_get(params: RoomGetParams, read_pool: &ReadPool) -> CallToolResult {
+    if looks_like_uuid(&params.id)
+        && let Ok(Some(room)) = read_pool.get_room(&params.id).await
+    {
+        return ok_json(&serde_json::json!(room));
+    }
+    match read_pool.get_room_by_name(&params.id).await {
+        Ok(Some(room)) => ok_json(&serde_json::json!(room)),
+        Ok(None) => err_result(&format!("room not found: {}", params.id)),
+        Err(e) => err_result(&format!("room_get failed: {e}")),
+    }
+}
+
+pub async fn handle_room_delete(
+    params: RoomDeleteParams,
+    write_channel: &WriteChannel,
+) -> CallToolResult {
+    match write_channel.delete_room(params.id, params.hard).await {
+        Ok(true) => {
+            if params.hard {
+                ok_json(&serde_json::json!({"success": true, "deleted": true}))
+            } else {
+                ok_json(&serde_json::json!({"success": true, "archived": true}))
+            }
+        }
+        Ok(false) => err_result("room not found"),
+        Err(e) => err_result(&format!("room_delete failed: {e}")),
+    }
+}
+
+pub async fn handle_room_post_message(
+    params: RoomPostMessageParams,
+    write_channel: &WriteChannel,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let room_id = match resolve_room_id(&params.room_id, read_pool).await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let msg_id = MemoryId::new().to_string();
+    let sender_id = params.sender_id.unwrap_or_else(|| "system".to_string());
+    match write_channel
+        .post_message(
+            msg_id.clone(),
+            room_id.clone(),
+            sender_id.clone(),
+            params.content,
+            params.reply_to,
+            params.metadata,
+        )
+        .await
+    {
+        Ok(_) => ok_json(&serde_json::json!({
+            "id": msg_id,
+            "room_id": room_id,
+            "sender_id": sender_id,
+        })),
+        Err(e) => err_result(&format!("room_post_message failed: {e}")),
+    }
+}
+
+pub async fn handle_room_read_messages(
+    params: RoomReadMessagesParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let room_id = match resolve_room_id(&params.room_id, read_pool).await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match read_pool
+        .list_messages(&room_id, params.limit, params.before, params.since)
+        .await
+    {
+        Ok(messages) => {
+            let list: Vec<serde_json::Value> =
+                messages.iter().map(|m| serde_json::json!(m)).collect();
+            ok_json(&serde_json::json!({ "messages": list }))
+        }
+        Err(e) => err_result(&format!("room_read_messages failed: {e}")),
+    }
+}
+
+pub async fn handle_room_search(params: RoomSearchParams, read_pool: &ReadPool) -> CallToolResult {
+    let room_id = match resolve_room_id(&params.room_id, read_pool).await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match read_pool
+        .search_messages(&room_id, &params.query, params.limit)
+        .await
+    {
+        Ok(messages) => {
+            let list: Vec<serde_json::Value> =
+                messages.iter().map(|m| serde_json::json!(m)).collect();
+            ok_json(&serde_json::json!({ "messages": list }))
+        }
+        Err(e) => err_result(&format!("room_search failed: {e}")),
+    }
+}
+
+pub async fn handle_room_info(params: RoomInfoParams, read_pool: &ReadPool) -> CallToolResult {
+    let room_id = match resolve_room_id(&params.id, read_pool).await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    match read_pool.room_info(&room_id).await {
+        Ok(Some(info)) => ok_json(&info),
+        Ok(None) => err_result(&format!("room not found: {}", params.id)),
+        Err(e) => err_result(&format!("room_info failed: {e}")),
+    }
+}
+
+pub async fn handle_room_join(
+    params: RoomJoinParams,
+    write_channel: &WriteChannel,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let room_id = match resolve_room_id(&params.room_id, read_pool).await {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let role = params.role.unwrap_or_else(|| "member".to_string());
+    match &*role {
+        "owner" | "member" | "observer" => {}
+        _ => {
+            return err_result(&format!(
+                "invalid role: {role}. Must be owner, member, or observer"
+            ));
+        }
+    }
+    match write_channel
+        .join_room(room_id.clone(), params.agent_id.clone(), role.clone())
+        .await
+    {
+        Ok(()) => ok_json(&serde_json::json!({
+            "room_id": room_id,
+            "agent_id": params.agent_id,
+            "role": role,
+        })),
+        Err(e) => err_result(&format!("room_join failed: {e}")),
+    }
 }

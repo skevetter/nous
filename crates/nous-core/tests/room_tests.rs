@@ -1,4 +1,3 @@
-use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::db::MemoryDb;
 
 fn open_test_db() -> MemoryDb {
@@ -100,132 +99,214 @@ fn room_indexes_exist() {
     }
 }
 
-#[tokio::test]
-async fn room_create_and_read_round_trip() {
+#[test]
+fn room_create_and_read_round_trip() {
     let db = open_test_db();
-    let _db_path = {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.db");
-        let path_str = path.to_str().unwrap().to_string();
-        drop(db);
-
-        let db = MemoryDb::open(&path_str, None, 384).unwrap();
-        let (write_channel, _handle) = WriteChannel::new(db);
-        let read_pool = ReadPool::new(&path_str, None, 1).unwrap();
-
-        let room_id = nous_shared::ids::MemoryId::new().to_string();
-        write_channel
-            .create_room(
-                room_id.clone(),
-                "test-room".to_string(),
-                Some("A test room".to_string()),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let room = read_pool.get_room(&room_id).await.unwrap();
-        assert!(room.is_some());
-        let room = room.unwrap();
-        assert_eq!(room.name, "test-room");
-        assert_eq!(room.purpose.as_deref(), Some("A test room"));
-        assert!(!room.archived);
-
-        let rooms = read_pool.list_rooms(false, None).await.unwrap();
-        assert_eq!(rooms.len(), 1);
-        assert_eq!(rooms[0].id, room_id);
-
-        let room_by_name = read_pool.get_room_by_name("test-room").await.unwrap();
-        assert!(room_by_name.is_some());
-        assert_eq!(room_by_name.unwrap().id, room_id);
-
-        let msg_id = nous_shared::ids::MemoryId::new().to_string();
-        write_channel
-            .post_message(
-                msg_id.clone(),
-                room_id.clone(),
-                "agent-1".to_string(),
-                "Hello, world!".to_string(),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let msg_id2 = nous_shared::ids::MemoryId::new().to_string();
-        write_channel
-            .post_message(
-                msg_id2.clone(),
-                room_id.clone(),
-                "agent-2".to_string(),
-                "The linter failed on line 42".to_string(),
-                Some(msg_id.clone()),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let messages = read_pool
-            .list_messages(&room_id, None, None, None)
-            .await
-            .unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].content, "The linter failed on line 42");
-        assert_eq!(messages[1].content, "Hello, world!");
-
-        let search_results = read_pool
-            .search_messages(&room_id, "linter", None)
-            .await
-            .unwrap();
-        assert_eq!(search_results.len(), 1);
-        assert_eq!(search_results[0].sender_id, "agent-2");
-
-        let info = read_pool.room_info(&room_id).await.unwrap();
-        assert!(info.is_some());
-        let info = info.unwrap();
-        assert_eq!(info["message_count"], 2);
-
-        path_str
-    };
-}
-
-#[tokio::test]
-async fn room_archive_and_delete() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("test.db");
-    let path_str = path.to_str().unwrap();
-
-    let db = MemoryDb::open(path_str, None, 384).unwrap();
-    let (write_channel, _handle) = WriteChannel::new(db);
-    let read_pool = ReadPool::new(path_str, None, 1).unwrap();
+    let conn = db.connection();
 
     let room_id = nous_shared::ids::MemoryId::new().to_string();
-    write_channel
-        .create_room(room_id.clone(), "archive-me".to_string(), None, None)
-        .await
-        .unwrap();
+    MemoryDb::create_room_on(conn, &room_id, "test-room", Some("A test room"), None).unwrap();
 
-    let archived = write_channel.archive_room(room_id.clone()).await.unwrap();
+    let room: (String, String, Option<String>, i64) = conn
+        .query_row(
+            "SELECT id, name, purpose, archived FROM rooms WHERE id = ?1",
+            rusqlite::params![room_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(room.0, room_id);
+    assert_eq!(room.1, "test-room");
+    assert_eq!(room.2.as_deref(), Some("A test room"));
+    assert_eq!(room.3, 0);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 0", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let name_lookup: String = conn
+        .query_row(
+            "SELECT id FROM rooms WHERE name = ?1 AND archived = 0",
+            rusqlite::params!["test-room"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(name_lookup, room_id);
+
+    let msg_id = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::post_message_on(
+        conn,
+        &msg_id,
+        &room_id,
+        "agent-1",
+        "Hello, world!",
+        None,
+        None,
+    )
+    .unwrap();
+
+    let msg_id2 = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::post_message_on(
+        conn,
+        &msg_id2,
+        &room_id,
+        "agent-2",
+        "The linter failed on line 42",
+        Some(&msg_id),
+        None,
+    )
+    .unwrap();
+
+    let messages: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT sender_id, content FROM room_messages WHERE room_id = ?1 ORDER BY created_at DESC",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![room_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].1, "The linter failed on line 42");
+    assert_eq!(messages[1].1, "Hello, world!");
+
+    let search_results: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT m.sender_id, m.content FROM room_messages m
+             JOIN room_messages_fts ON m.rowid = room_messages_fts.rowid
+             WHERE room_messages_fts MATCH ?1 AND m.room_id = ?2",
+        )
+        .unwrap()
+        .query_map(rusqlite::params!["linter", room_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(search_results.len(), 1);
+    assert_eq!(search_results[0].0, "agent-2");
+
+    let message_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM room_messages WHERE room_id = ?1",
+            rusqlite::params![room_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(message_count, 2);
+}
+
+#[test]
+fn room_archive_and_delete() {
+    let db = open_test_db();
+    let conn = db.connection();
+
+    let room_id = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::create_room_on(conn, &room_id, "archive-me", None, None).unwrap();
+
+    let archived = MemoryDb::archive_room_on(conn, &room_id).unwrap();
     assert!(archived);
 
-    let active_rooms = read_pool.list_rooms(false, None).await.unwrap();
-    assert!(active_rooms.is_empty());
+    let active: i64 = conn
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 0", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(active, 0);
 
-    let archived_rooms = read_pool.list_rooms(true, None).await.unwrap();
-    assert_eq!(archived_rooms.len(), 1);
+    let archived_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM rooms WHERE archived = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(archived_count, 1);
 
     let room_id2 = nous_shared::ids::MemoryId::new().to_string();
-    write_channel
-        .create_room(room_id2.clone(), "delete-me".to_string(), None, None)
-        .await
-        .unwrap();
+    MemoryDb::create_room_on(conn, &room_id2, "delete-me", None, None).unwrap();
 
-    let deleted = write_channel
-        .delete_room(room_id2.clone(), true)
-        .await
-        .unwrap();
+    let deleted = MemoryDb::hard_delete_room_on(conn, &room_id2).unwrap();
     assert!(deleted);
 
-    let room = read_pool.get_room(&room_id2).await.unwrap();
-    assert!(room.is_none());
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?1)",
+            rusqlite::params![room_id2],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!exists);
+}
+
+#[test]
+fn room_join_participant() {
+    let db = open_test_db();
+    let conn = db.connection();
+
+    let room_id = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::create_room_on(conn, &room_id, "join-test", None, None).unwrap();
+
+    MemoryDb::join_room_on(conn, &room_id, "agent-1", "owner").unwrap();
+    MemoryDb::join_room_on(conn, &room_id, "agent-2", "member").unwrap();
+
+    let participants: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT agent_id, role FROM room_participants WHERE room_id = ?1 ORDER BY agent_id",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![room_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(participants.len(), 2);
+    assert_eq!(
+        participants[0],
+        ("agent-1".to_string(), "owner".to_string())
+    );
+    assert_eq!(
+        participants[1],
+        ("agent-2".to_string(), "member".to_string())
+    );
+}
+
+#[test]
+fn room_unique_name_constraint() {
+    let db = open_test_db();
+    let conn = db.connection();
+
+    let room_id1 = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::create_room_on(conn, &room_id1, "unique-room", None, None).unwrap();
+
+    let room_id2 = nous_shared::ids::MemoryId::new().to_string();
+    let result = MemoryDb::create_room_on(conn, &room_id2, "unique-room", None, None);
+    assert!(result.is_err(), "duplicate room name should fail");
+}
+
+#[test]
+fn room_cascade_delete_messages() {
+    let db = open_test_db();
+    let conn = db.connection();
+
+    let room_id = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::create_room_on(conn, &room_id, "cascade-test", None, None).unwrap();
+
+    let msg_id = nous_shared::ids::MemoryId::new().to_string();
+    MemoryDb::post_message_on(conn, &msg_id, &room_id, "agent-1", "message", None, None).unwrap();
+
+    MemoryDb::hard_delete_room_on(conn, &room_id).unwrap();
+
+    let msg_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM room_messages WHERE room_id = ?1",
+            rusqlite::params![room_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(msg_count, 0, "messages should be cascade-deleted with room");
 }
