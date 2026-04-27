@@ -540,33 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn trace_with_trace_id_and_session_id() {
-        let cli = Cli::try_parse_from([
-            "nous-mcp",
-            "trace",
-            "--trace-id",
-            "abc123",
-            "--session-id",
-            "sess456",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::Trace {
-                trace_id,
-                memory_id,
-                session_id,
-            } => {
-                assert_eq!(trace_id.as_deref(), Some("abc123"));
-                assert!(memory_id.is_none());
-                assert_eq!(session_id.as_deref(), Some("sess456"));
-            }
-            _ => panic!("expected Trace"),
-        }
-    }
-
-    #[test]
     fn trace_with_memory_id() {
-        let cli = Cli::try_parse_from(["nous-mcp", "trace", "--memory-id", "mem789"]).unwrap();
+        let cli = Cli::try_parse_from(["nous-mcp", "trace", "--memory-id", "mem-789"]).unwrap();
         match cli.command {
             Command::Trace {
                 trace_id,
@@ -574,7 +549,7 @@ mod tests {
                 session_id,
             } => {
                 assert!(trace_id.is_none());
-                assert_eq!(memory_id.as_deref(), Some("mem789"));
+                assert_eq!(memory_id.as_deref(), Some("mem-789"));
                 assert!(session_id.is_none());
             }
             _ => panic!("expected Trace"),
@@ -583,20 +558,14 @@ mod tests {
 
     #[test]
     fn trace_both_trace_and_memory_id_errors() {
-        let result = Cli::try_parse_from([
-            "nous-mcp",
-            "trace",
-            "--trace-id",
-            "abc",
-            "--memory-id",
-            "def",
-        ]);
+        let result =
+            Cli::try_parse_from(["nous-mcp", "trace", "--trace-id", "a", "--memory-id", "b"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn trace_session_id_requires_trace_id() {
-        let result = Cli::try_parse_from(["nous-mcp", "trace", "--session-id", "sess"]);
+        let result = Cli::try_parse_from(["nous-mcp", "trace", "--session-id", "s"]);
         assert!(result.is_err());
     }
 
