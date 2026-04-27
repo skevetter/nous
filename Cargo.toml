@@ -4,6 +4,7 @@ members = [
     "crates/nous-core",
     "crates/nous-mcp",
     "crates/nous-otlp",
+    "crates/nous-pcl",
     "tests/correlation",
     "tests/e2e",
 ]
