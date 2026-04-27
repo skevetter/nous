@@ -81,7 +81,7 @@ Nous auto-detects model architecture by inspecting the ONNX graph inputs for KV-
 | Encoder | BGE-small, MiniLM | Right | No |
 | Decoder | Qwen3-Embedding | Left | Inputs detected |
 
-KV-cache inference optimization for decoder models is planned but not yet implemented.
+KV-cache inference optimization for decoder models is implemented: zero-initialized cache tensors, position IDs, and named input binding are constructed automatically for decoder architectures.
 
 ## Feature Status
 
@@ -94,10 +94,9 @@ KV-cache inference optimization for decoder models is planned but not yet implem
 - SQLCipher encryption at rest
 - OTLP trace/log/metric ingestion
 - Encoder and decoder model support with architecture auto-detection
+- KV-cache inference optimization for decoder models
 
 ### Planned
-
-- KV-cache inference optimization for decoder models
 - OTLP-to-memory correlation (linking traces to stored memories)
 - Category tuning and custom classification
 
