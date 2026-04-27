@@ -287,6 +287,15 @@ enum CategorySubcommand {
         #[arg(long)]
         threshold: Option<f32>,
     },
+    Suggest {
+        memory_id: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        parent: Option<String>,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -765,6 +774,23 @@ fn run_command(
                     description.as_deref(),
                     threshold,
                     embedding.as_ref(),
+                )?;
+            }
+            CategorySubcommand::Suggest {
+                memory_id,
+                name,
+                description,
+                parent,
+            } => {
+                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                commands::run_category_suggest(
+                    config,
+                    &memory_id,
+                    &name,
+                    description.as_deref(),
+                    parent.as_deref(),
+                    embedding.as_ref(),
+                    format,
                 )?;
             }
         },
@@ -1273,6 +1299,70 @@ mod tests {
                 assert_eq!(source.as_deref(), Some("manual"));
             }
             _ => panic!("expected Category List"),
+        }
+    }
+
+    #[test]
+    fn category_suggest_defaults() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "category",
+            "suggest",
+            "mem_abc123",
+            "--name",
+            "Performance",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Category(CategoryCmd {
+                command:
+                    CategorySubcommand::Suggest {
+                        memory_id,
+                        name,
+                        description,
+                        parent,
+                    },
+            }) => {
+                assert_eq!(memory_id, "mem_abc123");
+                assert_eq!(name, "Performance");
+                assert!(description.is_none());
+                assert!(parent.is_none());
+            }
+            _ => panic!("expected Category Suggest"),
+        }
+    }
+
+    #[test]
+    fn category_suggest_all_flags() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "category",
+            "suggest",
+            "mem_xyz789",
+            "--name",
+            "Perf",
+            "--description",
+            "Performance stuff",
+            "--parent",
+            "42",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Category(CategoryCmd {
+                command:
+                    CategorySubcommand::Suggest {
+                        memory_id,
+                        name,
+                        description,
+                        parent,
+                    },
+            }) => {
+                assert_eq!(memory_id, "mem_xyz789");
+                assert_eq!(name, "Perf");
+                assert_eq!(description.as_deref(), Some("Performance stuff"));
+                assert_eq!(parent.as_deref(), Some("42"));
+            }
+            _ => panic!("expected Category Suggest"),
         }
     }
 
@@ -3434,6 +3524,170 @@ mod tests {
 
         commands::run_embedding_inspect(&cfg, &format).unwrap();
         commands::run_embedding_reset(&cfg, true, &format).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    // --- Category suggest integration tests ---
+
+    #[test]
+    fn integration_category_suggest_creates_and_assigns() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+
+        commands::run_store(
+            &cfg,
+            "Category suggest test",
+            "Memory for category suggest",
+            "fact",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let mem_id: String = db
+            .connection()
+            .query_row("SELECT id FROM memories LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+
+        commands::run_category_suggest(
+            &cfg,
+            &mem_id,
+            "TestCategory",
+            Some("A test category"),
+            None,
+            embedding.as_ref(),
+            &format,
+        )
+        .unwrap();
+
+        let cat_id: i64 = db
+            .connection()
+            .query_row(
+                "SELECT category_id FROM memories WHERE id = ?1",
+                rusqlite::params![mem_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(cat_id > 0);
+
+        let cat_name: String = db
+            .connection()
+            .query_row(
+                "SELECT name FROM categories WHERE id = ?1",
+                rusqlite::params![cat_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cat_name, "TestCategory");
+
+        let cat_source: String = db
+            .connection()
+            .query_row(
+                "SELECT source FROM categories WHERE id = ?1",
+                rusqlite::params![cat_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cat_source, "agent");
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_category_suggest_not_found_exits_3() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+
+        let result = commands::run_category_suggest(
+            &cfg,
+            "mem_nonexistent_id_12345",
+            "SomeCategory",
+            None,
+            None,
+            embedding.as_ref(),
+            &format,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 3);
+        } else {
+            panic!("expected NousError::NotFound");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_category_suggest_with_description() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Human;
+        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+
+        commands::run_store(
+            &cfg,
+            "Desc test",
+            "Content for description test",
+            "observation",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        let db_key = cfg.resolve_db_key().ok();
+        let db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let mem_id: String = db
+            .connection()
+            .query_row("SELECT id FROM memories LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+
+        commands::run_category_suggest(
+            &cfg,
+            &mem_id,
+            "DescCat",
+            Some("Category with description"),
+            None,
+            embedding.as_ref(),
+            &format,
+        )
+        .unwrap();
+
+        let desc: Option<String> = db
+            .connection()
+            .query_row(
+                "SELECT description FROM categories WHERE name = 'DescCat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(desc.as_deref(), Some("Category with description"));
 
         let _ = std::fs::remove_file(&cfg.memory.db_path);
     }

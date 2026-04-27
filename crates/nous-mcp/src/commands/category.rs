@@ -1,6 +1,8 @@
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
 use nous_core::types::{CategorySource, CategoryTree};
+use nous_shared::NousError;
+use nous_shared::ids::MemoryId;
 use serde::Serialize;
 
 use super::OutputFormat;
@@ -224,5 +226,100 @@ pub fn run_category_update(
     }
 
     println!("Updated category '{name}'");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_category_suggest(
+    config: &Config,
+    memory_id: &str,
+    name: &str,
+    description: Option<&str>,
+    parent: Option<&str>,
+    embedding: &dyn EmbeddingBackend,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mid = memory_id.parse::<MemoryId>().map_err(|e| {
+        Box::new(NousError::Validation(format!("invalid id: {e}"))) as Box<dyn std::error::Error>
+    })?;
+
+    let db_key = config.resolve_db_key().ok();
+    let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+
+    let exists: bool = db
+        .connection()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM memories WHERE id = ?1)",
+            rusqlite::params![mid.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !exists {
+        return Err(Box::new(NousError::NotFound(format!(
+            "memory not found: {memory_id}"
+        ))));
+    }
+
+    let parent_id = match parent {
+        Some(parent_str) => {
+            if let Ok(id) = parent_str.parse::<i64>() {
+                Some(id)
+            } else {
+                let id: i64 = db
+                    .connection()
+                    .query_row(
+                        "SELECT id FROM categories WHERE name = ?1",
+                        rusqlite::params![parent_str],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| format!("parent category '{parent_str}' not found"))?;
+                Some(id)
+            }
+        }
+        None => None,
+    };
+
+    let cat_id = db.category_suggest(name, description, parent_id, &mid)?;
+
+    let embed_text = match description {
+        Some(desc) if !desc.is_empty() => format!("{name} {desc}"),
+        _ => name.to_string(),
+    };
+    let emb = embedding.embed_one(&embed_text)?;
+    let blob: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
+    db.connection().execute(
+        "UPDATE categories SET embedding = ?1 WHERE id = ?2",
+        rusqlite::params![blob, cat_id],
+    )?;
+
+    match format {
+        OutputFormat::Json => {
+            #[derive(Serialize)]
+            struct SuggestResult {
+                category_id: i64,
+                category_name: String,
+                memory_id: String,
+            }
+            print_json(&SuggestResult {
+                category_id: cat_id,
+                category_name: name.to_string(),
+                memory_id: memory_id.to_string(),
+            })?;
+        }
+        OutputFormat::Csv => {
+            print_csv(
+                &["category_id", "category_name", "memory_id"],
+                &[vec![
+                    cat_id.to_string(),
+                    name.to_string(),
+                    memory_id.to_string(),
+                ]],
+            )?;
+        }
+        OutputFormat::Human => {
+            println!("Category created: {cat_id} ({name})");
+            println!("Memory updated: {memory_id}");
+        }
+    }
     Ok(())
 }

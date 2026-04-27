@@ -16,6 +16,7 @@ path = "src/main.rs"
 nous-shared = { path = "../nous-shared" }
 axum = { workspace = true }
 clap = { workspace = true }
+csv = { workspace = true }
 prost = { workspace = true }
 opentelemetry-proto = { workspace = true }
 rusqlite = { workspace = true }
