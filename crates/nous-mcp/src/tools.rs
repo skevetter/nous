@@ -648,6 +648,7 @@ pub async fn handle_category_list(
     db_path: &str,
     dimensions: usize,
     source: Option<String>,
+    db_key: Option<&str>,
 ) -> CallToolResult {
     let source_filter = match source.as_deref() {
         Some(s) => match s.parse::<CategorySource>() {
@@ -658,8 +659,9 @@ pub async fn handle_category_list(
     };
 
     let db_path = db_path.to_owned();
+    let db_key = db_key.map(|k| k.to_owned());
     match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, dimensions)?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), dimensions)?;
         db.category_list(source_filter)
     })
     .await
@@ -687,8 +689,10 @@ pub async fn handle_category_add(
     db_path: &str,
     dimensions: usize,
     embedding: &Arc<dyn EmbeddingBackend>,
+    db_key: Option<&str>,
 ) -> CallToolResult {
     let db_path = db_path.to_owned();
+    let db_key = db_key.map(|k| k.to_owned());
     let name = params.name;
     let parent = params.parent;
     let description = params.description;
@@ -707,7 +711,7 @@ pub async fn handle_category_add(
     };
 
     match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, dimensions)?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), dimensions)?;
 
         let parent_id = match parent.as_deref() {
             Some(pname) => {
@@ -991,6 +995,7 @@ pub async fn handle_search(
     db_path: &str,
     dimensions: usize,
     embedding: &Arc<dyn EmbeddingBackend>,
+    db_key: Option<&str>,
 ) -> CallToolResult {
     let mode = match params.mode.as_deref() {
         Some(v) => match parse_enum::<SearchMode>(v, "mode") {
@@ -1053,9 +1058,10 @@ pub async fn handle_search(
     };
 
     let db_path = db_path.to_owned();
+    let db_key = db_key.map(|k| k.to_owned());
     let query = params.query;
     let results = match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, dimensions)?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), dimensions)?;
         db.search(&query, &query_embedding, &filters, mode)
     })
     .await
@@ -1097,13 +1103,15 @@ pub async fn handle_context(
     params: MemoryContextParams,
     db_path: &str,
     dimensions: usize,
+    db_key: Option<&str>,
 ) -> CallToolResult {
     let workspace_path = params.workspace_path;
     let summary = params.summary;
 
     let db_path = db_path.to_owned();
+    let db_key = db_key.map(|k| k.to_owned());
     let entries = match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None, dimensions)?;
+        let db = MemoryDb::open(&db_path, db_key.as_deref(), dimensions)?;
 
         let ws_id: i64 = match db.connection().query_row(
             "SELECT id FROM workspaces WHERE path = ?1",

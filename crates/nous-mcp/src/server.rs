@@ -24,6 +24,7 @@ pub struct NousServer {
     pub chunker: Chunker,
     pub config: Config,
     pub db_path: String,
+    pub db_key: Option<String>,
     pub scheduler_notify: Arc<Notify>,
     _scheduler_handle: Option<tokio::task::JoinHandle<()>>,
     _tool_router: ToolRouter<Self>,
@@ -100,6 +101,7 @@ impl NousServer {
             chunker,
             config,
             db_path: db_path.to_owned(),
+            db_key: key.map(|k| k.to_owned()),
             scheduler_notify,
             _scheduler_handle: scheduler_handle,
             _tool_router: Self::tool_router(),
@@ -136,6 +138,7 @@ impl NousServer {
             &self.db_path,
             self.config.embedding.dimensions,
             &self.embedding,
+            self.db_key.as_deref(),
         )
         .await
     }
@@ -145,7 +148,13 @@ impl NousServer {
         description = "Get context-relevant memories for a workspace"
     )]
     async fn memory_context(&self, params: Parameters<MemoryContextParams>) -> CallToolResult {
-        handle_context(params.0, &self.db_path, self.config.embedding.dimensions).await
+        handle_context(
+            params.0,
+            &self.db_path,
+            self.config.embedding.dimensions,
+            self.db_key.as_deref(),
+        )
+        .await
     }
 
     #[tool(
@@ -219,6 +228,7 @@ impl NousServer {
             &self.db_path,
             self.config.embedding.dimensions,
             params.0.source,
+            self.db_key.as_deref(),
         )
         .await
     }
@@ -236,6 +246,7 @@ impl NousServer {
             &self.db_path,
             self.config.embedding.dimensions,
             &self.embedding,
+            self.db_key.as_deref(),
         )
         .await
     }
@@ -1602,6 +1613,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -1699,6 +1711,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -1763,6 +1776,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -1827,6 +1841,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -1877,6 +1892,7 @@ mod tests {
             },
             &db_path,
             384,
+            None,
         )
         .await;
 
@@ -1914,6 +1930,7 @@ mod tests {
             },
             &db_path,
             384,
+            None,
         )
         .await;
 
@@ -1959,6 +1976,7 @@ mod tests {
             },
             &db_path,
             384,
+            None,
         )
         .await;
 
@@ -2096,6 +2114,7 @@ mod tests {
             },
             &db_path,
             384,
+            None,
         )
         .await;
 
@@ -2133,6 +2152,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -2167,6 +2187,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -2250,6 +2271,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -2307,6 +2329,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -2357,6 +2380,7 @@ mod tests {
             &db_path,
             384,
             &server.embedding,
+            None,
         )
         .await;
 
@@ -2402,6 +2426,7 @@ mod tests {
             },
             &db_path,
             384,
+            None,
         )
         .await;
 
@@ -2778,5 +2803,51 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(&otlp_path);
+    }
+
+    #[tokio::test]
+    async fn server_and_cli_use_same_encryption_key() {
+        let db_path = test_db_path();
+        let key = "test-encryption-key-abc123";
+
+        {
+            let db = MemoryDb::open(&db_path, Some(key), 384).unwrap();
+            db.connection()
+                .execute(
+                    "INSERT INTO memories (id, title, content, memory_type, importance, confidence, archived, created_at, updated_at)
+                     VALUES ('test-id', 'test', 'content', 'fact', 'moderate', 'moderate', 0, datetime('now'), datetime('now'))",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let mut cfg = Config::default();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
+        let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
+        let _server = NousServer::new(cfg, embedding, &db_path, Some(key)).unwrap();
+
+        let db = MemoryDb::open(&db_path, Some(key), 384).unwrap();
+        let count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            count >= 1,
+            "CLI path should read server-created encrypted DB"
+        );
+
+        let wrong_key_result = MemoryDb::open(&db_path, Some("wrong-key"), 384);
+        assert!(
+            wrong_key_result.is_err(),
+            "wrong key should fail to open encrypted DB"
+        );
+
+        let no_key_result = MemoryDb::open(&db_path, None, 384);
+        assert!(
+            no_key_result.is_err(),
+            "opening encrypted DB without key should fail"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }
