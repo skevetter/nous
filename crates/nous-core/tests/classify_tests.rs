@@ -260,13 +260,13 @@ fn per_category_threshold_overrides_global() {
 
     db.connection()
         .execute(
-            "UPDATE categories SET threshold = 2.0 WHERE name = 'infrastructure'",
+            "UPDATE categories SET threshold = 1e10 WHERE name = 'infrastructure'",
             [],
         )
         .unwrap();
     db.connection()
         .execute(
-            "UPDATE categories SET threshold = 2.0 WHERE parent_id = (SELECT id FROM categories WHERE name = 'infrastructure')",
+            "UPDATE categories SET threshold = 1e10 WHERE parent_id = (SELECT id FROM categories WHERE name = 'infrastructure')",
             [],
         )
         .unwrap();
@@ -283,7 +283,7 @@ fn per_category_threshold_overrides_global() {
             assert_ne!(
                 id,
                 without_override.unwrap(),
-                "per-category threshold=2.0 should prevent infrastructure from being the best match"
+                "per-category threshold=1e10 should prevent infrastructure from being the best match"
             );
         }
     }
