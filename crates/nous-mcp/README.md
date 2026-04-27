@@ -47,7 +47,7 @@ and falls back to `MockEmbedding(384)` if ONNX initialization fails.
 Configuration is loaded from TOML with five sections: `MemoryConfig`,
 `EmbeddingConfig`, `OtlpConfig`, `ClassificationConfig`, and `EncryptionConfig`.
 Defaults include model `onnx-community/Qwen3-Embedding-0.6B-ONNX`, variant
-`onnx/model_q4f16.onnx`, chunk size 512 with overlap 64, and confidence threshold 0.3.
+`onnx/model_q4.onnx`, chunk size 512 with overlap 64, and confidence threshold 0.3.
 Environment variable overrides are supported: `NOUS_MEMORY_DB`, `NOUS_OTLP_DB`,
 and `NOUS_DB_KEY_FILE`.
 

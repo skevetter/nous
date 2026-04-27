@@ -77,7 +77,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model: "onnx-community/Qwen3-Embedding-0.6B-ONNX".into(),
-            variant: "onnx/model_q4f16.onnx".into(),
+            variant: "onnx/model_q4.onnx".into(),
             chunk_size: 512,
             chunk_overlap: 64,
         }
@@ -154,7 +154,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "onnx/model_q4f16.onnx"
+variant = "onnx/model_q4.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -282,7 +282,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "onnx/model_q4f16.onnx"
+variant = "onnx/model_q4.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -324,7 +324,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -342,7 +342,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -400,7 +400,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -423,7 +423,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "onnx/model_q4f16.onnx"
+variant = "onnx/model_q4.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
