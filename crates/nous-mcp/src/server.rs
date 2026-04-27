@@ -1,11 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::chunk::Chunker;
 use nous_core::classify::CategoryClassifier;
 use nous_core::db::MemoryDb;
 use nous_core::embed::EmbeddingBackend;
-use nous_otlp::db::OtlpDb;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -23,7 +22,6 @@ pub struct NousServer {
     pub chunker: Chunker,
     pub config: Config,
     pub db_path: String,
-    pub otlp_db: Option<Mutex<OtlpDb>>,
     _tool_router: ToolRouter<Self>,
 }
 
@@ -70,18 +68,6 @@ impl NousServer {
         let read_pool = ReadPool::new(db_path, None, 4)?;
         let embedding = Arc::from(embedding);
 
-        let otlp_db = if config.otlp.db_path.is_empty() {
-            None
-        } else {
-            match OtlpDb::open(&config.otlp.db_path, None) {
-                Ok(db) => Some(Mutex::new(db)),
-                Err(e) => {
-                    eprintln!("warning: failed to open OTLP database: {e}");
-                    None
-                }
-            }
-        };
-
         Ok(Self {
             write_channel,
             _write_handle: write_handle,
@@ -91,7 +77,6 @@ impl NousServer {
             chunker,
             config,
             db_path: db_path.to_owned(),
-            otlp_db,
             _tool_router: Self::tool_router(),
         })
     }
@@ -292,7 +277,7 @@ impl NousServer {
         &self,
         params: Parameters<OtlpTraceContextParams>,
     ) -> CallToolResult {
-        handle_otlp_trace_context(params.0, &self.otlp_db, &self.read_pool).await
+        handle_otlp_trace_context(params.0, &self.config.otlp.db_path, &self.read_pool).await
     }
 
     #[tool(
@@ -303,7 +288,7 @@ impl NousServer {
         &self,
         params: Parameters<OtlpMemoryContextParams>,
     ) -> CallToolResult {
-        handle_otlp_memory_context(params.0, &self.otlp_db, &self.read_pool).await
+        handle_otlp_memory_context(params.0, &self.config.otlp.db_path, &self.read_pool).await
     }
 }
 
@@ -314,6 +299,7 @@ impl ServerHandler for NousServer {}
 mod tests {
     use super::*;
     use crate::config::Config;
+    use nous_otlp::db::OtlpDb;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn test_db_path() -> String {

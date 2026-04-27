@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::chunk::Chunker;
@@ -1099,13 +1099,12 @@ fn log_to_json(l: &nous_otlp::decode::LogEvent) -> serde_json::Value {
 
 pub async fn handle_otlp_trace_context(
     params: OtlpTraceContextParams,
-    otlp_db: &Option<Mutex<OtlpDb>>,
+    otlp_db_path: &str,
     read_pool: &ReadPool,
 ) -> CallToolResult {
-    let otlp = match otlp_db {
-        Some(db) => db,
-        None => return err_result("OTLP database not configured"),
-    };
+    if otlp_db_path.is_empty() {
+        return err_result("OTLP database not configured");
+    }
 
     let trace_id = params.trace_id.clone();
     let session_id = params.session_id.clone();
@@ -1137,19 +1136,26 @@ pub async fn handle_otlp_trace_context(
         Err(e) => return err_result(&format!("memory query failed: {e}")),
     };
 
-    let spans = match otlp.lock().unwrap().query_spans(&trace_id, None, None) {
-        Ok(s) => s,
-        Err(e) => return err_result(&format!("span query failed: {e}")),
+    let otlp_path = otlp_db_path.to_owned();
+    let trace_id_clone = trace_id.clone();
+    let session_id_clone = session_id.clone();
+    let (spans, logs) = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = OtlpDb::open(&otlp_path, None)?;
+        let spans = db.query_spans(&trace_id_clone, None, None)?;
+        let logs = match &session_id_clone {
+            Some(sid) => db.query_logs(sid, None, None)?,
+            None => vec![],
+        };
+        Ok((spans, logs))
+    })
+    .await
+    {
+        Ok((s, l)) => (s, l),
+        Err(e) => return err_result(&format!("OTLP query failed: {e}")),
     };
-    let spans_json: Vec<serde_json::Value> = spans.iter().map(span_to_json).collect();
 
-    let logs_json: Vec<serde_json::Value> = match &session_id {
-        Some(sid) => match otlp.lock().unwrap().query_logs(sid, None, None) {
-            Ok(l) => l.iter().map(log_to_json).collect(),
-            Err(e) => return err_result(&format!("log query failed: {e}")),
-        },
-        None => vec![],
-    };
+    let spans_json: Vec<serde_json::Value> = spans.iter().map(span_to_json).collect();
+    let logs_json: Vec<serde_json::Value> = logs.iter().map(log_to_json).collect();
 
     ok_json(&serde_json::json!({
         "memories": memories,
@@ -1160,13 +1166,12 @@ pub async fn handle_otlp_trace_context(
 
 pub async fn handle_otlp_memory_context(
     params: OtlpMemoryContextParams,
-    otlp_db: &Option<Mutex<OtlpDb>>,
+    otlp_db_path: &str,
     read_pool: &ReadPool,
 ) -> CallToolResult {
-    let otlp = match otlp_db {
-        Some(db) => db,
-        None => return err_result("OTLP database not configured"),
-    };
+    if otlp_db_path.is_empty() {
+        return err_result("OTLP database not configured");
+    }
 
     let id = match params.memory_id.parse::<MemoryId>() {
         Ok(v) => v,
@@ -1185,28 +1190,34 @@ pub async fn handle_otlp_memory_context(
         Err(e) => return err_result(&format!("recall failed: {e}")),
     };
 
-    let trace_id = &memory.memory.trace_id;
-    let session_id = &memory.memory.session_id;
+    let trace_id = memory.memory.trace_id.clone();
+    let session_id = memory.memory.session_id.clone();
 
     if trace_id.is_none() && session_id.is_none() {
         return err_result("memory has no trace_id or session_id for OTLP correlation");
     }
 
-    let spans_json: Vec<serde_json::Value> = match trace_id {
-        Some(tid) => match otlp.lock().unwrap().query_spans(tid, None, None) {
-            Ok(s) => s.iter().map(span_to_json).collect(),
-            Err(e) => return err_result(&format!("span query failed: {e}")),
-        },
-        None => vec![],
+    let otlp_path = otlp_db_path.to_owned();
+    let (spans, logs) = match nous_shared::sqlite::spawn_blocking(move || {
+        let db = OtlpDb::open(&otlp_path, None)?;
+        let spans = match &trace_id {
+            Some(tid) => db.query_spans(tid, None, None)?,
+            None => vec![],
+        };
+        let logs = match &session_id {
+            Some(sid) => db.query_logs(sid, None, None)?,
+            None => vec![],
+        };
+        Ok((spans, logs))
+    })
+    .await
+    {
+        Ok((s, l)) => (s, l),
+        Err(e) => return err_result(&format!("OTLP query failed: {e}")),
     };
 
-    let logs_json: Vec<serde_json::Value> = match session_id {
-        Some(sid) => match otlp.lock().unwrap().query_logs(sid, None, None) {
-            Ok(l) => l.iter().map(log_to_json).collect(),
-            Err(e) => return err_result(&format!("log query failed: {e}")),
-        },
-        None => vec![],
-    };
+    let spans_json: Vec<serde_json::Value> = spans.iter().map(span_to_json).collect();
+    let logs_json: Vec<serde_json::Value> = logs.iter().map(log_to_json).collect();
 
     ok_json(&serde_json::json!({
         "memory": recall_to_json(&memory),
