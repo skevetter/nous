@@ -72,11 +72,18 @@ impl NousServer {
         let read_pool = ReadPool::new(db_path, None, 4)?;
         let embedding = Arc::from(embedding);
 
+        let otlp_path = if config.otlp.db_path.is_empty() {
+            None
+        } else {
+            Some(config.otlp.db_path.clone())
+        };
+
         let (scheduler_notify, scheduler_handle) = if config.schedule.enabled {
-            let (notify, handle) = Scheduler::spawn(
+            let (notify, handle) = Scheduler::spawn_with_otlp(
                 write_channel.clone(),
                 read_pool.clone(),
                 config.schedule.clone(),
+                otlp_path,
             );
             (notify, Some(handle))
         } else {
@@ -437,6 +444,51 @@ impl NousServer {
     )]
     async fn schedule_resume(&self, params: Parameters<ScheduleResumeParams>) -> CallToolResult {
         handle_schedule_resume(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
+
+    #[tool(
+        name = "schedule_runs",
+        description = "Query execution history across all or one schedule. Filter by schedule_id, status, since (epoch seconds), limit."
+    )]
+    async fn schedule_runs(&self, params: Parameters<ScheduleRunsParams>) -> CallToolResult {
+        handle_schedule_runs(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_run_get",
+        description = "Return full run detail including output and error fields."
+    )]
+    async fn schedule_run_get(&self, params: Parameters<ScheduleRunGetParams>) -> CallToolResult {
+        handle_schedule_run_get(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_trigger",
+        description = "Execute a schedule immediately, outside its cron cadence. Records a normal run."
+    )]
+    async fn schedule_trigger(&self, params: Parameters<ScheduleTriggerParams>) -> CallToolResult {
+        let otlp_path = &self.config.otlp.db_path;
+        let otlp = if otlp_path.is_empty() {
+            None
+        } else {
+            Some(otlp_path.as_str())
+        };
+        handle_schedule_trigger(
+            params.0,
+            &self.write_channel,
+            &self.read_pool,
+            &self.config.schedule,
+            otlp,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "schedule_health",
+        description = "Summary: total schedules, active count, failing count, outcome mismatches, next 5 upcoming fires."
+    )]
+    async fn schedule_health(&self, _params: Parameters<ScheduleHealthParams>) -> CallToolResult {
+        handle_schedule_health(&self.read_pool).await
     }
 }
 
