@@ -711,8 +711,10 @@ name = "e2e-tests"
 version = "0.0.0"
 dependencies = [
  "nous-core",
+ "nous-mcp",
  "nous-otlp",
  "reqwest",
+ "rmcp",
  "serde_json",
  "tempfile",
  "tokio",
