@@ -120,9 +120,9 @@ fn format_duration_ms(start: i64, end: i64) -> String {
     let nanos = end.saturating_sub(start);
     let ms = nanos as f64 / 1_000_000.0;
     if ms < 1.0 {
-        format!("{:.2}ms", ms)
+        format!("{ms:.2}ms")
     } else {
-        format!("{:.0}ms", ms)
+        format!("{ms:.0}ms")
     }
 }
 
