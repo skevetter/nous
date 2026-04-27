@@ -12,7 +12,7 @@ pub use admin::{
 };
 pub use category::{
     run_category_add, run_category_delete, run_category_list, run_category_rename,
-    run_category_update,
+    run_category_suggest, run_category_update,
 };
 pub use memory::{
     run_forget, run_recall, run_relate, run_search, run_store, run_unarchive, run_unrelate,
