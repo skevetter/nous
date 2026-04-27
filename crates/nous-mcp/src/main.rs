@@ -217,6 +217,8 @@ enum ModelSubcommand {
         variant: String,
         #[arg(long)]
         dimensions: i64,
+        #[arg(long, default_value_t = 8192)]
+        max_tokens: i64,
         #[arg(long, default_value_t = 512)]
         chunk_size: i64,
         #[arg(long, default_value_t = 64)]
@@ -982,6 +984,7 @@ fn run_command(
                 name,
                 variant,
                 dimensions,
+                max_tokens,
                 chunk_size,
                 chunk_overlap,
             } => {
@@ -990,6 +993,7 @@ fn run_command(
                     &name,
                     &variant,
                     dimensions,
+                    max_tokens,
                     chunk_size,
                     chunk_overlap,
                     format,
@@ -2927,6 +2931,8 @@ mod tests {
             "onnx/model.onnx",
             "--dimensions",
             "384",
+            "--max-tokens",
+            "512",
             "--chunk-size",
             "256",
             "--chunk-overlap",
@@ -2940,6 +2946,7 @@ mod tests {
                         name,
                         variant,
                         dimensions,
+                        max_tokens,
                         chunk_size,
                         chunk_overlap,
                     },
@@ -2947,6 +2954,7 @@ mod tests {
                 assert_eq!(name, "BAAI/bge-small-en-v1.5");
                 assert_eq!(variant, "onnx/model.onnx");
                 assert_eq!(dimensions, 384);
+                assert_eq!(max_tokens, 512);
                 assert_eq!(chunk_size, 256);
                 assert_eq!(chunk_overlap, 32);
             }
@@ -2972,11 +2980,13 @@ mod tests {
             Command::Model(ModelCmd {
                 command:
                     ModelSubcommand::Register {
+                        max_tokens,
                         chunk_size,
                         chunk_overlap,
                         ..
                     },
             }) => {
+                assert_eq!(max_tokens, 8192);
                 assert_eq!(chunk_size, 512);
                 assert_eq!(chunk_overlap, 64);
             }
@@ -3171,6 +3181,7 @@ mod tests {
             "BAAI/bge-small-en-v1.5",
             "onnx/model.onnx",
             384,
+            8192,
             512,
             64,
             &format,
@@ -3189,7 +3200,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 8192, 512, 64, &format)
+            .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3230,7 +3242,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 8192, 512, 64, &format)
+            .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3256,8 +3269,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "model-a", "v1", 384, 512, 64, &format).unwrap();
-        commands::run_model_register(&cfg, "model-b", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "model-a", "v1", 384, 8192, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "model-b", "v1", 384, 8192, 512, 64, &format).unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3282,8 +3295,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "small", "v1", 384, 512, 64, &format).unwrap();
-        commands::run_model_register(&cfg, "large", "v1", 768, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "small", "v1", 384, 8192, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "large", "v1", 768, 8192, 512, 64, &format).unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3306,7 +3319,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 8192, 512, 64, &format)
+            .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3348,7 +3362,8 @@ mod tests {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
 
-        commands::run_model_register(&cfg, "test-model", "v1", 384, 512, 64, &format).unwrap();
+        commands::run_model_register(&cfg, "test-model", "v1", 384, 8192, 512, 64, &format)
+            .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
         let db =
@@ -3373,6 +3388,7 @@ mod tests {
             "BAAI/bge-small-en-v1.5",
             "onnx/model.onnx",
             384,
+            8192,
             512,
             64,
             &format,
@@ -3383,6 +3399,7 @@ mod tests {
             "BAAI/bge-base-en-v1.5",
             "onnx/model.onnx",
             768,
+            8192,
             512,
             64,
             &format,
