@@ -1582,6 +1582,12 @@ pub async fn handle_schedule_create(
         Err(e) => return e,
     };
 
+    if let Some(t) = params.timeout_secs
+        && t <= 0
+    {
+        return err_result("timeout_secs must be positive");
+    }
+
     let schedule = Schedule {
         id: String::new(),
         name: params.name,
@@ -1705,6 +1711,12 @@ pub async fn handle_schedule_update(
         && let Err(e) = CronExpr::parse(expr)
     {
         return err_result(&format!("invalid cron expression: {e}"));
+    }
+
+    if let Some(t) = params.timeout_secs
+        && t <= 0
+    {
+        return err_result("timeout_secs must be positive");
     }
 
     let cron_changed = params.cron_expr.is_some();
