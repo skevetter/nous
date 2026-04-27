@@ -1714,6 +1714,7 @@ dependencies = [
  "axum 0.8.9",
  "clap",
  "nous-core",
+ "nous-otlp",
  "nous-shared",
  "rmcp",
  "rusqlite",
