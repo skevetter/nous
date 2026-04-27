@@ -26,32 +26,45 @@ fn is_plaintext_sqlite(path: &str) -> bool {
 
 fn migrate_plaintext_to_encrypted(path: &str, key: &str) -> Result<()> {
     let backup_path = format!("{path}.pre-encryption.bak");
+    let work_path = format!("{path}.migration-tmp");
+    let encrypted_path = format!("{path}.encrypted");
+
     std::fs::copy(path, &backup_path)?;
     eprintln!(
         "warning: plaintext database detected at {path}, migrating to encrypted format (backup at {backup_path})"
     );
 
-    let conn = Connection::open(path)?;
-    for pragma in WAL_PRAGMAS {
-        conn.execute_batch(pragma)?;
-    }
+    // Work on a copy so the original is never mutated until the final rename.
+    std::fs::copy(path, &work_path)?;
 
-    conn.execute_batch("PRAGMA writable_schema = ON")?;
-    conn.execute_batch(
-        "DELETE FROM sqlite_master WHERE type='table' AND name LIKE 'memory_embeddings%'",
-    )?;
-    conn.execute_batch("PRAGMA writable_schema = OFF")?;
-    conn.execute_batch("VACUUM")?;
+    let result = (|| -> Result<()> {
+        let conn = Connection::open(&work_path)?;
+        for pragma in WAL_PRAGMAS {
+            conn.execute_batch(pragma)?;
+        }
 
-    let encrypted_path = format!("{path}.encrypted");
-    conn.execute_batch(&format!(
-        "ATTACH DATABASE '{}' AS encrypted KEY '{}'",
-        encrypted_path,
-        key.replace('\'', "''")
-    ))?;
-    conn.execute_batch("SELECT sqlcipher_export('encrypted')")?;
-    conn.execute_batch("DETACH DATABASE encrypted")?;
-    drop(conn);
+        // vec0 virtual tables (sqlite-vec) can't be exported by sqlcipher_export
+        // because the extension isn't loaded in this plain connection. Drop them
+        // from the working copy; MemoryDb::open() will recreate the table.
+        conn.execute_batch("PRAGMA writable_schema = ON")?;
+        conn.execute_batch(
+            "DELETE FROM sqlite_master WHERE type='table' AND name LIKE 'memory_embeddings%'",
+        )?;
+        conn.execute_batch("PRAGMA writable_schema = OFF")?;
+        conn.execute_batch("VACUUM")?;
+
+        conn.execute("ATTACH DATABASE ?1 AS encrypted KEY ''", [&encrypted_path])?;
+        conn.pragma_update(Some("encrypted"), "key", key)?;
+        conn.execute_batch("SELECT sqlcipher_export('encrypted')")?;
+        conn.execute_batch("DETACH DATABASE encrypted")?;
+        drop(conn);
+
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_file(&work_path);
+
+    result?;
 
     std::fs::rename(&encrypted_path, path)?;
     eprintln!("info: database successfully migrated to encrypted format");
