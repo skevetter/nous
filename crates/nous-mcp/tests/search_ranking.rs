@@ -95,6 +95,8 @@ async fn semantic_search_ranks_closest_match_first() {
             memory_type: None,
             category_id: None,
             workspace_id: None,
+            trace_id: None,
+            session_id: None,
             importance: None,
             confidence: None,
             tags: None,
