@@ -2160,7 +2160,9 @@ mod tests {
 
     fn make_test_config() -> config::Config {
         let mut cfg = config::Config::default();
-        cfg.memory.db_path = test_db_path();
+        let db_path = test_db_path();
+        cfg.encryption.db_key_file = format!("{db_path}.key");
+        cfg.memory.db_path = db_path;
         cfg
     }
 
