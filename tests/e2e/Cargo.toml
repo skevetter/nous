@@ -10,6 +10,9 @@ name = "e2e"
 path = "tests/e2e.rs"
 
 [dev-dependencies]
-tokio = { workspace = true }
+nous-core = { path = "../../crates/nous-core" }
+nous-otlp = { path = "../../crates/nous-otlp" }
 reqwest = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true }
