@@ -135,6 +135,66 @@ const MIGRATIONS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_unique ON relationships(source_id, target_id, relation_type)",
     "CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory ON memory_chunks(memory_id)",
     "CREATE INDEX IF NOT EXISTS idx_access_log_time ON access_log(accessed_at)",
+    // rooms
+    "CREATE TABLE IF NOT EXISTS rooms (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        purpose TEXT,
+        metadata TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )",
+    // room_participants
+    "CREATE TABLE IF NOT EXISTS room_participants (
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner','member','observer')),
+        joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (room_id, agent_id)
+    )",
+    // room_messages
+    "CREATE TABLE IF NOT EXISTS room_messages (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        reply_to TEXT REFERENCES room_messages(id),
+        metadata TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )",
+    // FTS5 virtual table for message search
+    "CREATE VIRTUAL TABLE IF NOT EXISTS room_messages_fts USING fts5(
+        content,
+        content='room_messages',
+        content_rowid='rowid'
+    )",
+    // FTS sync trigger: insert
+    "CREATE TRIGGER IF NOT EXISTS room_messages_ai AFTER INSERT ON room_messages
+    BEGIN
+        INSERT INTO room_messages_fts(rowid, content)
+        VALUES (new.rowid, new.content);
+    END",
+    // FTS sync trigger: update
+    "CREATE TRIGGER IF NOT EXISTS room_messages_au AFTER UPDATE ON room_messages
+    BEGIN
+        INSERT INTO room_messages_fts(room_messages_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+        INSERT INTO room_messages_fts(rowid, content)
+        VALUES (new.rowid, new.content);
+    END",
+    // FTS sync trigger: delete
+    "CREATE TRIGGER IF NOT EXISTS room_messages_ad AFTER DELETE ON room_messages
+    BEGIN
+        INSERT INTO room_messages_fts(room_messages_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    END",
+    // Unique index: non-archived room names
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_name ON rooms(name) WHERE archived = 0",
+    // Index: messages by room + created_at
+    "CREATE INDEX IF NOT EXISTS idx_messages_room_created ON room_messages(room_id, created_at)",
+    // Index: messages by sender
+    "CREATE INDEX IF NOT EXISTS idx_messages_sender ON room_messages(sender_id)",
 ];
 
 pub struct MemoryDb {
@@ -781,6 +841,47 @@ impl MemoryDb {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub(crate) fn create_room_on(
+        conn: &Connection,
+        id: &str,
+        name: &str,
+        purpose: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO rooms (id, name, purpose, metadata) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, purpose, metadata],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn post_message_on(
+        conn: &Connection,
+        id: &str,
+        room_id: &str,
+        sender_id: &str,
+        content: &str,
+        reply_to: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<()> {
+        conn.execute(
+            "INSERT INTO room_messages (id, room_id, sender_id, content, reply_to, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, room_id, sender_id, content, reply_to, metadata],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn archive_room_on(conn: &Connection, id: &str) -> Result<bool> {
+        let rows = conn.execute("UPDATE rooms SET archived = 1 WHERE id = ?1", params![id])?;
+        Ok(rows > 0)
+    }
+
+    pub(crate) fn hard_delete_room_on(conn: &Connection, id: &str) -> Result<bool> {
+        let rows = conn.execute("DELETE FROM rooms WHERE id = ?1", params![id])?;
+        Ok(rows > 0)
     }
 
     pub fn log_access(&self, memory_id: &MemoryId, tool_name: &str) -> Result<()> {
