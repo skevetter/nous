@@ -61,7 +61,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "model_q4f16.onnx"
+variant = "onnx/model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -187,7 +187,7 @@ If the embedding model download fails (network issues, proxy, air-gapped environ
 3. The model is cached in the HuggingFace cache directory (`~/.cache/huggingface/`). You can pre-download it manually:
    ```bash
    # The model is: onnx-community/Qwen3-Embedding-0.6B-ONNX
-   # variant: model_q4f16.onnx
+   # variant: onnx/model_q4f16.onnx
    ```
 
 ### Database locked errors

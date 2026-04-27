@@ -77,7 +77,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model: "onnx-community/Qwen3-Embedding-0.6B-ONNX".into(),
-            variant: "model_q4f16.onnx".into(),
+            variant: "onnx/model_q4f16.onnx".into(),
             chunk_size: 512,
             chunk_overlap: 64,
         }
@@ -154,7 +154,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "model_q4f16.onnx"
+variant = "onnx/model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -282,7 +282,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "model_q4f16.onnx"
+variant = "onnx/model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -324,7 +324,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -342,7 +342,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -400,7 +400,7 @@ default_timeout_secs = 300
             cfg.embedding.model,
             "onnx-community/Qwen3-Embedding-0.6B-ONNX"
         );
-        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
+        assert_eq!(cfg.embedding.variant, "onnx/model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -423,7 +423,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "model_q4f16.onnx"
+variant = "onnx/model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -446,5 +446,29 @@ db_key_file = "{}"
         assert_eq!(key, "test-secret-key");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_embedding_variant_includes_onnx_subdirectory() {
+        let cfg = EmbeddingConfig::default();
+        assert_eq!(cfg.model, "onnx-community/Qwen3-Embedding-0.6B-ONNX");
+        assert!(
+            cfg.variant.starts_with("onnx/"),
+            "variant must include onnx/ subdirectory prefix, got: {}",
+            cfg.variant
+        );
+        assert!(
+            cfg.variant.ends_with(".onnx"),
+            "variant must end with .onnx extension, got: {}",
+            cfg.variant
+        );
+    }
+
+    #[test]
+    fn default_config_toml_matches_struct_defaults() {
+        let from_toml = Config::load_from_str(DEFAULT_CONFIG_TOML).unwrap();
+        let from_default = EmbeddingConfig::default();
+        assert_eq!(from_toml.embedding.model, from_default.model);
+        assert_eq!(from_toml.embedding.variant, from_default.variant);
     }
 }
