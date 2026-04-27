@@ -4,7 +4,7 @@ use nous_core::embed::{EmbeddingBackend, MockEmbedding};
 use nous_core::types::{CategorySource, MemoryType, NewMemory};
 
 fn open_test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).expect("failed to open in-memory db")
+    MemoryDb::open(":memory:", None, 384).expect("failed to open in-memory db")
 }
 
 fn mock_embedder() -> MockEmbedding {

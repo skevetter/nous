@@ -3,7 +3,7 @@ use nous_core::types::{Importance, MemoryType, NewMemory, SearchFilters, SearchM
 use rusqlite::params;
 
 fn open_test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).expect("failed to open in-memory db")
+    MemoryDb::open(":memory:", None, 384).expect("failed to open in-memory db")
 }
 
 fn make_memory(title: &str, content: &str) -> NewMemory {

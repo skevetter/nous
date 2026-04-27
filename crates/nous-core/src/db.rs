@@ -142,13 +142,13 @@ pub struct MemoryDb {
 }
 
 impl MemoryDb {
-    pub fn open(path: &str, key: Option<&str>) -> Result<Self> {
+    pub fn open(path: &str, key: Option<&str>, dimensions: usize) -> Result<Self> {
         let conn = open_connection(path, key)?;
         crate::sqlite_vec::load(&conn)?;
         run_migrations(&conn, MIGRATIONS)?;
         migrate_models_columns(&conn)?;
         seed_placeholder_model(&conn)?;
-        ensure_vec0_table(&conn, 384)?;
+        ensure_vec0_table(&conn, dimensions)?;
         migrate_categories_columns(&conn)?;
         seed_categories(&conn)?;
         Ok(Self { conn })

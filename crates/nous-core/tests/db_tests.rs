@@ -1,7 +1,7 @@
 use nous_core::db::MemoryDb;
 
 fn open_test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).expect("failed to open in-memory db")
+    MemoryDb::open(":memory:", None, 384).expect("failed to open in-memory db")
 }
 
 #[test]
@@ -194,14 +194,14 @@ fn seed_categories_idempotent() {
     let path = dir.path().join("test.db");
     let path_str = path.to_str().unwrap();
 
-    let db = MemoryDb::open(path_str, None).unwrap();
+    let db = MemoryDb::open(path_str, None, 384).unwrap();
     let count_before: i64 = db
         .connection()
         .query_row("SELECT count(*) FROM categories", [], |row| row.get(0))
         .unwrap();
     drop(db);
 
-    let db2 = MemoryDb::open(path_str, None).unwrap();
+    let db2 = MemoryDb::open(path_str, None, 384).unwrap();
     let count_after: i64 = db2
         .connection()
         .query_row("SELECT count(*) FROM categories", [], |row| row.get(0))

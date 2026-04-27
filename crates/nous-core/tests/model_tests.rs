@@ -1,7 +1,7 @@
 use nous_core::db::MemoryDb;
 
 fn open_test_db() -> MemoryDb {
-    MemoryDb::open(":memory:", None).expect("failed to open in-memory db")
+    MemoryDb::open(":memory:", None, 384).expect("failed to open in-memory db")
 }
 
 #[test]
@@ -192,4 +192,62 @@ fn multi_model_isolation() {
     let models = db.list_models().unwrap();
     let model_a = models.iter().find(|m| m.id == a).unwrap();
     assert!(!model_a.active, "model-encoder should be deactivated");
+}
+
+#[test]
+fn register_and_activate_new_model() {
+    let db = open_test_db();
+    let id = db
+        .register_and_activate_model("new-model", Some("fp16"), 768, 8192, 512, 64)
+        .unwrap();
+    assert!(id > 0);
+
+    let active = db
+        .active_model()
+        .unwrap()
+        .expect("should have active model");
+    assert_eq!(active.id, id);
+    assert_eq!(active.name, "new-model");
+    assert_eq!(active.dimensions, 768);
+    assert!(active.active);
+}
+
+#[test]
+fn register_and_activate_existing_model() {
+    let db = open_test_db();
+    let first_id = db
+        .register_model("existing-model", None, 384, 512, 256, 32)
+        .unwrap();
+
+    let second_id = db
+        .register_and_activate_model("existing-model", None, 384, 512, 256, 32)
+        .unwrap();
+    assert_eq!(first_id, second_id);
+
+    let active = db
+        .active_model()
+        .unwrap()
+        .expect("should have active model");
+    assert_eq!(active.id, first_id);
+    assert!(active.active);
+}
+
+#[test]
+fn register_and_activate_switches_active() {
+    let db = open_test_db();
+    let a = db
+        .register_and_activate_model("model-a", None, 384, 512, 256, 32)
+        .unwrap();
+    let active = db.active_model().unwrap().unwrap();
+    assert_eq!(active.id, a);
+
+    let b = db
+        .register_and_activate_model("model-b", Some("q4"), 768, 8192, 512, 64)
+        .unwrap();
+    let active = db.active_model().unwrap().unwrap();
+    assert_eq!(active.id, b);
+
+    let models = db.list_models().unwrap();
+    let model_a = models.iter().find(|m| m.id == a).unwrap();
+    assert!(!model_a.active);
 }

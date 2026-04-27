@@ -762,7 +762,7 @@ pub async fn handle_search(
     let db_path = db_path.to_owned();
     let query = params.query;
     let results = match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None)?;
+        let db = MemoryDb::open(&db_path, None, 384)?;
         db.search(&query, &query_embedding, &filters, mode)
     })
     .await
@@ -804,7 +804,7 @@ pub async fn handle_context(params: MemoryContextParams, db_path: &str) -> CallT
 
     let db_path = db_path.to_owned();
     let entries = match nous_shared::sqlite::spawn_blocking(move || {
-        let db = MemoryDb::open(&db_path, None)?;
+        let db = MemoryDb::open(&db_path, None, 384)?;
 
         let ws_id: i64 = match db.connection().query_row(
             "SELECT id FROM workspaces WHERE path = ?1",

@@ -35,7 +35,7 @@ fn new_memory(title: &str, content: &str) -> NewMemory {
 #[test]
 fn encoder_embed_store_knn_round_trip() {
     let backend = FixtureEmbedding::load(fixture_path()).unwrap();
-    let db = MemoryDb::open(":memory:", None).unwrap();
+    let db = MemoryDb::open(":memory:", None, 384).unwrap();
 
     let texts = [
         "Rust programming language",
