@@ -4,6 +4,7 @@ pub mod memory;
 mod model;
 mod query;
 mod room;
+mod schedule;
 mod trace;
 
 pub use admin::{
@@ -26,6 +27,10 @@ pub use query::{run_context, run_schema, run_sql, run_tags, run_workspaces};
 pub use room::{
     run_room_create, run_room_delete, run_room_get, run_room_list, run_room_post, run_room_read,
     run_room_search,
+};
+pub use schedule::{
+    run_schedule_create, run_schedule_delete, run_schedule_get, run_schedule_list,
+    run_schedule_pause, run_schedule_resume,
 };
 pub use trace::run_trace;
 

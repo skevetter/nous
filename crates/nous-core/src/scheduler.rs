@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -330,13 +330,13 @@ async fn dispatch_action(
             if !config.allow_shell {
                 return Err("shell actions disabled by configuration".to_string());
             }
-            Err("shell actions not implemented in Phase 1".to_string())
+            dispatch_shell(schedule).await
         }
         crate::types::ActionType::Http => {
             if !config.allow_http {
                 return Err("http actions disabled by configuration".to_string());
             }
-            Err("http actions not implemented in Phase 1".to_string())
+            dispatch_http(schedule).await
         }
     }
 }
@@ -427,6 +427,97 @@ async fn dispatch_mcp_tool(
             Ok("delayed".to_string())
         }
         other => Err(format!("unsupported mcp_tool: {other}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct ShellPayload {
+    command: String,
+    #[serde(default)]
+    working_dir: Option<String>,
+}
+
+async fn dispatch_shell(schedule: &Schedule) -> Result<String, String> {
+    let payload: ShellPayload = serde_json::from_str(&schedule.action_payload)
+        .map_err(|e| format!("invalid shell payload: {e}"))?;
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c").arg(&payload.command);
+    if let Some(ref dir) = payload.working_dir {
+        cmd.current_dir(dir);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("shell spawn failed: {e}"))?;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("shell execution failed: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n--- stderr ---\n{stderr}")
+    };
+
+    if output.status.success() {
+        Ok(combined)
+    } else {
+        let code = output.status.code().unwrap_or(-1);
+        Err(format!("exit code {code}: {combined}"))
+    }
+}
+
+#[derive(Deserialize)]
+struct HttpPayload {
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+async fn dispatch_http(schedule: &Schedule) -> Result<String, String> {
+    let payload: HttpPayload = serde_json::from_str(&schedule.action_payload)
+        .map_err(|e| format!("invalid http payload: {e}"))?;
+
+    let client = reqwest::Client::new();
+    let method = payload
+        .method
+        .parse::<reqwest::Method>()
+        .map_err(|e| format!("invalid HTTP method: {e}"))?;
+
+    let mut builder = client.request(method, &payload.url);
+    for (k, v) in &payload.headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    if let Some(body) = payload.body {
+        builder = builder.body(body);
+    }
+
+    let response = builder
+        .send()
+        .await
+        .map_err(|e| format!("http request failed: {e}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("http response read failed: {e}"))?;
+
+    if status.is_success() {
+        Ok(body)
+    } else {
+        Err(format!("HTTP {}: {body}", status.as_u16()))
     }
 }
 

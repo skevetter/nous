@@ -19,7 +19,7 @@ use nous_shared::ids::MemoryId;
 use rmcp::model::CallToolResult;
 use rmcp::schemars;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2012,4 +2012,253 @@ pub async fn handle_schedule_health(read_pool: &ReadPool) -> CallToolResult {
         Ok(health) => ok_json(&health),
         Err(e) => err_result(&format!("schedule_health failed: {e}")),
     }
+}
+
+// ── Phase 3: Advanced tool parameter structs ──
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleDiscoverParams {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleExportParams {
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScheduleImportParams {
+    pub data: String,
+}
+
+// ── Phase 3: Advanced tool handlers ──
+
+pub async fn handle_schedule_discover() -> CallToolResult {
+    let output = match tokio::process::Command::new("crontab")
+        .arg("-l")
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return err_result(&format!("crontab -l failed: {e}")),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("no crontab for") {
+            return ok_json(&serde_json::json!({"entries": [], "count": 0}));
+        }
+        return err_result(&format!("crontab -l failed: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entries: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(6, char::is_whitespace).collect();
+            if parts.len() >= 6 {
+                let cron_expr = parts[..5].join(" ");
+                let command = parts[5..].join(" ");
+                serde_json::json!({
+                    "cron_expr": cron_expr,
+                    "command": command.trim(),
+                    "raw": line,
+                })
+            } else {
+                serde_json::json!({
+                    "raw": line,
+                    "parse_error": "could not parse as cron entry",
+                })
+            }
+        })
+        .collect();
+
+    ok_json(&serde_json::json!({
+        "entries": entries,
+        "count": entries.len(),
+    }))
+}
+
+#[derive(Serialize)]
+struct ScheduleExportEntry {
+    id: String,
+    name: String,
+    cron_expr: String,
+    timezone: String,
+    enabled: bool,
+    action_type: String,
+    action_payload: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    desired_outcome: Option<String>,
+    max_retries: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_secs: Option<i64>,
+    max_output_bytes: i64,
+    max_runs: i64,
+}
+
+pub async fn handle_schedule_export(
+    params: ScheduleExportParams,
+    read_pool: &ReadPool,
+) -> CallToolResult {
+    let format = params.format.unwrap_or_else(|| "json".to_string());
+    if format != "json" && format != "toml" {
+        return err_result("format must be 'json' or 'toml'");
+    }
+
+    let schedules = match read_pool
+        .with_conn(move |conn| ScheduleDb::list(conn, None, None, None))
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return err_result(&format!("schedule_export failed: {e}")),
+    };
+
+    let entries: Vec<ScheduleExportEntry> = schedules
+        .into_iter()
+        .map(|s| ScheduleExportEntry {
+            id: s.id,
+            name: s.name,
+            cron_expr: s.cron_expr,
+            timezone: s.timezone,
+            enabled: s.enabled,
+            action_type: s.action_type.to_string(),
+            action_payload: s.action_payload,
+            desired_outcome: s.desired_outcome,
+            max_retries: s.max_retries,
+            timeout_secs: s.timeout_secs,
+            max_output_bytes: s.max_output_bytes,
+            max_runs: s.max_runs,
+        })
+        .collect();
+
+    if format == "toml" {
+        #[derive(Serialize)]
+        struct TomlWrapper<'a> {
+            schedules: &'a [ScheduleExportEntry],
+        }
+        match toml::to_string_pretty(&TomlWrapper {
+            schedules: &entries,
+        }) {
+            Ok(toml_str) => ok_json(&serde_json::json!({
+                "format": "toml",
+                "data": toml_str,
+                "count": entries.len(),
+            })),
+            Err(e) => err_result(&format!("toml serialization failed: {e}")),
+        }
+    } else {
+        ok_json(&serde_json::json!({
+            "format": "json",
+            "schedules": entries,
+            "count": entries.len(),
+        }))
+    }
+}
+
+pub async fn handle_schedule_import(
+    params: ScheduleImportParams,
+    write_channel: &WriteChannel,
+    scheduler_notify: &Arc<Notify>,
+) -> CallToolResult {
+    #[derive(Deserialize)]
+    struct ImportEntry {
+        name: String,
+        cron_expr: String,
+        #[serde(default = "default_timezone")]
+        timezone: String,
+        #[serde(default = "default_true")]
+        enabled: bool,
+        action_type: String,
+        action_payload: String,
+        desired_outcome: Option<String>,
+        #[serde(default = "default_max_retries")]
+        max_retries: i64,
+        timeout_secs: Option<i64>,
+    }
+
+    fn default_timezone() -> String {
+        "UTC".to_string()
+    }
+    fn default_true() -> bool {
+        true
+    }
+    fn default_max_retries() -> i64 {
+        3
+    }
+
+    #[derive(Deserialize)]
+    struct ImportData {
+        schedules: Vec<ImportEntry>,
+    }
+
+    let import_data: ImportData = match serde_json::from_str(&params.data) {
+        Ok(d) => d,
+        Err(e) => return err_result(&format!("invalid import data: {e}")),
+    };
+
+    for (i, entry) in import_data.schedules.iter().enumerate() {
+        if let Err(e) = CronExpr::parse(&entry.cron_expr) {
+            return err_result(&format!(
+                "invalid cron_expr in entry {i} ({}): {e}",
+                entry.name
+            ));
+        }
+        if parse_enum::<ActionType>(&entry.action_type, "action_type").is_err() {
+            return err_result(&format!(
+                "invalid action_type in entry {i} ({}): {}",
+                entry.name, entry.action_type
+            ));
+        }
+    }
+
+    let total = import_data.schedules.len();
+    let mut imported_ids = Vec::new();
+    for entry in import_data.schedules {
+        let action_type = match parse_enum::<ActionType>(&entry.action_type, "action_type") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+        let schedule = Schedule {
+            id: String::new(),
+            name: entry.name,
+            cron_expr: entry.cron_expr,
+            timezone: entry.timezone,
+            enabled: entry.enabled,
+            action_type,
+            action_payload: entry.action_payload,
+            desired_outcome: entry.desired_outcome,
+            max_retries: entry.max_retries,
+            timeout_secs: entry.timeout_secs,
+            max_output_bytes: 65536,
+            max_runs: 100,
+            next_run_at: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        match write_channel.create_schedule(schedule).await {
+            Ok(id) => imported_ids.push(id),
+            Err(e) => {
+                if !imported_ids.is_empty() {
+                    scheduler_notify.notify_one();
+                }
+                return err_result(&format!(
+                    "import failed at entry {}/{total}: {e} (partially imported {} schedule(s): {imported_ids:?})",
+                    imported_ids.len() + 1,
+                    imported_ids.len(),
+                ));
+            }
+        }
+    }
+
+    scheduler_notify.notify_one();
+
+    ok_json(&serde_json::json!({
+        "imported": imported_ids.len(),
+        "ids": imported_ids,
+    }))
 }

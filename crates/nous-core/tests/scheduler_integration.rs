@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
 
 use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::db::MemoryDb;
@@ -357,5 +358,143 @@ async fn shell_action_gated() {
             .contains("shell actions disabled"),
         "expected 'shell actions disabled' error, got: {:?}",
         run.error
+    );
+}
+
+#[tokio::test]
+async fn shell_action_allowed() {
+    let config = ScheduleConfig {
+        allow_shell: true,
+        ..Default::default()
+    };
+    let h = TestHarness::new(config);
+
+    let now = chrono::Utc::now().timestamp();
+    let schedule = Schedule {
+        id: String::new(),
+        name: "shell-allowed".to_string(),
+        cron_expr: "* * * * *".to_string(),
+        timezone: "UTC".to_string(),
+        enabled: true,
+        action_type: ActionType::Shell,
+        action_payload: r#"{"command":"echo hello-from-shell"}"#.to_string(),
+        desired_outcome: None,
+        max_retries: 1,
+        timeout_secs: Some(10),
+        max_output_bytes: 65536,
+        max_runs: 100,
+        next_run_at: Some(now + 1),
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    let id = h.write_channel.create_schedule(schedule).await.unwrap();
+    h.scheduler_notify.notify_one();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
+            })
+            .await
+            .unwrap();
+        if runs.iter().any(|r| r.status == RunStatus::Completed) {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for shell run to complete"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    let run = &runs[0];
+    assert_eq!(run.status, RunStatus::Completed);
+    assert!(
+        run.output
+            .as_deref()
+            .unwrap_or("")
+            .contains("hello-from-shell"),
+        "expected shell output, got: {:?}",
+        run.output
+    );
+}
+
+#[tokio::test]
+async fn http_action_dispatches() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await;
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{\"ok\":\"true\"}";
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+
+    let config = ScheduleConfig {
+        allow_http: true,
+        ..Default::default()
+    };
+    let h = TestHarness::new(config);
+
+    let now = chrono::Utc::now().timestamp();
+    let payload = format!(
+        r#"{{"method":"GET","url":"http://{}","headers":{{}}}}"#,
+        addr
+    );
+    let schedule = Schedule {
+        id: String::new(),
+        name: "http-dispatch".to_string(),
+        cron_expr: "* * * * *".to_string(),
+        timezone: "UTC".to_string(),
+        enabled: true,
+        action_type: ActionType::Http,
+        action_payload: payload,
+        desired_outcome: None,
+        max_retries: 1,
+        timeout_secs: Some(10),
+        max_output_bytes: 65536,
+        max_runs: 100,
+        next_run_at: Some(now + 1),
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    let id = h.write_channel.create_schedule(schedule).await.unwrap();
+    h.scheduler_notify.notify_one();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
+            })
+            .await
+            .unwrap();
+        if runs
+            .iter()
+            .any(|r| r.status == RunStatus::Completed || r.status == RunStatus::Failed)
+        {
+            break runs;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for http run");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    let run = &runs[0];
+    assert_eq!(run.status, RunStatus::Completed);
+    assert!(
+        run.output.as_deref().unwrap_or("").contains("ok"),
+        "expected HTTP response in output, got: {:?}",
+        run.output
     );
 }

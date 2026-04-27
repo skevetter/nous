@@ -424,6 +424,137 @@ async fn desired_outcome_regex_match() {
 }
 
 #[tokio::test]
+async fn export_import_round_trip() {
+    let (client, db_path) = setup().await;
+
+    let create1 = client
+        .call_tool(call_params(
+            "schedule_create",
+            serde_json::json!({
+                "name": "export-test-1",
+                "cron_expr": "*/10 * * * *",
+                "action_type": "mcp_tool",
+                "action_payload": r#"{"tool":"memory_stats","args":{}}"#,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&create1, "schedule_create 1");
+
+    let create2 = client
+        .call_tool(call_params(
+            "schedule_create",
+            serde_json::json!({
+                "name": "export-test-2",
+                "cron_expr": "0 */2 * * *",
+                "action_type": "mcp_tool",
+                "action_payload": r#"{"tool":"memory_stats","args":{}}"#,
+                "desired_outcome": "total",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&create2, "schedule_create 2");
+
+    let export_result = client
+        .call_tool(call_params(
+            "schedule_export",
+            serde_json::json!({"format": "json"}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&export_result, "schedule_export");
+    let export_json = extract_json(&export_result);
+    assert!(
+        export_json["count"].as_i64().unwrap() >= 2,
+        "export should contain at least 2 schedules"
+    );
+    let exported_schedules = export_json["schedules"].as_array().unwrap();
+    let has_test1 = exported_schedules
+        .iter()
+        .any(|s| s["name"] == "export-test-1");
+    let has_test2 = exported_schedules
+        .iter()
+        .any(|s| s["name"] == "export-test-2");
+    assert!(has_test1, "export should contain export-test-1");
+    assert!(has_test2, "export should contain export-test-2");
+
+    // Delete originals so we can reimport
+    for s in exported_schedules {
+        let id = s["id"].as_str().unwrap();
+        let _ = client
+            .call_tool(call_params(
+                "schedule_delete",
+                serde_json::json!({"id": id}),
+            ))
+            .await
+            .unwrap();
+    }
+
+    let list_after_delete = client
+        .call_tool(call_params("schedule_list", serde_json::json!({})))
+        .await
+        .unwrap();
+    let list_json = extract_json(&list_after_delete);
+    assert_eq!(
+        list_json["schedules"].as_array().unwrap().len(),
+        0,
+        "all schedules should be deleted"
+    );
+
+    // Build import payload from export data
+    let import_entries: Vec<serde_json::Value> = exported_schedules
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "name": s["name"],
+                "cron_expr": s["cron_expr"],
+                "timezone": s["timezone"],
+                "action_type": s["action_type"],
+                "action_payload": s["action_payload"],
+                "desired_outcome": s["desired_outcome"],
+            })
+        })
+        .collect();
+    let import_data =
+        serde_json::to_string(&serde_json::json!({"schedules": import_entries})).unwrap();
+
+    let import_result = client
+        .call_tool(call_params(
+            "schedule_import",
+            serde_json::json!({"data": import_data}),
+        ))
+        .await
+        .unwrap();
+    assert_ok(&import_result, "schedule_import");
+    let import_json = extract_json(&import_result);
+    assert_eq!(
+        import_json["imported"].as_i64().unwrap(),
+        2,
+        "should import 2 schedules"
+    );
+
+    let list_after_import = client
+        .call_tool(call_params("schedule_list", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reimported = extract_json(&list_after_import)["schedules"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(reimported.len(), 2, "should have 2 reimported schedules");
+
+    let reimported_names: Vec<&str> = reimported
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(reimported_names.contains(&"export-test-1"));
+    assert!(reimported_names.contains(&"export-test-2"));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[tokio::test]
 async fn desired_outcome_mismatch_fails() {
     let (client, db_path) = setup().await;
 

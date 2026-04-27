@@ -58,6 +58,10 @@ enum Command {
         model: Option<String>,
         #[arg(long)]
         variant: Option<String>,
+        #[arg(long, help = "Enable shell schedule actions at runtime")]
+        allow_shell_schedules: bool,
+        #[arg(long, help = "Disable the scheduler loop at runtime")]
+        no_scheduler: bool,
     },
     ReEmbed {
         #[arg(long)]
@@ -194,6 +198,7 @@ enum Command {
     Schema,
     Workspaces,
     Tags,
+    Schedule(ScheduleCmd),
     Model(ModelCmd),
     Embedding(EmbeddingCmd),
 }
@@ -345,6 +350,43 @@ enum RoomSubcommand {
         id: String,
         #[arg(long)]
         hard: bool,
+    },
+}
+
+#[derive(Debug, Parser)]
+struct ScheduleCmd {
+    #[command(subcommand)]
+    command: ScheduleSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ScheduleSubcommand {
+    List,
+    Get {
+        id: String,
+    },
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        cron: String,
+        #[arg(long)]
+        action_type: String,
+        #[arg(long)]
+        payload: String,
+        #[arg(long)]
+        timezone: Option<String>,
+        #[arg(long)]
+        desired_outcome: Option<String>,
+    },
+    Delete {
+        id: String,
+    },
+    Pause {
+        id: String,
+    },
+    Resume {
+        id: String,
     },
 }
 
@@ -720,11 +762,20 @@ fn run_command(
             port,
             model,
             variant,
+            allow_shell_schedules,
+            no_scheduler,
         } => {
             let model = model.unwrap_or_else(|| config.embedding.model.clone());
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
+            let mut config = config.clone();
+            if allow_shell_schedules {
+                config.schedule.allow_shell = true;
+            }
+            if no_scheduler {
+                config.schedule.enabled = false;
+            }
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-            rt.block_on(run_serve(config.clone(), transport, port, &model, &variant))?;
+            rt.block_on(run_serve(config, transport, port, &model, &variant))?;
         }
         Command::ReEmbed { model, variant } => {
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
@@ -835,6 +886,41 @@ fn run_command(
                 }
             }
         }
+        Command::Schedule(sched) => match sched.command {
+            ScheduleSubcommand::List => {
+                commands::run_schedule_list(config, format)?;
+            }
+            ScheduleSubcommand::Get { id } => {
+                commands::run_schedule_get(config, &id, format)?;
+            }
+            ScheduleSubcommand::Create {
+                name,
+                cron,
+                action_type,
+                payload,
+                timezone,
+                desired_outcome,
+            } => {
+                commands::run_schedule_create(
+                    config,
+                    &name,
+                    &cron,
+                    &action_type,
+                    &payload,
+                    timezone.as_deref(),
+                    desired_outcome.as_deref(),
+                )?;
+            }
+            ScheduleSubcommand::Delete { id } => {
+                commands::run_schedule_delete(config, &id)?;
+            }
+            ScheduleSubcommand::Pause { id } => {
+                commands::run_schedule_pause(config, &id)?;
+            }
+            ScheduleSubcommand::Resume { id } => {
+                commands::run_schedule_resume(config, &id)?;
+            }
+        },
         Command::Export { export_format: _ } => {
             commands::run_export(config)?;
         }
@@ -1124,11 +1210,15 @@ mod tests {
                 port,
                 model,
                 variant,
+                allow_shell_schedules,
+                no_scheduler,
             } => {
                 assert!(matches!(transport, Transport::Stdio));
                 assert_eq!(port, 8377);
                 assert!(model.is_none());
                 assert!(variant.is_none());
+                assert!(!allow_shell_schedules);
+                assert!(!no_scheduler);
             }
             _ => panic!("expected Serve"),
         }
@@ -1144,6 +1234,7 @@ mod tests {
                 port,
                 model,
                 variant,
+                ..
             } => {
                 assert!(matches!(transport, Transport::Http));
                 assert_eq!(port, 9000);
@@ -1169,6 +1260,24 @@ mod tests {
             Command::Serve { model, variant, .. } => {
                 assert_eq!(model.as_deref(), Some("org/repo"));
                 assert_eq!(variant.as_deref(), Some("q4"));
+            }
+            _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn serve_with_schedule_flags() {
+        let cli =
+            Cli::try_parse_from(["nous", "serve", "--allow-shell-schedules", "--no-scheduler"])
+                .unwrap();
+        match cli.command {
+            Command::Serve {
+                allow_shell_schedules,
+                no_scheduler,
+                ..
+            } => {
+                assert!(allow_shell_schedules);
+                assert!(no_scheduler);
             }
             _ => panic!("expected Serve"),
         }
@@ -1670,7 +1779,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_lists_all_41_tools() {
+    async fn server_lists_all_44_tools() {
         use rmcp::model::CallToolRequestParams;
         use rmcp::{ClientHandler, ServiceExt};
 
@@ -1737,12 +1846,15 @@ mod tests {
             "schedule_run_get",
             "schedule_trigger",
             "schedule_health",
+            "schedule_discover",
+            "schedule_export",
+            "schedule_import",
         ];
 
         assert_eq!(
             tools_result.tools.len(),
-            41,
-            "expected 41 tools, got {:?}",
+            44,
+            "expected 44 tools, got {:?}",
             tool_names
         );
 
