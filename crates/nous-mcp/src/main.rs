@@ -1,9 +1,8 @@
-mod commands;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use nous_mcp::commands;
 use nous_mcp::config;
 use nous_mcp::daemon_client::DaemonClient;
 use nous_mcp::server::NousServer;
@@ -17,9 +16,26 @@ enum Transport {
     Http,
 }
 
+use commands::OutputFormat;
+
 #[derive(Debug, Parser)]
-#[command(name = "nous-mcp", about = "Nous MCP server and management CLI")]
+#[command(name = "nous", about = "Nous memory system CLI")]
 struct Cli {
+    #[arg(long, global = true, help = "Config file path")]
+    config: Option<PathBuf>,
+
+    #[arg(long, global = true, help = "Database path")]
+    db: Option<PathBuf>,
+
+    #[arg(short, long, global = true, help = "Verbose output")]
+    verbose: bool,
+
+    #[arg(short, long, global = true, help = "Quiet mode")]
+    quiet: bool,
+
+    #[arg(long, global = true, default_value = "human", help = "Output format")]
+    format: OutputFormat,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -51,7 +67,7 @@ enum Command {
     Daemon(DaemonCmd),
     Export {
         #[arg(long, default_value = "json")]
-        format: String,
+        export_format: String,
     },
     Import {
         file: PathBuf,
@@ -493,13 +509,37 @@ fn route_room_via_daemon(
 fn main() {
     let cli = Cli::parse();
 
-    let config = config::Config::load(None).unwrap_or_else(|e| {
+    let config = config::Config::load(cli.config.clone()).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load config: {e}");
         config::Config::default()
     });
 
-    let _db_key = config.resolve_db_key().ok();
+    let mut config = config;
+    if let Some(ref db_path) = cli.db {
+        config.memory.db_path = db_path.to_string_lossy().into_owned();
+    }
 
+    let _db_key = config.resolve_db_key().ok();
+    let format = cli.format.clone();
+
+    match run_command(cli, &config, &format) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Error: {e}");
+            let code = e
+                .downcast_ref::<nous_shared::NousError>()
+                .map(|ne| ne.exit_code())
+                .unwrap_or(1);
+            std::process::exit(code);
+        }
+    }
+}
+
+fn run_command(
+    cli: Cli,
+    config: &config::Config,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Serve {
             transport,
@@ -510,24 +550,20 @@ fn main() {
             let model = model.unwrap_or_else(|| config.embedding.model.clone());
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-            rt.block_on(run_serve(config, transport, port, &model, &variant))
-                .expect("server error");
+            rt.block_on(run_serve(config.clone(), transport, port, &model, &variant))?;
         }
         Command::ReEmbed { model, variant } => {
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
             let embedding = build_embedding(&model, &variant);
-            commands::run_re_embed(&config, embedding.as_ref())
-                .unwrap_or_else(|e| eprintln!("re-embed failed: {e}"));
+            commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
             let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
-            commands::run_re_classify(&config, since.as_deref(), embedding.as_ref())
-                .unwrap_or_else(|e| eprintln!("re-classify failed: {e}"));
+            commands::run_re_classify(config, since.as_deref(), embedding.as_ref())?;
         }
         Command::Category(cat) => match cat.command {
             CategorySubcommand::List { source } => {
-                commands::run_category_list(&config, source.as_deref())
-                    .unwrap_or_else(|e| eprintln!("category list failed: {e}"));
+                commands::run_category_list(config, source.as_deref(), format)?;
             }
             CategorySubcommand::Add {
                 name,
@@ -536,22 +572,19 @@ fn main() {
             } => {
                 let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
                 commands::run_category_add(
-                    &config,
+                    config,
                     &name,
                     parent.as_deref(),
                     description.as_deref(),
                     embedding.as_ref(),
-                )
-                .unwrap_or_else(|e| eprintln!("category add failed: {e}"));
+                )?;
             }
             CategorySubcommand::Delete { name } => {
-                commands::run_category_delete(&config, &name)
-                    .unwrap_or_else(|e| eprintln!("category delete failed: {e}"));
+                commands::run_category_delete(config, &name)?;
             }
             CategorySubcommand::Rename { old, new } => {
                 let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
-                commands::run_category_rename(&config, &old, &new, embedding.as_ref())
-                    .unwrap_or_else(|e| eprintln!("category rename failed: {e}"));
+                commands::run_category_rename(config, &old, &new, embedding.as_ref())?;
             }
             CategorySubcommand::Update {
                 name,
@@ -561,34 +594,30 @@ fn main() {
             } => {
                 let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
                 commands::run_category_update(
-                    &config,
+                    config,
                     &name,
                     new_name.as_deref(),
                     description.as_deref(),
                     threshold,
                     embedding.as_ref(),
-                )
-                .unwrap_or_else(|e| eprintln!("category update failed: {e}"));
+                )?;
             }
         },
         Command::Room(room) => {
-            if let Some(client) = try_daemon_client(&config)
+            if let Some(client) = try_daemon_client(config)
                 && route_room_via_daemon(&client, &room.command).is_ok()
             {
-                return;
+                return Ok(());
             }
             match room.command {
                 RoomSubcommand::Create { name, purpose } => {
-                    commands::run_room_create(&config, &name, purpose.as_deref())
-                        .unwrap_or_else(|e| eprintln!("room create failed: {e}"));
+                    commands::run_room_create(config, &name, purpose.as_deref())?;
                 }
                 RoomSubcommand::List { archived, limit } => {
-                    commands::run_room_list(&config, archived, limit)
-                        .unwrap_or_else(|e| eprintln!("room list failed: {e}"));
+                    commands::run_room_list(config, archived, limit)?;
                 }
                 RoomSubcommand::Get { id } => {
-                    commands::run_room_get(&config, &id)
-                        .unwrap_or_else(|e| eprintln!("room show failed: {e}"));
+                    commands::run_room_get(config, &id)?;
                 }
                 RoomSubcommand::Post {
                     room,
@@ -597,75 +626,67 @@ fn main() {
                     reply_to,
                 } => {
                     commands::run_room_post(
-                        &config,
+                        config,
                         &room,
                         &content,
                         sender.as_deref(),
                         reply_to.as_deref(),
-                    )
-                    .unwrap_or_else(|e| eprintln!("room post failed: {e}"));
+                    )?;
                 }
                 RoomSubcommand::Read { room, limit, since } => {
-                    commands::run_room_read(&config, &room, limit, since.as_deref())
-                        .unwrap_or_else(|e| eprintln!("room read failed: {e}"));
+                    commands::run_room_read(config, &room, limit, since.as_deref())?;
                 }
                 RoomSubcommand::Search { room, query, limit } => {
-                    commands::run_room_search(&config, &room, &query, limit)
-                        .unwrap_or_else(|e| eprintln!("room search failed: {e}"));
+                    commands::run_room_search(config, &room, &query, limit)?;
                 }
                 RoomSubcommand::Delete { id, hard } => {
-                    commands::run_room_delete(&config, &id, hard)
-                        .unwrap_or_else(|e| eprintln!("room delete failed: {e}"));
+                    commands::run_room_delete(config, &id, hard)?;
                 }
             }
         }
-        Command::Export { format: _ } => {
-            commands::run_export(&config).unwrap_or_else(|e| eprintln!("export failed: {e}"));
+        Command::Export { export_format: _ } => {
+            commands::run_export(config)?;
         }
         Command::Import { file } => {
             let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
-            commands::run_import(&config, &file, embedding.as_ref())
-                .unwrap_or_else(|e| eprintln!("import failed: {e}"));
+            commands::run_import(config, &file, embedding.as_ref())?;
         }
         Command::RotateKey { new_key_file } => {
-            commands::run_rotate_key(&config, new_key_file.as_deref())
-                .unwrap_or_else(|e| eprintln!("rotate-key failed: {e}"));
+            commands::run_rotate_key(config, new_key_file.as_deref())?;
         }
         Command::Status => {
-            commands::run_status(&config).unwrap_or_else(|e| eprintln!("status failed: {e}"));
+            commands::run_status(config, format)?;
         }
         Command::Trace {
             trace_id,
             memory_id,
             session_id,
         } => {
-            if let Err(e) = commands::run_trace(
-                &config,
+            commands::run_trace(
+                config,
                 trace_id.as_deref(),
                 memory_id.as_deref(),
                 session_id.as_deref(),
-            ) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
+            )?;
         }
         Command::Daemon(daemon) => match daemon.command {
             DaemonSubcommand::Start { foreground } => {
-                run_daemon_start(&config, foreground);
+                run_daemon_start(config, foreground);
             }
             DaemonSubcommand::Stop => {
-                run_daemon_stop(&config);
+                run_daemon_stop(config);
             }
             DaemonSubcommand::Restart { foreground } => {
-                run_daemon_stop(&config);
+                run_daemon_stop(config);
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                run_daemon_start(&config, foreground);
+                run_daemon_start(config, foreground);
             }
             DaemonSubcommand::Status => {
-                run_daemon_status(&config);
+                run_daemon_status(config);
             }
         },
     }
+    Ok(())
 }
 
 async fn run_serve(
@@ -722,7 +743,7 @@ mod tests {
 
     #[test]
     fn serve_defaults() {
-        let cli = Cli::try_parse_from(["nous-mcp", "serve"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "serve"]).unwrap();
         match cli.command {
             Command::Serve {
                 transport,
@@ -741,9 +762,8 @@ mod tests {
 
     #[test]
     fn serve_explicit_http_and_port() {
-        let cli =
-            Cli::try_parse_from(["nous-mcp", "serve", "--transport", "http", "--port", "9000"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["nous", "serve", "--transport", "http", "--port", "9000"])
+            .unwrap();
         match cli.command {
             Command::Serve {
                 transport,
@@ -782,7 +802,7 @@ mod tests {
 
     #[test]
     fn re_embed_with_model() {
-        let cli = Cli::try_parse_from(["nous-mcp", "re-embed", "--model", "org/repo"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "re-embed", "--model", "org/repo"]).unwrap();
         match cli.command {
             Command::ReEmbed { model, variant } => {
                 assert_eq!(model, "org/repo");
@@ -814,7 +834,7 @@ mod tests {
 
     #[test]
     fn re_classify_no_args() {
-        let cli = Cli::try_parse_from(["nous-mcp", "re-classify"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "re-classify"]).unwrap();
         match cli.command {
             Command::ReClassify { since } => assert!(since.is_none()),
             _ => panic!("expected ReClassify"),
@@ -823,8 +843,7 @@ mod tests {
 
     #[test]
     fn re_classify_with_since() {
-        let cli =
-            Cli::try_parse_from(["nous-mcp", "re-classify", "--since", "2024-01-01"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "re-classify", "--since", "2024-01-01"]).unwrap();
         match cli.command {
             Command::ReClassify { since } => {
                 assert_eq!(since.as_deref(), Some("2024-01-01"));
@@ -835,7 +854,7 @@ mod tests {
 
     #[test]
     fn category_add() {
-        let cli = Cli::try_parse_from(["nous-mcp", "category", "add", "testing"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "category", "add", "testing"]).unwrap();
         match cli.command {
             Command::Category(CategoryCmd {
                 command:
@@ -885,7 +904,7 @@ mod tests {
 
     #[test]
     fn category_list_no_filter() {
-        let cli = Cli::try_parse_from(["nous-mcp", "category", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "category", "list"]).unwrap();
         match cli.command {
             Command::Category(CategoryCmd {
                 command: CategorySubcommand::List { source },
@@ -898,8 +917,7 @@ mod tests {
 
     #[test]
     fn category_list_with_source() {
-        let cli =
-            Cli::try_parse_from(["nous-mcp", "category", "list", "--source", "manual"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "category", "list", "--source", "manual"]).unwrap();
         match cli.command {
             Command::Category(CategoryCmd {
                 command: CategorySubcommand::List { source },
@@ -912,16 +930,16 @@ mod tests {
 
     #[test]
     fn export_default_format() {
-        let cli = Cli::try_parse_from(["nous-mcp", "export"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "export"]).unwrap();
         match cli.command {
-            Command::Export { format } => assert_eq!(format, "json"),
+            Command::Export { export_format } => assert_eq!(export_format, "json"),
             _ => panic!("expected Export"),
         }
     }
 
     #[test]
     fn import_file() {
-        let cli = Cli::try_parse_from(["nous-mcp", "import", "/tmp/data.json"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "import", "/tmp/data.json"]).unwrap();
         match cli.command {
             Command::Import { file } => {
                 assert_eq!(file, PathBuf::from("/tmp/data.json"));
@@ -932,7 +950,7 @@ mod tests {
 
     #[test]
     fn rotate_key_no_file() {
-        let cli = Cli::try_parse_from(["nous-mcp", "rotate-key"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "rotate-key"]).unwrap();
         match cli.command {
             Command::RotateKey { new_key_file } => assert!(new_key_file.is_none()),
             _ => panic!("expected RotateKey"),
@@ -941,8 +959,8 @@ mod tests {
 
     #[test]
     fn rotate_key_with_file() {
-        let cli = Cli::try_parse_from(["nous-mcp", "rotate-key", "--new-key-file", "/tmp/key.bin"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["nous", "rotate-key", "--new-key-file", "/tmp/key.bin"]).unwrap();
         match cli.command {
             Command::RotateKey { new_key_file } => {
                 assert_eq!(new_key_file, Some(PathBuf::from("/tmp/key.bin")));
@@ -953,13 +971,13 @@ mod tests {
 
     #[test]
     fn status_command() {
-        let cli = Cli::try_parse_from(["nous-mcp", "status"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "status"]).unwrap();
         assert!(matches!(cli.command, Command::Status));
     }
 
     #[test]
     fn trace_with_trace_id() {
-        let cli = Cli::try_parse_from(["nous-mcp", "trace", "--trace-id", "abc123"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "trace", "--trace-id", "abc123"]).unwrap();
         match cli.command {
             Command::Trace {
                 trace_id,
@@ -1001,7 +1019,7 @@ mod tests {
 
     #[test]
     fn trace_with_memory_id() {
-        let cli = Cli::try_parse_from(["nous-mcp", "trace", "--memory-id", "mem-789"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "trace", "--memory-id", "mem-789"]).unwrap();
         match cli.command {
             Command::Trace {
                 trace_id,
@@ -1018,38 +1036,37 @@ mod tests {
 
     #[test]
     fn trace_both_trace_and_memory_id_errors() {
-        let result =
-            Cli::try_parse_from(["nous-mcp", "trace", "--trace-id", "a", "--memory-id", "b"]);
+        let result = Cli::try_parse_from(["nous", "trace", "--trace-id", "a", "--memory-id", "b"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn trace_session_id_requires_trace_id() {
-        let result = Cli::try_parse_from(["nous-mcp", "trace", "--session-id", "s"]);
+        let result = Cli::try_parse_from(["nous", "trace", "--session-id", "s"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn invalid_subcommand_errors() {
-        let result = Cli::try_parse_from(["nous-mcp", "nonexistent"]);
+        let result = Cli::try_parse_from(["nous", "nonexistent"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn re_embed_missing_model_errors() {
-        let result = Cli::try_parse_from(["nous-mcp", "re-embed"]);
+        let result = Cli::try_parse_from(["nous", "re-embed"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn import_missing_file_errors() {
-        let result = Cli::try_parse_from(["nous-mcp", "import"]);
+        let result = Cli::try_parse_from(["nous", "import"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn room_create() {
-        let cli = Cli::try_parse_from(["nous-mcp", "room", "create", "test-room"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "room", "create", "test-room"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::Create { name, purpose },
@@ -1085,7 +1102,7 @@ mod tests {
 
     #[test]
     fn room_list_defaults() {
-        let cli = Cli::try_parse_from(["nous-mcp", "room", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "room", "list"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::List { archived, limit },
@@ -1099,7 +1116,7 @@ mod tests {
 
     #[test]
     fn room_get() {
-        let cli = Cli::try_parse_from(["nous-mcp", "room", "get", "my-room"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "room", "get", "my-room"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::Get { id },
@@ -1144,7 +1161,7 @@ mod tests {
     #[test]
     fn room_read() {
         let cli =
-            Cli::try_parse_from(["nous-mcp", "room", "read", "dev-chat", "--limit", "10"]).unwrap();
+            Cli::try_parse_from(["nous", "room", "read", "dev-chat", "--limit", "10"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::Read { room, limit, since },
@@ -1159,8 +1176,7 @@ mod tests {
 
     #[test]
     fn room_search() {
-        let cli =
-            Cli::try_parse_from(["nous-mcp", "room", "search", "dev-chat", "linter"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "room", "search", "dev-chat", "linter"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::Search { room, query, limit },
@@ -1175,8 +1191,7 @@ mod tests {
 
     #[test]
     fn room_delete() {
-        let cli =
-            Cli::try_parse_from(["nous-mcp", "room", "delete", "old-room", "--hard"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "room", "delete", "old-room", "--hard"]).unwrap();
         match cli.command {
             Command::Room(RoomCmd {
                 command: RoomSubcommand::Delete { id, hard },
@@ -1304,7 +1319,7 @@ mod tests {
 
     #[test]
     fn daemon_start_foreground() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "start", "--foreground"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "start", "--foreground"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Start { foreground },
@@ -1317,7 +1332,7 @@ mod tests {
 
     #[test]
     fn daemon_start_background() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "start"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "start"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Start { foreground },
@@ -1330,7 +1345,7 @@ mod tests {
 
     #[test]
     fn daemon_stop() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "stop"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "stop"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Stop,
@@ -1341,7 +1356,7 @@ mod tests {
 
     #[test]
     fn daemon_restart() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "restart", "--foreground"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "restart", "--foreground"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Restart { foreground },
@@ -1354,7 +1369,7 @@ mod tests {
 
     #[test]
     fn daemon_restart_background() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "restart"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "restart"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Restart { foreground },
@@ -1367,13 +1382,83 @@ mod tests {
 
     #[test]
     fn daemon_status() {
-        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "status"]).unwrap();
+        let cli = Cli::try_parse_from(["nous", "daemon", "status"]).unwrap();
         match cli.command {
             Command::Daemon(DaemonCmd {
                 command: DaemonSubcommand::Status,
             }) => {}
             _ => panic!("expected Daemon Status"),
         }
+    }
+
+    #[test]
+    fn global_format_json() {
+        let cli = Cli::try_parse_from(["nous", "--format", "json", "status"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+        assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn global_format_csv() {
+        let cli = Cli::try_parse_from(["nous", "--format", "csv", "status"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Csv));
+    }
+
+    #[test]
+    fn global_format_default_is_human() {
+        let cli = Cli::try_parse_from(["nous", "status"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Human));
+    }
+
+    #[test]
+    fn global_verbose_flag() {
+        let cli = Cli::try_parse_from(["nous", "--verbose", "status"]).unwrap();
+        assert!(cli.verbose);
+        assert!(!cli.quiet);
+    }
+
+    #[test]
+    fn global_quiet_flag() {
+        let cli = Cli::try_parse_from(["nous", "--quiet", "status"]).unwrap();
+        assert!(cli.quiet);
+        assert!(!cli.verbose);
+    }
+
+    #[test]
+    fn global_config_path() {
+        let cli = Cli::try_parse_from(["nous", "--config", "/tmp/nous.toml", "status"]).unwrap();
+        assert_eq!(cli.config, Some(PathBuf::from("/tmp/nous.toml")));
+    }
+
+    #[test]
+    fn global_db_path() {
+        let cli = Cli::try_parse_from(["nous", "--db", "/tmp/test.db", "status"]).unwrap();
+        assert_eq!(cli.db, Some(PathBuf::from("/tmp/test.db")));
+    }
+
+    #[test]
+    fn global_flags_after_subcommand() {
+        let cli = Cli::try_parse_from(["nous", "status", "--format", "json"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+        assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn global_short_verbose() {
+        let cli = Cli::try_parse_from(["nous", "-v", "status"]).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn global_short_quiet() {
+        let cli = Cli::try_parse_from(["nous", "-q", "status"]).unwrap();
+        assert!(cli.quiet);
+    }
+
+    #[test]
+    fn global_invalid_format_errors() {
+        let result = Cli::try_parse_from(["nous", "--format", "xml", "status"]);
+        assert!(result.is_err());
     }
 
     #[test]

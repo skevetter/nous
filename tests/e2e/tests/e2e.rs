@@ -93,8 +93,8 @@ fn bin_dir() -> PathBuf {
 }
 
 fn nous_mcp_bin() -> PathBuf {
-    let p = bin_dir().join("nous-mcp");
-    assert!(p.exists(), "nous-mcp binary not found at {}", p.display());
+    let p = bin_dir().join("nous");
+    assert!(p.exists(), "nous binary not found at {}", p.display());
     p
 }
 
@@ -174,7 +174,7 @@ fn run_nous_mcp(
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
         .output()
-        .expect("failed to run nous-mcp")
+        .expect("failed to run nous")
 }
 
 fn run_import(mcp_db: &std::path::Path, key_file: &std::path::Path, import_file: &std::path::Path) {
@@ -185,11 +185,11 @@ fn run_import(mcp_db: &std::path::Path, key_file: &std::path::Path, import_file:
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
         .output()
-        .expect("failed to run nous-mcp import");
+        .expect("failed to run nous import");
 
     assert!(
         output.status.success(),
-        "nous-mcp import failed: {}",
+        "nous import failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -201,11 +201,11 @@ fn run_export(mcp_db: &std::path::Path, key_file: &std::path::Path) -> String {
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
         .output()
-        .expect("failed to run nous-mcp export");
+        .expect("failed to run nous export");
 
     assert!(
         output.status.success(),
-        "nous-mcp export failed: {}",
+        "nous export failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -887,8 +887,53 @@ impl TraceTestEnv {
             .env("NOUS_DB_KEY_FILE", &self.key_file)
             .env("NOUS_OTLP_DB", &self.otlp_db)
             .output()
-            .expect("failed to run nous-mcp trace")
+            .expect("failed to run nous trace")
     }
+}
+
+#[tokio::test]
+async fn test_status_format_json() {
+    let tmp = TempDir::new().expect("cannot create temp dir");
+    let mcp_db = tmp.path().join("test.db");
+    let key_file = tmp.path().join("test.key");
+    std::fs::write(&key_file, DB_KEY).unwrap();
+
+    let _db = MemoryDb::open(mcp_db.to_str().unwrap(), Some(DB_KEY), 384).unwrap();
+
+    let output = Command::new(nous_mcp_bin())
+        .args(["status", "--format", "json"])
+        .env("NOUS_DB_KEY", DB_KEY)
+        .env("NOUS_MEMORY_DB", &mcp_db)
+        .env("NOUS_DB_KEY_FILE", &key_file)
+        .output()
+        .expect("failed to run nous status --format json");
+
+    assert!(
+        output.status.success(),
+        "nous status --format json failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("status --format json should output valid JSON");
+
+    assert!(
+        json.get("memories").is_some(),
+        "JSON should have 'memories' field"
+    );
+    assert!(
+        json.get("categories").is_some(),
+        "JSON should have 'categories' field"
+    );
+    assert!(
+        json.get("chunks").is_some(),
+        "JSON should have 'chunks' field"
+    );
+    assert!(
+        json.get("active_model").is_some(),
+        "JSON should have 'active_model' field"
+    );
 }
 
 #[tokio::test]
