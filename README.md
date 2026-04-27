@@ -6,7 +6,7 @@ Rust MCP memory server with OTLP trace ingestion. Stores, searches, and retrieve
 
 - **Hybrid search** — FTS5 full-text (BM25), semantic (ONNX embeddings via `ort`), or both fused with Reciprocal Rank Fusion
 - **Encryption at rest** — SQLite via SQLCipher (`rusqlite` with `bundled-sqlcipher`)
-- **15 MCP tools** — `memory_store`, `memory_recall`, `memory_search`, `memory_context`, `memory_forget`, `memory_update`, `memory_relate`, and more
+- **19 MCP tools** — `memory_store`, `memory_recall`, `memory_search`, `memory_context`, `memory_forget`, `memory_update`, `memory_relate`, and more
 - **OTLP HTTP receiver** — ingests OpenTelemetry traces, logs, and metrics into a local SQLite database
 - **Trace correlation** — memories link to trace/span IDs for observability context
 - **Categories, tags, workspaces** — hierarchical organization with importance and confidence metadata
@@ -88,7 +88,7 @@ KV-cache inference optimization for decoder models is implemented: zero-initiali
 ### Working
 
 - MCP server (stdio + HTTP transports)
-- 15 MCP tools (`memory_store`, `memory_recall`, `memory_search`, `memory_context`, `memory_forget`, `memory_update`, `memory_relate`, and more)
+- 19 MCP tools (`memory_store`, `memory_recall`, `memory_search`, `memory_context`, `memory_forget`, `memory_update`, `memory_relate`, and more)
 - CLI commands: `serve`, `status`, `export`, `import`, `re-embed`, `re-classify`, `category`, `rotate-key`
 - Hybrid search: FTS5 full-text (BM25) + semantic (ONNX embeddings), fused with Reciprocal Rank Fusion
 - SQLCipher encryption at rest

@@ -20,6 +20,12 @@ pub enum NousError {
 
     #[error("validation error: {0}")]
     Validation(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, NousError>;

@@ -192,6 +192,50 @@ impl NousServer {
     }
 
     #[tool(
+        name = "memory_category_list",
+        description = "List all categories as a tree. Optionally filter by source (system, user, agent)."
+    )]
+    async fn memory_category_list(
+        &self,
+        params: Parameters<MemoryCategoryListParams>,
+    ) -> CallToolResult {
+        handle_category_list(&self.db_path, params.0.source).await
+    }
+
+    #[tool(
+        name = "memory_category_add",
+        description = "Create a new user-sourced category with optional parent, description, and threshold"
+    )]
+    async fn memory_category_add(
+        &self,
+        params: Parameters<MemoryCategoryAddParams>,
+    ) -> CallToolResult {
+        handle_category_add(params.0, &self.db_path, &self.embedding).await
+    }
+
+    #[tool(
+        name = "memory_category_delete",
+        description = "Delete a category by name. Refuses if children exist. Orphaned memories get category_id set to NULL."
+    )]
+    async fn memory_category_delete(
+        &self,
+        params: Parameters<MemoryCategoryDeleteParams>,
+    ) -> CallToolResult {
+        handle_category_delete(params.0, &self.write_channel).await
+    }
+
+    #[tool(
+        name = "memory_category_update",
+        description = "Update a category's name, description, and/or threshold"
+    )]
+    async fn memory_category_update(
+        &self,
+        params: Parameters<MemoryCategoryUpdateParams>,
+    ) -> CallToolResult {
+        handle_category_update(params.0, &self.write_channel, &self.embedding).await
+    }
+
+    #[tool(
         name = "memory_workspaces",
         description = "List all workspaces with memory counts"
     )]

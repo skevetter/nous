@@ -40,6 +40,16 @@ pub enum WriteOp {
         embedding_blob: Option<Vec<u8>>,
         resp: oneshot::Sender<Result<i64>>,
     },
+    CategoryDelete(String, oneshot::Sender<Result<()>>),
+    CategoryRename(String, String, oneshot::Sender<Result<()>>),
+    CategoryUpdate {
+        name: String,
+        new_name: Option<String>,
+        description: Option<String>,
+        threshold: Option<f32>,
+        embedding_blob: Option<Vec<u8>>,
+        resp: oneshot::Sender<Result<()>>,
+    },
     StoreChunks(
         MemoryId,
         Vec<Chunk>,
@@ -134,6 +144,53 @@ impl WriteChannel {
                 description,
                 parent_id,
                 memory_id,
+                embedding_blob,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn category_delete(&self, name: String) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CategoryDelete(name, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn category_rename(&self, old_name: String, new_name: String) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CategoryRename(old_name, new_name, resp_tx))
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("write channel closed".into()))?;
+        resp_rx
+            .await
+            .map_err(|_| nous_shared::NousError::Internal("response channel dropped".into()))?
+    }
+
+    pub async fn category_update(
+        &self,
+        name: String,
+        new_name: Option<String>,
+        description: Option<String>,
+        threshold: Option<f32>,
+        embedding_blob: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(WriteOp::CategoryUpdate {
+                name,
+                new_name,
+                description,
+                threshold,
                 embedding_blob,
                 resp: resp_tx,
             })
@@ -265,6 +322,39 @@ async fn write_worker(
                                 )?;
                             }
                             Ok(id)
+                        });
+                        let _ = resp.send(result);
+                    }
+                    WriteOp::CategoryDelete(name, resp) => {
+                        let _ = resp.send(MemoryDb::category_delete_on(&tx, &name));
+                    }
+                    WriteOp::CategoryRename(old_name, new_name, resp) => {
+                        let _ = resp.send(MemoryDb::category_rename_on(&tx, &old_name, &new_name));
+                    }
+                    WriteOp::CategoryUpdate {
+                        name,
+                        new_name,
+                        description,
+                        threshold,
+                        embedding_blob,
+                        resp,
+                    } => {
+                        let result = MemoryDb::category_update_on(
+                            &tx,
+                            &name,
+                            new_name.as_deref(),
+                            description.as_deref(),
+                            threshold,
+                        )
+                        .and_then(|()| {
+                            if let Some(blob) = embedding_blob {
+                                let effective_name = new_name.as_deref().unwrap_or(&name);
+                                tx.execute(
+                                    "UPDATE categories SET embedding = ?1 WHERE name = ?2",
+                                    rusqlite::params![blob, effective_name],
+                                )?;
+                            }
+                            Ok(())
                         });
                         let _ = resp.send(result);
                     }
