@@ -26,7 +26,7 @@ Run the test suite to verify the build:
 cargo test
 ```
 
-All 296 tests should pass.
+All tests should pass.
 
 ## 3. Claude Code Configuration
 Add the following to your Claude Code MCP settings. The config file lives at `~/.claude/settings.json` (user-level) or `.claude/settings.json` (project-level).
