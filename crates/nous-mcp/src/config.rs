@@ -72,8 +72,8 @@ impl Default for MemoryConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            model: "BAAI/bge-small-en-v1.5".into(),
-            variant: "onnx/model.onnx".into(),
+            model: "onnx-community/Qwen3-Embedding-0.6B-ONNX".into(),
+            variant: "model_q4f16.onnx".into(),
             chunk_size: 512,
             chunk_overlap: 64,
         }
@@ -109,8 +109,8 @@ const DEFAULT_CONFIG_TOML: &str = r#"[memory]
 db_path = "~/.cache/nous/memory.db"
 
 [embedding]
-model = "BAAI/bge-small-en-v1.5"
-variant = "onnx/model.onnx"
+model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+variant = "model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -197,8 +197,8 @@ mod tests {
 db_path = "~/.cache/nous/memory.db"
 
 [embedding]
-model = "BAAI/bge-small-en-v1.5"
-variant = "onnx/model.onnx"
+model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+variant = "model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -217,8 +217,11 @@ db_key_file = "~/.config/nous/db.key"
     fn parse_full_config() {
         let cfg: Config = toml::from_str(FULL_TOML).unwrap();
         assert_eq!(cfg.memory.db_path, "~/.cache/nous/memory.db");
-        assert_eq!(cfg.embedding.model, "BAAI/bge-small-en-v1.5");
-        assert_eq!(cfg.embedding.variant, "onnx/model.onnx");
+        assert_eq!(
+            cfg.embedding.model,
+            "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+        );
+        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -232,8 +235,11 @@ db_key_file = "~/.config/nous/db.key"
         let _lock = ENV_LOCK.lock().unwrap();
         let cfg = Config::load_from_str("").unwrap();
         assert_eq!(cfg.memory.db_path, "~/.cache/nous/memory.db");
-        assert_eq!(cfg.embedding.model, "BAAI/bge-small-en-v1.5");
-        assert_eq!(cfg.embedding.variant, "onnx/model.onnx");
+        assert_eq!(
+            cfg.embedding.model,
+            "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+        );
+        assert_eq!(cfg.embedding.variant, "model_q4f16.onnx");
         assert_eq!(cfg.embedding.chunk_size, 512);
         assert_eq!(cfg.embedding.chunk_overlap, 64);
         assert_eq!(cfg.otlp.db_path, "~/.cache/nous/otlp.db");
@@ -308,8 +314,8 @@ db_key_file = "~/.config/nous/db.key"
 db_path = "~/.cache/nous/memory.db"
 
 [embedding]
-model = "BAAI/bge-small-en-v1.5"
-variant = "onnx/model.onnx"
+model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+variant = "model_q4f16.onnx"
 chunk_size = 512
 chunk_overlap = 64
 

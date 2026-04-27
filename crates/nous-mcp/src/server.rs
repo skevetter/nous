@@ -31,15 +31,33 @@ impl NousServer {
         embedding: Box<dyn EmbeddingBackend>,
         db_path: &str,
     ) -> nous_shared::Result<Self> {
-        let db = MemoryDb::open(db_path, None, embedding.dimensions())?;
+        let new_dim = embedding.dimensions();
+        let db = MemoryDb::open(db_path, None, new_dim)?;
+
+        let old_dim = db
+            .active_model()
+            .ok()
+            .flatten()
+            .map(|m| m.dimensions as usize);
+
         db.register_and_activate_model(
             embedding.model_id(),
             None,
-            embedding.dimensions() as i64,
+            new_dim as i64,
             embedding.max_tokens() as i64,
             config.embedding.chunk_size as i64,
             config.embedding.chunk_overlap as i64,
         )?;
+
+        if let Some(prev) = old_dim
+            && prev != new_dim
+        {
+            eprintln!(
+                "warning: embedding dimensions changed ({prev} -> {new_dim}), resetting vec0 table"
+            );
+            db.reset_embeddings(new_dim)?;
+        }
+
         let classifier = CategoryClassifier::new(&db, embedding.as_ref())?;
         let chunker = Chunker::new(config.embedding.chunk_size, config.embedding.chunk_overlap);
         let (write_channel, write_handle) = WriteChannel::new(db);
