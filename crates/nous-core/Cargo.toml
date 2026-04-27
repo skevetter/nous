@@ -28,6 +28,7 @@ chrono = { workspace = true }
 chrono-tz = { workspace = true }
 uuid = { workspace = true }
 regex = "1"
+reqwest = { workspace = true }
 
 [build-dependencies]
 cc = "1"

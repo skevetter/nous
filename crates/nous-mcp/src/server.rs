@@ -490,6 +490,33 @@ impl NousServer {
     async fn schedule_health(&self, _params: Parameters<ScheduleHealthParams>) -> CallToolResult {
         handle_schedule_health(&self.read_pool).await
     }
+
+    #[tool(
+        name = "schedule_discover",
+        description = "Scan system crontabs (crontab -l) and return found entries as structured data."
+    )]
+    async fn schedule_discover(
+        &self,
+        _params: Parameters<ScheduleDiscoverParams>,
+    ) -> CallToolResult {
+        handle_schedule_discover().await
+    }
+
+    #[tool(
+        name = "schedule_export",
+        description = "Export all schedules as JSON (default) or TOML."
+    )]
+    async fn schedule_export(&self, params: Parameters<ScheduleExportParams>) -> CallToolResult {
+        handle_schedule_export(params.0, &self.read_pool).await
+    }
+
+    #[tool(
+        name = "schedule_import",
+        description = "Import schedules from JSON. Validates all cron_expr values before inserting."
+    )]
+    async fn schedule_import(&self, params: Parameters<ScheduleImportParams>) -> CallToolResult {
+        handle_schedule_import(params.0, &self.write_channel, &self.scheduler_notify).await
+    }
 }
 
 #[tool_handler(name = "nous-mcp", version = "0.1.0")]
