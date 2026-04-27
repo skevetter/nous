@@ -271,16 +271,21 @@ async fn shell_action_gated() {
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
-        })
-        .await
-        .unwrap();
+    let mut runs = Vec::new();
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
+            })
+            .await
+            .unwrap();
+        if runs.iter().any(|r| r.status == RunStatus::Failed) {
+            break;
+        }
+    }
 
     assert!(!runs.is_empty(), "expected a run record for gated shell");
     let run = &runs[0];
