@@ -447,11 +447,10 @@ pub fn run_category_rename(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
     let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
-    db.category_rename(old_name, new_name)?;
 
     let desc: Option<String> = db.connection().query_row(
         "SELECT description FROM categories WHERE name = ?1",
-        rusqlite::params![new_name],
+        rusqlite::params![old_name],
         |row| row.get(0),
     )?;
     let embed_text = match desc.as_deref() {
@@ -460,10 +459,20 @@ pub fn run_category_rename(
     };
     let emb = embedding.embed_one(&embed_text)?;
     let blob: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
-    db.connection().execute(
+
+    let tx = db.connection().unchecked_transaction()?;
+    let changed = tx.execute(
+        "UPDATE categories SET name = ?1 WHERE name = ?2",
+        rusqlite::params![new_name, old_name],
+    )?;
+    if changed == 0 {
+        return Err(format!("category '{old_name}' not found").into());
+    }
+    tx.execute(
         "UPDATE categories SET embedding = ?1 WHERE name = ?2",
         rusqlite::params![blob, new_name],
     )?;
+    tx.commit()?;
 
     println!("Renamed category '{old_name}' -> '{new_name}'");
     Ok(())
@@ -479,21 +488,31 @@ pub fn run_category_update(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_key = config.resolve_db_key().ok();
     let db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
-    db.category_update(name, new_name, description, threshold)?;
 
     let final_name = new_name.unwrap_or(name);
-    if new_name.is_some() || description.is_some() {
-        let desc: Option<String> = db.connection().query_row(
+    let embedding_blob = if new_name.is_some() || description.is_some() {
+        let current_desc: Option<String> = db.connection().query_row(
             "SELECT description FROM categories WHERE name = ?1",
-            rusqlite::params![final_name],
+            rusqlite::params![name],
             |row| row.get(0),
         )?;
-        let embed_text = match desc.as_deref() {
+        let desc_for_embed = description.or(current_desc.as_deref());
+        let embed_text = match desc_for_embed {
             Some(d) if !d.is_empty() => format!("{final_name} {d}"),
             _ => final_name.to_string(),
         };
         let emb = embedding.embed_one(&embed_text)?;
-        let blob: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
+        Some(
+            emb.iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+    } else {
+        None
+    };
+
+    db.category_update(name, new_name, description, threshold)?;
+    if let Some(blob) = embedding_blob {
         db.connection().execute(
             "UPDATE categories SET embedding = ?1 WHERE name = ?2",
             rusqlite::params![blob, final_name],

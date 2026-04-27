@@ -232,7 +232,13 @@ impl NousServer {
         &self,
         params: Parameters<MemoryCategoryUpdateParams>,
     ) -> CallToolResult {
-        handle_category_update(params.0, &self.write_channel, &self.embedding).await
+        handle_category_update(
+            params.0,
+            &self.write_channel,
+            &self.read_pool,
+            &self.embedding,
+        )
+        .await
     }
 
     #[tool(

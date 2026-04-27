@@ -683,6 +683,7 @@ pub async fn handle_category_delete(
 pub async fn handle_category_update(
     params: MemoryCategoryUpdateParams,
     write_channel: &WriteChannel,
+    read_pool: &ReadPool,
     embedding: &Arc<dyn EmbeddingBackend>,
 ) -> CallToolResult {
     let final_name = params
@@ -692,7 +693,24 @@ pub async fn handle_category_update(
         .to_owned();
 
     let embedding_blob = if params.new_name.is_some() || params.description.is_some() {
-        let embed_text = match params.description.as_deref() {
+        let desc_for_embed = if params.description.is_some() {
+            params.description.clone()
+        } else {
+            let cat_name = params.name.clone();
+            read_pool
+                .with_conn(move |conn| {
+                    conn.query_row(
+                        "SELECT description FROM categories WHERE name = ?1",
+                        rusqlite::params![cat_name],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .map_err(Into::into)
+                })
+                .await
+                .ok()
+                .flatten()
+        };
+        let embed_text = match desc_for_embed.as_deref() {
             Some(d) if !d.is_empty() => format!("{final_name} {d}"),
             _ => final_name.clone(),
         };
