@@ -1156,7 +1156,7 @@ async fn run_serve(
     model: &str,
     variant: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = config.memory.db_path.clone();
+    let db_path = commands::expand_tilde(&config.memory.db_path);
     let embedding = build_embedding(model, variant);
     let server = NousServer::new(config, embedding, &db_path)?;
 
