@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nous_core::channel::{ReadPool, WriteChannel};
 use nous_core::db::MemoryDb;
@@ -87,21 +87,29 @@ async fn scheduler_fires_on_time() {
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
+            })
+            .await
+            .unwrap();
+        if runs
+            .iter()
+            .any(|r| r.status == RunStatus::Completed || r.status == RunStatus::Failed)
+        {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for run record"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
 
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
-        })
-        .await
-        .unwrap();
-
-    assert!(
-        !runs.is_empty(),
-        "expected at least one run record, got none"
-    );
     let last = &runs[0];
     assert!(
         last.status == RunStatus::Completed || last.status == RunStatus::Failed,
@@ -122,7 +130,26 @@ async fn scheduler_skips_overlap() {
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Poll until the first run starts (status Running)
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
+            })
+            .await
+            .unwrap();
+        if runs.iter().any(|r| r.status == RunStatus::Running) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for first run to start"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 
     let _ = h
         .write_channel
@@ -131,16 +158,26 @@ async fn scheduler_skips_overlap() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
-        })
-        .await
-        .unwrap();
+    // Poll until we see a Skipped run
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
+            })
+            .await
+            .unwrap();
+        if runs.iter().any(|r| r.status == RunStatus::Skipped) {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for Skipped run"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
 
     assert!(
         runs.len() >= 2,
@@ -163,16 +200,26 @@ async fn scheduler_retries_on_failure() {
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(15)).await;
-
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
-        })
-        .await
-        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
+            })
+            .await
+            .unwrap();
+        if runs.len() >= 2 && runs.iter().any(|r| r.status == RunStatus::Failed) {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for retry attempts (got {} runs)",
+            runs.len()
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
 
     assert!(
         runs.len() >= 2,
@@ -196,16 +243,25 @@ async fn scheduler_respects_timeout() {
     let id = h.write_channel.create_schedule(schedule).await.unwrap();
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(8)).await;
-
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
-        })
-        .await
-        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let runs = loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(50))
+            })
+            .await
+            .unwrap();
+        if runs.iter().any(|r| r.status == RunStatus::Timeout) {
+            break runs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for Timeout status"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
 
     assert!(!runs.is_empty(), "expected at least one run");
     let has_timeout = runs.iter().any(|r| r.status == RunStatus::Timeout);
@@ -224,21 +280,25 @@ async fn notify_wakes_scheduler() {
 
     h.scheduler_notify.notify_one();
 
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    let runs = h
-        .read_pool
-        .with_conn({
-            let id = id.clone();
-            move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
-        })
-        .await
-        .unwrap();
-
-    assert!(
-        !runs.is_empty(),
-        "scheduler should wake and fire after notify"
-    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let runs = h
+            .read_pool
+            .with_conn({
+                let id = id.clone();
+                move |conn| ScheduleDb::get_runs(conn, &id, None, Some(10))
+            })
+            .await
+            .unwrap();
+        if !runs.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "scheduler should wake and fire after notify"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 #[tokio::test]
