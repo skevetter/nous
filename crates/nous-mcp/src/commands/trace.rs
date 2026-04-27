@@ -22,7 +22,11 @@ pub fn run_trace(
 
     if let Some(mid) = memory_id {
         let db_key = config.resolve_db_key().ok();
-        let mem_db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+        let mem_db = MemoryDb::open(
+            &config.memory.db_path,
+            db_key.as_deref(),
+            config.embedding.dimensions,
+        )?;
         let id: MemoryId = mid.parse().unwrap();
         let recalled = mem_db
             .recall(&id)?
@@ -61,7 +65,11 @@ pub fn run_trace(
         println!();
     } else if let Some(tid) = trace_id {
         let db_key = config.resolve_db_key().ok();
-        let mem_db = MemoryDb::open(&config.memory.db_path, db_key.as_deref(), 384)?;
+        let mem_db = MemoryDb::open(
+            &config.memory.db_path,
+            db_key.as_deref(),
+            config.embedding.dimensions,
+        )?;
         let conn = mem_db.connection();
 
         let mut stmt = conn.prepare(

@@ -23,7 +23,7 @@ fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     Ok(MemoryDb::open(
         &config.memory.db_path,
         db_key.as_deref(),
-        384,
+        config.embedding.dimensions,
     )?)
 }
 
@@ -427,7 +427,7 @@ pub fn run_search(
 
     let query_embedding = match search_mode {
         SearchMode::Semantic | SearchMode::Hybrid => {
-            vec![0.0f32; 384]
+            vec![0.0f32; config.embedding.dimensions]
         }
         SearchMode::Fts => vec![],
     };

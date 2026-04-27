@@ -410,7 +410,11 @@ enum DaemonSubcommand {
     Status,
 }
 
-fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::EmbeddingBackend> {
+fn build_embedding(
+    model: &str,
+    variant: &str,
+    fallback_dimensions: usize,
+) -> Box<dyn nous_core::embed::EmbeddingBackend> {
     match nous_core::embed::OnnxBackend::builder()
         .model(model)
         .variant(variant)
@@ -419,7 +423,7 @@ fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::Embe
         Ok(backend) => Box::new(backend),
         Err(e) => {
             eprintln!("Warning: OnnxBackend failed ({e}), falling back to MockEmbedding");
-            Box::new(nous_core::embed::MockEmbedding::new(384))
+            Box::new(nous_core::embed::MockEmbedding::new(fallback_dimensions))
         }
     }
 }
@@ -466,7 +470,11 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
             };
 
             let db_path = commands::expand_tilde(&config.memory.db_path);
-            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            );
             let server = match NousServer::new(config.clone(), embedding, &db_path) {
                 Ok(s) => Arc::new(s),
                 Err(e) => {
@@ -779,11 +787,15 @@ fn run_command(
         }
         Command::ReEmbed { model, variant } => {
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
-            let embedding = build_embedding(&model, &variant);
+            let embedding = build_embedding(&model, &variant, config.embedding.dimensions);
             commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
-            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            );
             commands::run_re_classify(config, since.as_deref(), embedding.as_ref())?;
         }
         Command::Category(cat) => match cat.command {
@@ -795,7 +807,11 @@ fn run_command(
                 parent,
                 description,
             } => {
-                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                );
                 commands::run_category_add(
                     config,
                     &name,
@@ -808,7 +824,11 @@ fn run_command(
                 commands::run_category_delete(config, &name)?;
             }
             CategorySubcommand::Rename { old, new } => {
-                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                );
                 commands::run_category_rename(config, &old, &new, embedding.as_ref())?;
             }
             CategorySubcommand::Update {
@@ -817,7 +837,11 @@ fn run_command(
                 description,
                 threshold,
             } => {
-                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                );
                 commands::run_category_update(
                     config,
                     &name,
@@ -833,7 +857,11 @@ fn run_command(
                 description,
                 parent,
             } => {
-                let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                );
                 commands::run_category_suggest(
                     config,
                     &memory_id,
@@ -925,7 +953,11 @@ fn run_command(
             commands::run_export(config)?;
         }
         Command::Import { file } => {
-            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            );
             commands::run_import(config, &file, embedding.as_ref())?;
         }
         Command::RotateKey { new_key_file } => {
@@ -1157,7 +1189,7 @@ async fn run_serve(
     variant: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = commands::expand_tilde(&config.memory.db_path);
-    let embedding = build_embedding(model, variant);
+    let embedding = build_embedding(model, variant, config.embedding.dimensions);
     let server = NousServer::new(config, embedding, &db_path)?;
 
     match transport {
@@ -1176,7 +1208,11 @@ async fn run_serve(
             let session_manager = Arc::new(LocalSessionManager::default());
             let service = StreamableHttpService::new(
                 move || {
-                    let embedding = build_embedding(&user_model, &user_variant);
+                    let embedding = build_embedding(
+                        &user_model,
+                        &user_variant,
+                        user_config.embedding.dimensions,
+                    );
                     let cfg = user_config.clone();
                     NousServer::new(cfg, embedding, &user_db_path)
                         .map_err(|e| std::io::Error::other(e.to_string()))
@@ -2507,8 +2543,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let conn = db.connection();
         let id: String = conn
             .query_row(
@@ -2549,8 +2589,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let id: String = db
             .connection()
             .query_row(
@@ -2613,8 +2657,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let id: String = db
             .connection()
             .query_row(
@@ -2677,8 +2725,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let id: String = db
             .connection()
             .query_row(
@@ -2748,8 +2800,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let src_id: String = db
             .connection()
             .query_row(
@@ -2980,8 +3036,12 @@ mod tests {
 
         // Initialize DB by opening it
         let db_key = cfg.resolve_db_key().ok();
-        let _db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let _db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
 
         commands::run_schema(&cfg).unwrap();
 
@@ -3091,8 +3151,12 @@ mod tests {
 
         // Initialize DB
         let db_key = cfg.resolve_db_key().ok();
-        let _db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let _db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
 
         let result = commands::run_context(&cfg, "/nonexistent/workspace", None, &format);
         assert!(result.is_err());
@@ -3417,8 +3481,12 @@ mod tests {
             .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
 
@@ -3435,8 +3503,12 @@ mod tests {
 
         // Initialize DB
         let db_key = cfg.resolve_db_key().ok();
-        let _db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let _db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
 
         let result = commands::run_model_info(&cfg, 99999, &format);
         assert!(result.is_err());
@@ -3459,8 +3531,12 @@ mod tests {
             .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
 
@@ -3486,8 +3562,12 @@ mod tests {
         commands::run_model_register(&cfg, "model-b", "v1", 384, 8192, 512, 64, &format).unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let id_a = models.iter().find(|m| m.name == "model-a").unwrap().id;
         let id_b = models.iter().find(|m| m.name == "model-b").unwrap().id;
@@ -3512,8 +3592,12 @@ mod tests {
         commands::run_model_register(&cfg, "large", "v1", 768, 8192, 512, 64, &format).unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let id_small = models.iter().find(|m| m.name == "small").unwrap().id;
         let id_large = models.iter().find(|m| m.name == "large").unwrap().id;
@@ -3536,8 +3620,12 @@ mod tests {
             .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
         commands::run_model_activate(&cfg, model_id, &format).unwrap();
@@ -3555,8 +3643,12 @@ mod tests {
 
         // Initialize DB
         let db_key = cfg.resolve_db_key().ok();
-        let _db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let _db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
 
         let result = commands::run_embedding_reset(&cfg, false, &format);
         assert!(result.is_err());
@@ -3579,8 +3671,12 @@ mod tests {
             .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let model_id = models.iter().find(|m| m.name == "test-model").unwrap().id;
         commands::run_model_activate(&cfg, model_id, &format).unwrap();
@@ -3620,8 +3716,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let models = db.list_models().unwrap();
         let id_small = models
             .iter()
@@ -3657,7 +3757,11 @@ mod tests {
     fn integration_category_suggest_creates_and_assigns() {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
-        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+        let embedding = build_embedding(
+            &cfg.embedding.model,
+            &cfg.embedding.variant,
+            cfg.embedding.dimensions,
+        );
 
         commands::run_store(
             &cfg,
@@ -3680,8 +3784,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let mem_id: String = db
             .connection()
             .query_row("SELECT id FROM memories LIMIT 1", [], |row| row.get(0))
@@ -3735,7 +3843,11 @@ mod tests {
     fn integration_category_suggest_not_found_exits_3() {
         let cfg = make_test_config();
         let format = OutputFormat::Json;
-        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+        let embedding = build_embedding(
+            &cfg.embedding.model,
+            &cfg.embedding.variant,
+            cfg.embedding.dimensions,
+        );
 
         let result = commands::run_category_suggest(
             &cfg,
@@ -3761,7 +3873,11 @@ mod tests {
     fn integration_category_suggest_with_description() {
         let cfg = make_test_config();
         let format = OutputFormat::Human;
-        let embedding = build_embedding(&cfg.embedding.model, &cfg.embedding.variant);
+        let embedding = build_embedding(
+            &cfg.embedding.model,
+            &cfg.embedding.variant,
+            cfg.embedding.dimensions,
+        );
 
         commands::run_store(
             &cfg,
@@ -3784,8 +3900,12 @@ mod tests {
         .unwrap();
 
         let db_key = cfg.resolve_db_key().ok();
-        let db =
-            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+        let db = nous_core::db::MemoryDb::open(
+            &cfg.memory.db_path,
+            db_key.as_deref(),
+            cfg.embedding.dimensions,
+        )
+        .unwrap();
         let mem_id: String = db
             .connection()
             .query_row("SELECT id FROM memories LIMIT 1", [], |row| row.get(0))

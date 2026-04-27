@@ -62,7 +62,7 @@ nous-mcp rotate-key         Rotate SQLCipher encryption key
 
 ## First Run
 
-On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. The default model is `onnx-community/Qwen3-Embedding-0.6B-ONNX` (variant `model_q4f16.onnx`, ~600MB for quantized variants, decoder architecture). If `config.toml` specifies a different model, that model is downloaded instead.
+On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. The default model is `onnx-community/Qwen3-Embedding-0.6B-ONNX` (variant `onnx/model_q4.onnx`, ~600MB for quantized variants, decoder architecture). If `config.toml` specifies a different model, that model is downloaded instead.
 
 - **Network required** — the first run must reach `huggingface.co` to fetch the model
 - **Cache location** — models are cached by the `hf-hub` crate at `~/.cache/huggingface/hub` (the standard Hugging Face cache directory); subsequent runs load from cache
@@ -72,7 +72,7 @@ On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. T
 
 Semantic search uses ONNX-format embedding models loaded via the `ort` crate. The model is configured in `config.toml` under the `[embedding]` section (`model` and `variant` fields).
 
-**Default model:** `onnx-community/Qwen3-Embedding-0.6B-ONNX` (decoder architecture, variant `model_q4f16.onnx`)
+**Default model:** `onnx-community/Qwen3-Embedding-0.6B-ONNX` (decoder architecture, variant `onnx/model_q4.onnx`)
 
 Nous auto-detects model architecture by inspecting the ONNX graph inputs for KV-cache tensors:
 
@@ -133,7 +133,7 @@ db_path = "~/.cache/nous/memory.db"
 
 [embedding]
 model = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-variant = "model_q4f16.onnx"
+variant = "onnx/model_q4.onnx"
 chunk_size = 512
 chunk_overlap = 64
 
@@ -152,7 +152,7 @@ db_key_file = "~/.config/nous/db.key"
 |---------|-----|---------|---------|
 | `memory` | `db_path` | `~/.cache/nous/memory.db` | SQLCipher database for memories |
 | `embedding` | `model` | `onnx-community/Qwen3-Embedding-0.6B-ONNX` | ONNX embedding model from Hugging Face |
-| `embedding` | `variant` | `model_q4f16.onnx` | Quantized ONNX variant |
+| `embedding` | `variant` | `onnx/model_q4.onnx` | Quantized ONNX variant |
 | `embedding` | `chunk_size` | `512` | Token window per text chunk |
 | `embedding` | `chunk_overlap` | `64` | Overlapping tokens between adjacent chunks |
 | `otlp` | `db_path` | `~/.cache/nous/otlp.db` | SQLite database for ingested telemetry |
