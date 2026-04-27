@@ -899,7 +899,7 @@ fn resolve_room_id_sync(
     Ok(id)
 }
 
-fn expand_tilde(p: &str) -> String {
+pub(crate) fn expand_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME")
     {

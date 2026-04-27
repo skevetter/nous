@@ -1,10 +1,11 @@
 mod commands;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use nous_mcp::config;
+use nous_mcp::daemon_client::DaemonClient;
 use nous_mcp::server::NousServer;
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -47,6 +48,7 @@ enum Command {
     },
     Category(CategoryCmd),
     Room(RoomCmd),
+    Daemon(DaemonCmd),
     Export {
         #[arg(long, default_value = "json")]
         format: String,
@@ -156,6 +158,26 @@ enum RoomSubcommand {
     },
 }
 
+#[derive(Debug, Parser)]
+struct DaemonCmd {
+    #[command(subcommand)]
+    command: DaemonSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonSubcommand {
+    Start {
+        #[arg(long)]
+        foreground: bool,
+    },
+    Stop,
+    Restart {
+        #[arg(long)]
+        foreground: bool,
+    },
+    Status,
+}
+
 fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::EmbeddingBackend> {
     match nous_core::embed::OnnxBackend::builder()
         .model(model)
@@ -168,6 +190,304 @@ fn build_embedding(model: &str, variant: &str) -> Box<dyn nous_core::embed::Embe
             Box::new(nous_core::embed::MockEmbedding::new(384))
         }
     }
+}
+
+fn try_daemon_client(config: &config::Config) -> Option<DaemonClient> {
+    let pid_file = commands::expand_tilde(&config.daemon.pid_file);
+    let pid_path = Path::new(&pid_file);
+    if !pid_path.exists() {
+        return None;
+    }
+
+    let pid_str = std::fs::read_to_string(pid_path).ok()?;
+    let pid: u32 = pid_str.trim().parse().ok()?;
+
+    if !Path::new(&format!("/proc/{pid}")).exists() {
+        return None;
+    }
+
+    let socket_path = commands::expand_tilde(&config.daemon.socket_path);
+    if !Path::new(&socket_path).exists() {
+        return None;
+    }
+
+    Some(DaemonClient::new(socket_path))
+}
+
+fn run_daemon_start(config: &config::Config, foreground: bool) {
+    if foreground {
+        let daemon_cfg = config::DaemonConfig {
+            socket_path: commands::expand_tilde(&config.daemon.socket_path),
+            pid_file: commands::expand_tilde(&config.daemon.pid_file),
+            log_file: commands::expand_tilde(&config.daemon.log_file),
+            ..config.daemon.clone()
+        };
+
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(async {
+            let daemon = match nous_mcp::daemon::Daemon::new(&daemon_cfg) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("daemon start failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            let db_path = commands::expand_tilde(&config.memory.db_path);
+            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant);
+            let server = match NousServer::new(config.clone(), embedding, &db_path) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!("server init failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            let router = nous_mcp::daemon_api::daemon_router(daemon.shutdown_sender(), server);
+
+            eprintln!(
+                "daemon started (PID {}, socket {})",
+                std::process::id(),
+                daemon_cfg.socket_path
+            );
+
+            if let Err(e) = daemon.run(router).await {
+                eprintln!("daemon error: {e}");
+                std::process::exit(1);
+            }
+        });
+    } else {
+        let exe = std::env::current_exe().unwrap_or_else(|e| {
+            eprintln!("cannot find current executable: {e}");
+            std::process::exit(1);
+        });
+
+        let log_path = commands::expand_tilde(&config.daemon.log_file);
+        if let Some(parent) = Path::new(&log_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let log_file = std::fs::File::create(&log_path).unwrap_or_else(|e| {
+            eprintln!("cannot create log file {log_path}: {e}");
+            std::process::exit(1);
+        });
+        let stderr_file = log_file.try_clone().unwrap();
+
+        let mut child = std::process::Command::new(exe)
+            .args(["daemon", "start", "--foreground"])
+            .stdout(log_file)
+            .stderr(stderr_file)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| {
+                eprintln!("failed to spawn daemon: {e}");
+                std::process::exit(1);
+            });
+
+        println!("daemon started (PID {})", child.id());
+        println!("log: {log_path}");
+
+        // Detach: parent exits immediately, child becomes a daemon.
+        // Brief wait to detect immediate startup failures.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        match child.try_wait() {
+            Ok(Some(status)) if !status.success() => {
+                eprintln!("daemon exited immediately with {status}");
+                std::process::exit(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn run_daemon_stop(config: &config::Config) {
+    let pid_path = commands::expand_tilde(&config.daemon.pid_file);
+    let pid_str = match std::fs::read_to_string(&pid_path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("daemon not running (no PID file)");
+            return;
+        }
+    };
+    let pid: u32 = match pid_str.trim().parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("invalid PID file");
+            let _ = std::fs::remove_file(&pid_path);
+            return;
+        }
+    };
+
+    let socket_path = commands::expand_tilde(&config.daemon.socket_path);
+    let client = DaemonClient::new(&socket_path);
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+
+    match rt.block_on(client.shutdown()) {
+        Ok(_) => {
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if !Path::new(&format!("/proc/{pid}")).exists() {
+                    println!("daemon stopped (PID {pid})");
+                    return;
+                }
+            }
+            eprintln!("daemon did not exit in time, sending SIGTERM");
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if Path::new(&format!("/proc/{pid}")).exists() {
+                eprintln!("sending SIGKILL");
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+            let _ = std::fs::remove_file(&pid_path);
+            let _ = std::fs::remove_file(&socket_path);
+            println!("daemon stopped (PID {pid})");
+        }
+        Err(e) => {
+            eprintln!("shutdown request failed: {e}");
+            if !Path::new(&format!("/proc/{pid}")).exists() {
+                let _ = std::fs::remove_file(&pid_path);
+                let _ = std::fs::remove_file(&socket_path);
+                println!("daemon was not running (stale PID file cleaned)");
+            } else {
+                eprintln!("sending SIGTERM to PID {pid}");
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+                let _ = std::fs::remove_file(&pid_path);
+                let _ = std::fs::remove_file(&socket_path);
+            }
+        }
+    }
+}
+
+fn run_daemon_status(config: &config::Config) {
+    match try_daemon_client(config) {
+        Some(client) => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            match rt.block_on(client.status()) {
+                Ok(status) => {
+                    println!("pid: {}", status.pid);
+                    println!("uptime: {}s", status.uptime_secs);
+                    println!("version: {}", status.version);
+                }
+                Err(e) => {
+                    eprintln!("daemon probe failed: {e}");
+                }
+            }
+        }
+        None => {
+            println!("daemon not running");
+        }
+    }
+}
+
+fn route_room_via_daemon(
+    client: &DaemonClient,
+    room_sub: &RoomSubcommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        match room_sub {
+            RoomSubcommand::Create { name, purpose } => {
+                let body = serde_json::json!({
+                    "name": name,
+                    "purpose": purpose,
+                });
+                let resp: serde_json::Value = client
+                    .post_json("/rooms", &body)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(id) = resp.get("id").and_then(|v| v.as_str()) {
+                    println!("{id}");
+                }
+            }
+            RoomSubcommand::List { archived, limit } => {
+                let mut path = format!("/rooms?archived={archived}");
+                if let Some(l) = limit {
+                    path.push_str(&format!("&limit={l}"));
+                }
+                let resp: serde_json::Value =
+                    client.get_json(&path).await.map_err(|e| e.to_string())?;
+                if let Some(rooms) = resp.get("rooms").and_then(|v| v.as_array()) {
+                    if rooms.is_empty() {
+                        println!("No rooms found.");
+                    } else {
+                        for r in rooms {
+                            let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let purpose = r.get("purpose").and_then(|v| v.as_str()).unwrap_or("");
+                            let created =
+                                r.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                            println!("{id}  {name}  {purpose}  {created}");
+                        }
+                    }
+                }
+            }
+            RoomSubcommand::Get { id } => {
+                let resp: serde_json::Value = client
+                    .get_json(&format!("/rooms/{id}"))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(room_id) = resp.get("id").and_then(|v| v.as_str()) {
+                    println!("id: {room_id}");
+                }
+                if let Some(name) = resp.get("name").and_then(|v| v.as_str()) {
+                    println!("name: {name}");
+                }
+                if let Some(purpose) = resp.get("purpose").and_then(|v| v.as_str()) {
+                    println!("purpose: {purpose}");
+                }
+            }
+            RoomSubcommand::Post {
+                room,
+                content,
+                sender,
+                reply_to,
+            } => {
+                let body = serde_json::json!({
+                    "content": content,
+                    "sender": sender,
+                    "reply_to": reply_to,
+                });
+                let resp: serde_json::Value = client
+                    .post_json(&format!("/rooms/{room}/messages"), &body)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(id) = resp.get("id").and_then(|v| v.as_str()) {
+                    println!("{id}");
+                }
+            }
+            RoomSubcommand::Read { room, limit, since } => {
+                let mut path = format!("/rooms/{room}/messages?");
+                if let Some(l) = limit {
+                    path.push_str(&format!("limit={l}&"));
+                }
+                if let Some(s) = since {
+                    path.push_str(&format!("since={s}&"));
+                }
+                let resp: serde_json::Value =
+                    client.get_json(&path).await.map_err(|e| e.to_string())?;
+                if let Some(messages) = resp.get("messages").and_then(|v| v.as_array()) {
+                    for m in messages {
+                        let sender_id = m.get("sender_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        let created = m.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                        println!("[{created}] {sender_id}: {content}");
+                    }
+                }
+            }
+            RoomSubcommand::Search { .. } => {
+                Err("search not available via daemon, falling back")?;
+            }
+            RoomSubcommand::Delete { .. } => {
+                Err("delete not available via daemon, falling back")?;
+            }
+        }
+        Ok(())
+    })
 }
 
 fn main() {
@@ -251,47 +571,54 @@ fn main() {
                 .unwrap_or_else(|e| eprintln!("category update failed: {e}"));
             }
         },
-        Command::Room(room) => match room.command {
-            RoomSubcommand::Create { name, purpose } => {
-                commands::run_room_create(&config, &name, purpose.as_deref())
-                    .unwrap_or_else(|e| eprintln!("room create failed: {e}"));
+        Command::Room(room) => {
+            if let Some(client) = try_daemon_client(&config)
+                && route_room_via_daemon(&client, &room.command).is_ok()
+            {
+                return;
             }
-            RoomSubcommand::List { archived, limit } => {
-                commands::run_room_list(&config, archived, limit)
-                    .unwrap_or_else(|e| eprintln!("room list failed: {e}"));
+            match room.command {
+                RoomSubcommand::Create { name, purpose } => {
+                    commands::run_room_create(&config, &name, purpose.as_deref())
+                        .unwrap_or_else(|e| eprintln!("room create failed: {e}"));
+                }
+                RoomSubcommand::List { archived, limit } => {
+                    commands::run_room_list(&config, archived, limit)
+                        .unwrap_or_else(|e| eprintln!("room list failed: {e}"));
+                }
+                RoomSubcommand::Get { id } => {
+                    commands::run_room_get(&config, &id)
+                        .unwrap_or_else(|e| eprintln!("room show failed: {e}"));
+                }
+                RoomSubcommand::Post {
+                    room,
+                    content,
+                    sender,
+                    reply_to,
+                } => {
+                    commands::run_room_post(
+                        &config,
+                        &room,
+                        &content,
+                        sender.as_deref(),
+                        reply_to.as_deref(),
+                    )
+                    .unwrap_or_else(|e| eprintln!("room post failed: {e}"));
+                }
+                RoomSubcommand::Read { room, limit, since } => {
+                    commands::run_room_read(&config, &room, limit, since.as_deref())
+                        .unwrap_or_else(|e| eprintln!("room read failed: {e}"));
+                }
+                RoomSubcommand::Search { room, query, limit } => {
+                    commands::run_room_search(&config, &room, &query, limit)
+                        .unwrap_or_else(|e| eprintln!("room search failed: {e}"));
+                }
+                RoomSubcommand::Delete { id, hard } => {
+                    commands::run_room_delete(&config, &id, hard)
+                        .unwrap_or_else(|e| eprintln!("room delete failed: {e}"));
+                }
             }
-            RoomSubcommand::Get { id } => {
-                commands::run_room_get(&config, &id)
-                    .unwrap_or_else(|e| eprintln!("room show failed: {e}"));
-            }
-            RoomSubcommand::Post {
-                room,
-                content,
-                sender,
-                reply_to,
-            } => {
-                commands::run_room_post(
-                    &config,
-                    &room,
-                    &content,
-                    sender.as_deref(),
-                    reply_to.as_deref(),
-                )
-                .unwrap_or_else(|e| eprintln!("room post failed: {e}"));
-            }
-            RoomSubcommand::Read { room, limit, since } => {
-                commands::run_room_read(&config, &room, limit, since.as_deref())
-                    .unwrap_or_else(|e| eprintln!("room read failed: {e}"));
-            }
-            RoomSubcommand::Search { room, query, limit } => {
-                commands::run_room_search(&config, &room, &query, limit)
-                    .unwrap_or_else(|e| eprintln!("room search failed: {e}"));
-            }
-            RoomSubcommand::Delete { id, hard } => {
-                commands::run_room_delete(&config, &id, hard)
-                    .unwrap_or_else(|e| eprintln!("room delete failed: {e}"));
-            }
-        },
+        }
         Command::Export { format: _ } => {
             commands::run_export(&config).unwrap_or_else(|e| eprintln!("export failed: {e}"));
         }
@@ -322,6 +649,22 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Daemon(daemon) => match daemon.command {
+            DaemonSubcommand::Start { foreground } => {
+                run_daemon_start(&config, foreground);
+            }
+            DaemonSubcommand::Stop => {
+                run_daemon_stop(&config);
+            }
+            DaemonSubcommand::Restart { foreground } => {
+                run_daemon_stop(&config);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                run_daemon_start(&config, foreground);
+            }
+            DaemonSubcommand::Status => {
+                run_daemon_status(&config);
+            }
+        },
     }
 }
 
@@ -957,5 +1300,104 @@ mod tests {
         client.cancel().await.unwrap();
         server_handle.await.unwrap().unwrap();
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn daemon_start_foreground() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "start", "--foreground"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Start { foreground },
+            }) => {
+                assert!(foreground);
+            }
+            _ => panic!("expected Daemon Start"),
+        }
+    }
+
+    #[test]
+    fn daemon_start_background() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "start"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Start { foreground },
+            }) => {
+                assert!(!foreground);
+            }
+            _ => panic!("expected Daemon Start"),
+        }
+    }
+
+    #[test]
+    fn daemon_stop() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "stop"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Stop,
+            }) => {}
+            _ => panic!("expected Daemon Stop"),
+        }
+    }
+
+    #[test]
+    fn daemon_restart() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "restart", "--foreground"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Restart { foreground },
+            }) => {
+                assert!(foreground);
+            }
+            _ => panic!("expected Daemon Restart"),
+        }
+    }
+
+    #[test]
+    fn daemon_restart_background() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "restart"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Restart { foreground },
+            }) => {
+                assert!(!foreground);
+            }
+            _ => panic!("expected Daemon Restart"),
+        }
+    }
+
+    #[test]
+    fn daemon_status() {
+        let cli = Cli::try_parse_from(["nous-mcp", "daemon", "status"]).unwrap();
+        match cli.command {
+            Command::Daemon(DaemonCmd {
+                command: DaemonSubcommand::Status,
+            }) => {}
+            _ => panic!("expected Daemon Status"),
+        }
+    }
+
+    #[test]
+    fn try_daemon_client_returns_none_without_pid_file() {
+        let mut cfg = config::Config::default();
+        cfg.daemon.pid_file = "/tmp/nous-nonexistent-pid-file-test.pid".into();
+        cfg.daemon.socket_path = "/tmp/nous-nonexistent-socket-test.sock".into();
+        let _ = std::fs::remove_file(&cfg.daemon.pid_file);
+        assert!(try_daemon_client(&cfg).is_none());
+    }
+
+    #[test]
+    fn try_daemon_client_returns_none_for_dead_pid() {
+        let dir = std::env::temp_dir().join(format!("nous-try-client-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let pid_file = dir.join("daemon.pid");
+        std::fs::write(&pid_file, "999999999").unwrap();
+
+        let mut cfg = config::Config::default();
+        cfg.daemon.pid_file = pid_file.to_string_lossy().into_owned();
+        cfg.daemon.socket_path = dir.join("daemon.sock").to_string_lossy().into_owned();
+
+        assert!(try_daemon_client(&cfg).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
