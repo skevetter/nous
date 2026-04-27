@@ -183,6 +183,17 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    Context {
+        workspace: String,
+        #[arg(long)]
+        summary: Option<String>,
+    },
+    Sql {
+        query: String,
+    },
+    Schema,
+    Workspaces,
+    Tags,
 }
 
 #[derive(Debug, Parser)]
@@ -890,6 +901,21 @@ fn run_command(
                 limit,
                 format,
             )?;
+        }
+        Command::Context { workspace, summary } => {
+            commands::run_context(config, &workspace, summary.as_deref(), format)?;
+        }
+        Command::Sql { query } => {
+            commands::run_sql(config, &query, format)?;
+        }
+        Command::Schema => {
+            commands::run_schema(config)?;
+        }
+        Command::Workspaces => {
+            commands::run_workspaces(config, format)?;
+        }
+        Command::Tags => {
+            commands::run_tags(config, format)?;
         }
         Command::Daemon(daemon) => match daemon.command {
             DaemonSubcommand::Start { foreground } => {
@@ -2026,6 +2052,110 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // --- Query/Inspection clap parsing tests ---
+
+    #[test]
+    fn context_with_workspace() {
+        let cli = Cli::try_parse_from(["nous", "context", "/home/user/project"]).unwrap();
+        match cli.command {
+            Command::Context {
+                workspace, summary, ..
+            } => {
+                assert_eq!(workspace, "/home/user/project");
+                assert!(summary.is_none());
+            }
+            _ => panic!("expected Context"),
+        }
+    }
+
+    #[test]
+    fn context_with_summary() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "context",
+            "/home/user/project",
+            "--summary",
+            "auth flow",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Context {
+                workspace, summary, ..
+            } => {
+                assert_eq!(workspace, "/home/user/project");
+                assert_eq!(summary.as_deref(), Some("auth flow"));
+            }
+            _ => panic!("expected Context"),
+        }
+    }
+
+    #[test]
+    fn context_missing_workspace_errors() {
+        let result = Cli::try_parse_from(["nous", "context"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sql_with_query() {
+        let cli = Cli::try_parse_from(["nous", "sql", "SELECT COUNT(*) FROM memories"]).unwrap();
+        match cli.command {
+            Command::Sql { query } => {
+                assert_eq!(query, "SELECT COUNT(*) FROM memories");
+            }
+            _ => panic!("expected Sql"),
+        }
+    }
+
+    #[test]
+    fn sql_missing_query_errors() {
+        let result = Cli::try_parse_from(["nous", "sql"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn schema_command() {
+        let cli = Cli::try_parse_from(["nous", "schema"]).unwrap();
+        assert!(matches!(cli.command, Command::Schema));
+    }
+
+    #[test]
+    fn workspaces_command() {
+        let cli = Cli::try_parse_from(["nous", "workspaces"]).unwrap();
+        assert!(matches!(cli.command, Command::Workspaces));
+    }
+
+    #[test]
+    fn tags_command() {
+        let cli = Cli::try_parse_from(["nous", "tags"]).unwrap();
+        assert!(matches!(cli.command, Command::Tags));
+    }
+
+    #[test]
+    fn workspaces_with_format() {
+        let cli = Cli::try_parse_from(["nous", "--format", "csv", "workspaces"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Csv));
+        assert!(matches!(cli.command, Command::Workspaces));
+    }
+
+    #[test]
+    fn tags_with_format() {
+        let cli = Cli::try_parse_from(["nous", "--format", "json", "tags"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+        assert!(matches!(cli.command, Command::Tags));
+    }
+
+    #[test]
+    fn sql_with_format() {
+        let cli = Cli::try_parse_from(["nous", "--format", "csv", "sql", "SELECT 1"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Csv));
+        match cli.command {
+            Command::Sql { query } => {
+                assert_eq!(query, "SELECT 1");
+            }
+            _ => panic!("expected Sql"),
+        }
+    }
+
     // --- Integration tests ---
 
     fn make_test_config() -> config::Config {
@@ -2398,6 +2528,236 @@ mod tests {
         } else {
             panic!("expected NousError::NotFound");
         }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    // --- Query/Inspection integration tests ---
+
+    #[test]
+    fn integration_sql_select() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "SQL test memory",
+            "Content for SQL test",
+            "fact",
+            None,
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_sql(&cfg, "SELECT COUNT(*) as cnt FROM memories", &format).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_sql_insert_rejected() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_sql(
+            &cfg,
+            "INSERT INTO memories (id, title) VALUES ('x', 'y')",
+            &format,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation (exit 2)");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_sql_drop_rejected() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_sql(&cfg, "DROP TABLE memories", &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation (exit 2)");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_sql_delete_rejected() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_sql(&cfg, "DELETE FROM memories", &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation (exit 2)");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_sql_update_rejected() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        let result = commands::run_sql(&cfg, "UPDATE memories SET title = 'x'", &format);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        if let Some(ne) = err.downcast_ref::<nous_shared::NousError>() {
+            assert_eq!(ne.exit_code(), 2);
+        } else {
+            panic!("expected NousError::Validation (exit 2)");
+        }
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_schema_dumps_ddl() {
+        let cfg = make_test_config();
+
+        // Initialize DB by opening it
+        let db_key = cfg.resolve_db_key().ok();
+        let _db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+
+        commands::run_schema(&cfg).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_workspaces_with_counts() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "WS test",
+            "Content",
+            "fact",
+            None,
+            None,
+            None,
+            &[],
+            Some("/tmp/test-ws"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_workspaces(&cfg, &format).unwrap();
+        commands::run_workspaces(&cfg, &OutputFormat::Csv).unwrap();
+        commands::run_workspaces(&cfg, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_tags_with_counts() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Tag test",
+            "Content",
+            "fact",
+            None,
+            None,
+            None,
+            &["alpha".to_string(), "beta".to_string()],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_tags(&cfg, &format).unwrap();
+        commands::run_tags(&cfg, &OutputFormat::Csv).unwrap();
+        commands::run_tags(&cfg, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_context_with_workspace() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        commands::run_store(
+            &cfg,
+            "Context test memory",
+            "OAuth2 flow implemented",
+            "fact",
+            None,
+            Some("high"),
+            None,
+            &[],
+            Some("/tmp/ctx-test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &format,
+        )
+        .unwrap();
+
+        commands::run_context(&cfg, "/tmp/ctx-test", None, &format).unwrap();
+        commands::run_context(&cfg, "/tmp/ctx-test", Some("auth"), &OutputFormat::Csv).unwrap();
+        commands::run_context(&cfg, "/tmp/ctx-test", None, &OutputFormat::Human).unwrap();
+
+        let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn integration_context_unknown_workspace() {
+        let cfg = make_test_config();
+        let format = OutputFormat::Json;
+
+        // Initialize DB
+        let db_key = cfg.resolve_db_key().ok();
+        let _db =
+            nous_core::db::MemoryDb::open(&cfg.memory.db_path, db_key.as_deref(), 384).unwrap();
+
+        let result = commands::run_context(&cfg, "/nonexistent/workspace", None, &format);
+        assert!(result.is_err());
 
         let _ = std::fs::remove_file(&cfg.memory.db_path);
     }

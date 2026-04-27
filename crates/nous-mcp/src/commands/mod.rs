@@ -1,6 +1,7 @@
 mod admin;
 mod category;
 pub mod memory;
+mod query;
 mod room;
 mod trace;
 
@@ -16,6 +17,7 @@ pub use memory::{
     run_forget, run_recall, run_relate, run_search, run_store, run_unarchive, run_unrelate,
     run_update,
 };
+pub use query::{run_context, run_schema, run_sql, run_tags, run_workspaces};
 pub use room::{
     run_room_create, run_room_delete, run_room_get, run_room_list, run_room_post, run_room_read,
     run_room_search,
