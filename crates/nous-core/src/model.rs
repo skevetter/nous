@@ -124,6 +124,18 @@ impl MemoryDb {
         Ok(id)
     }
 
+    pub fn get_model_by_name(&self, name: &str) -> Result<Option<Model>> {
+        match self.connection().query_row(
+            "SELECT id, name, dimensions, max_tokens, variant, chunk_size, chunk_overlap, active, created_at FROM models WHERE name = ?1",
+            params![name],
+            Self::row_to_model,
+        ) {
+            Ok(m) => Ok(Some(m)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub(crate) fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<Model> {
         Ok(Model {
             id: row.get(0)?,
