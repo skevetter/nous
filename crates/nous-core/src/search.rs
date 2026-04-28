@@ -331,7 +331,12 @@ impl MemoryDb {
         Ok(results)
     }
 
-    pub fn context(&self, workspace_id: i64, summary: bool) -> Result<Vec<ContextEntry>> {
+    pub fn context(
+        &self,
+        workspace_id: i64,
+        summary: bool,
+        limit: usize,
+    ) -> Result<Vec<ContextEntry>> {
         let mut stmt = self.connection().prepare(
             "SELECT id, title, content, memory_type, importance, created_at
              FROM memories
@@ -340,11 +345,11 @@ impl MemoryDb {
                AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              ORDER BY CASE importance WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 ELSE 3 END,
                       created_at DESC
-             LIMIT 50",
+             LIMIT ?2",
         )?;
 
         let entries = stmt
-            .query_map(params![workspace_id], |row| {
+            .query_map(params![workspace_id, limit as i64], |row| {
                 let content: String = row.get(2)?;
                 Ok(ContextEntry {
                     id: row.get(0)?,
@@ -369,11 +374,19 @@ impl MemoryDb {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        for entry in &entries {
-            self.connection().execute(
-                "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'context')",
-                params![entry.id],
-            )?;
+        if !entries.is_empty() {
+            let placeholders: String = (1..=entries.len())
+                .map(|i| format!("(?{i}, 'context')"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql =
+                format!("INSERT INTO access_log (memory_id, access_type) VALUES {placeholders}");
+            let mut stmt = self.connection().prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = entries
+                .iter()
+                .map(|e| &e.id as &dyn rusqlite::types::ToSql)
+                .collect();
+            stmt.execute(params.as_slice())?;
         }
 
         Ok(entries)
