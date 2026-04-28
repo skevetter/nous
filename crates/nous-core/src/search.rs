@@ -341,12 +341,26 @@ impl MemoryDb {
         workspace_id: i64,
         summary: bool,
         limit: usize,
+        offset: usize,
         memory_type: Option<&MemoryType>,
+        since: Option<&str>,
     ) -> Result<Vec<ContextEntry>> {
-        let (type_clause, type_param) = match memory_type {
-            Some(mt) => (" AND memory_type = ?3", Some(mt.to_string())),
-            None => ("", None),
-        };
+        let mut extra_clauses = String::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(workspace_id),
+            Box::new(limit as i64),
+            Box::new(offset as i64),
+        ];
+
+        if let Some(mt) = memory_type {
+            extra_clauses.push_str(&format!(" AND memory_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(mt.to_string()));
+        }
+        if let Some(s) = since {
+            extra_clauses.push_str(&format!(" AND created_at >= ?{}", param_values.len() + 1));
+            param_values.push(Box::new(s.to_string()));
+        }
+
         let sql = format!(
             "SELECT id, title, content, memory_type, importance, created_at
              FROM memories
@@ -355,18 +369,10 @@ impl MemoryDb {
                AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')){}
              ORDER BY CASE importance WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 ELSE 3 END,
                       created_at DESC
-             LIMIT ?2",
-            type_clause
+             LIMIT ?2 OFFSET ?3",
+            extra_clauses
         );
         let mut stmt = self.connection().prepare(&sql)?;
-
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(workspace_id),
-            Box::new(limit as i64),
-        ];
-        if let Some(tp) = type_param {
-            param_values.push(Box::new(tp));
-        }
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
