@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use nous_cli::config::{Config, DaemonConfig};
+use nous_cli::daemon::Daemon;
+use nous_cli::daemon_api::daemon_router;
+use nous_cli::daemon_client::DaemonClient;
+use nous_cli::server::NousServer;
 use nous_core::embed::MockEmbedding;
-use nous_mcp::config::{Config, DaemonConfig};
-use nous_mcp::daemon::Daemon;
-use nous_mcp::daemon_api::daemon_router;
-use nous_mcp::daemon_client::DaemonClient;
-use nous_mcp::server::NousServer;
 
 // ---------------------------------------------------------------------------
 // Test helpers

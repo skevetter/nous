@@ -548,7 +548,7 @@ impl NousServer {
     }
 }
 
-#[tool_handler(name = "nous-mcp", version = "0.1.0")]
+#[tool_handler(name = "nous-cli", version = "0.1.0")]
 impl ServerHandler for NousServer {}
 
 #[cfg(test)]

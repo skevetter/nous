@@ -53,10 +53,10 @@ async fn memory_lifecycle_roundtrip() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let db_path = test_db_path();
-    let mut cfg = nous_mcp::config::Config::default();
+    let mut cfg = nous_cli::config::Config::default();
     cfg.encryption.db_key_file = format!("{db_path}.key");
     let embedding = Box::new(nous_core::embed::MockEmbedding::new(384));
-    let server = nous_mcp::server::NousServer::new(cfg, embedding, &db_path, None).unwrap();
+    let server = nous_cli::server::NousServer::new(cfg, embedding, &db_path, None).unwrap();
 
     let server_handle = tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;

@@ -1,8 +1,8 @@
+use nous_cli::commands::{build_export_data, import_data};
 use nous_core::chunk::Chunker;
 use nous_core::db::MemoryDb;
 use nous_core::embed::{EmbeddingBackend, MockEmbedding};
 use nous_core::types::{NewMemory, RelationType};
-use nous_mcp::commands::{build_export_data, import_data};
 use rusqlite::params;
 
 fn test_db() -> MemoryDb {
@@ -180,7 +180,7 @@ fn export_import_round_trip_preserves_all_data() {
 
     // 5. Create fresh DB and import
     let dest_db = test_db();
-    let reimported: nous_mcp::commands::ExportData = serde_json::from_slice(&json_buf).unwrap();
+    let reimported: nous_cli::commands::ExportData = serde_json::from_slice(&json_buf).unwrap();
     import_data(&dest_db, &reimported, &embedding, &chunker).unwrap();
 
     // 6. Verify counts match

@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use nous_mcp::commands;
-use nous_mcp::config;
-use nous_mcp::daemon_client::DaemonClient;
-use nous_mcp::server::NousServer;
+use nous_cli::commands;
+use nous_cli::config;
+use nous_cli::daemon_client::DaemonClient;
+use nous_cli::server::NousServer;
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -473,7 +473,7 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
 
         let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
         rt.block_on(async {
-            let daemon = match nous_mcp::daemon::Daemon::new(&daemon_cfg) {
+            let daemon = match nous_cli::daemon::Daemon::new(&daemon_cfg) {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("daemon start failed: {e}");
@@ -503,7 +503,7 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
                     }
                 };
 
-            let router = nous_mcp::daemon_api::daemon_router(daemon.shutdown_sender(), server);
+            let router = nous_cli::daemon_api::daemon_router(daemon.shutdown_sender(), server);
 
             eprintln!(
                 "daemon started (PID {}, socket {})",

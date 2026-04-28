@@ -1,4 +1,4 @@
-# nous-mcp
+# nous-cli
 
 MCP (Model Context Protocol) server and CLI for the Nous memory system. This crate
 is the primary user-facing binary. It exposes 21 MCP tools over stdio or HTTP
@@ -41,7 +41,7 @@ concurrent queries, an `Arc<dyn EmbeddingBackend>` for vector generation, a
 `CategoryClassifier`, a `Chunker`, and a `Config`. All MCP tool handlers route
 through these shared components. The embedding backend requires a working
 `OnnxBackend`; if model loading fails, nous exits with an error suggesting
-`nous-mcp model setup mini` or `nous-mcp model setup full`.
+`nous-cli model setup mini` or `nous-cli model setup full`.
 
 ## Configuration
 

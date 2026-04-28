@@ -17,7 +17,7 @@ Rust MCP memory server with OTLP trace ingestion. Stores, searches, and retrieve
 |-------|------|
 | `nous-shared` | Typed IDs, SQLite helpers, XDG paths, error types |
 | `nous-core` | Memory schema, CRUD, FTS5/semantic/hybrid search, embedding trait, chunking, classification |
-| `nous-mcp` | MCP server binary (stdio + HTTP transports) and management CLI |
+| `nous-cli` | MCP server binary (stdio + HTTP transports) and management CLI |
 | `nous-otlp` | OTLP HTTP receiver binary, decodes protobuf into SQLite |
 
 ## Quick Start
@@ -28,10 +28,10 @@ Requires Rust 1.88+.
 cargo build
 
 # MCP server (stdio, default)
-cargo run -p nous-mcp -- serve
+cargo run -p nous-cli -- serve
 
 # MCP server (HTTP on port 8377)
-cargo run -p nous-mcp -- serve --transport http --port 8377
+cargo run -p nous-cli -- serve --transport http --port 8377
 
 # OTLP receiver (HTTP on port 4318)
 cargo run -p nous-otlp -- serve
@@ -49,15 +49,15 @@ just check        # fmt + clippy + test
 ## CLI Commands
 
 ```
-nous-mcp serve              Start MCP server
-nous-mcp status             Show database stats
-nous-mcp export             Export memories as JSON
-nous-mcp import <file>      Import from JSON
-nous-mcp re-embed           Re-embed all memories with a new model
-nous-mcp re-classify        Re-classify memories
-nous-mcp category list      List categories
-nous-mcp category add       Add a category
-nous-mcp rotate-key         Rotate SQLCipher encryption key
+nous-cli serve              Start MCP server
+nous-cli status             Show database stats
+nous-cli export             Export memories as JSON
+nous-cli import <file>      Import from JSON
+nous-cli re-embed           Re-embed all memories with a new model
+nous-cli re-classify        Re-classify memories
+nous-cli category list      List categories
+nous-cli category add       Add a category
+nous-cli rotate-key         Rotate SQLCipher encryption key
 ```
 
 ## First Run
@@ -66,7 +66,7 @@ On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. T
 
 - **Network required** — the first run must reach `huggingface.co` to fetch the model
 - **Cache location** — models are cached by the `hf-hub` crate at `~/.cache/huggingface/hub` (the standard Hugging Face cache directory); subsequent runs load from cache
-- **Error on failure** — if the download fails, nous exits with an error message suggesting `nous-mcp model setup mini` or `nous-mcp model setup full` to download a working model
+- **Error on failure** — if the download fails, nous exits with an error message suggesting `nous-cli model setup mini` or `nous-cli model setup full` to download a working model
 
 ## Models
 
@@ -108,24 +108,24 @@ Add to `.mcp.json` at your project root:
 {
   "mcpServers": {
     "nous": {
-      "command": "path/to/nous-mcp",
+      "command": "path/to/nous-cli",
       "args": ["serve"]
     }
   }
 }
 ```
 
-This starts `nous-mcp` in stdio transport mode (the default). Claude Code manages the process lifecycle.
+This starts `nous-cli` in stdio transport mode (the default). Claude Code manages the process lifecycle.
 
 For HTTP transport instead:
 
 ```bash
-nous-mcp serve --transport http --port 8377
+nous-cli serve --transport http --port 8377
 ```
 
 ## Configuration
 
-`nous-mcp` reads `~/.config/nous/config.toml` on startup. If the file does not exist, it creates one with default values.
+`nous-cli` reads `~/.config/nous/config.toml` on startup. If the file does not exist, it creates one with default values.
 
 ```toml
 [memory]
@@ -171,7 +171,7 @@ Environment variables take precedence over `config.toml`:
 | `NOUS_DB_KEY_FILE` | `encryption.db_key_file` |
 
 ```bash
-NOUS_MEMORY_DB=/tmp/test.db nous-mcp serve
+NOUS_MEMORY_DB=/tmp/test.db nous-cli serve
 ```
 
 ## Telemetry Setup (OTLP)

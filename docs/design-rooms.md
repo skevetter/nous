@@ -504,16 +504,16 @@ pub struct Message {
 
 ## 6. MCP Tool Specifications
 
-Seven new MCP tools following the registration pattern at `crates/nous-mcp/src/server.rs:63-199`.
+Seven new MCP tools following the registration pattern at `crates/nous-cli/src/server.rs:63-199`.
 
 
 ### `room_create`
 
 Create a new room.
 
-Seven new tools extend the existing 21 tools registered in `crates/nous-mcp/src/server.rs:87-293`.
+Seven new tools extend the existing 21 tools registered in `crates/nous-cli/src/server.rs:87-293`.
 
-**Params struct** (`crates/nous-mcp/src/tools.rs`):
+**Params struct** (`crates/nous-cli/src/tools.rs`):
 ```rust
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RoomCreateParams {
@@ -774,7 +774,7 @@ pub async fn handle_room_search(
 
 ## 7. CLI Command Specifications
 
-Add `room` subcommand to `crates/nous-mcp/src/main.rs` following the `category` pattern at `main.rs:48-82`.
+Add `room` subcommand to `crates/nous-cli/src/main.rs` following the `category` pattern at `main.rs:48-82`.
 
 **Command enum variant** (add to `Command` at `main.rs:26`):
 ```rust
@@ -863,7 +863,7 @@ Command::Room(cmd) => match cmd.command {
 }
 ```
 
-**Handler implementations** (add to `crates/nous-mcp/src/commands.rs`):
+**Handler implementations** (add to `crates/nous-cli/src/commands.rs`):
 
 ```rust
 pub fn run_room_list(config: &Config, archived: bool, limit: Option<usize>) -> Result<(), Box<dyn std::error::Error>> {
@@ -894,36 +894,36 @@ pub fn run_room_create(config: &Config, name: &str, purpose: Option<&str>) -> Re
 
 ```bash
 # List active rooms
-nous-mcp room list
+nous-cli room list
 
 # List archived rooms
-nous-mcp room list --archived
+nous-cli room list --archived
 
 # Create a room
-nous-mcp room create pr-123-review --purpose "Code review coordination"
+nous-cli room create pr-123-review --purpose "Code review coordination"
 
 # Get room details
-nous-mcp room get 018f3a5e-...
+nous-cli room get 018f3a5e-...
 
 # Post a message
-nous-mcp room post 018f3a5e-... "Starting review" --sender agent-abc
+nous-cli room post 018f3a5e-... "Starting review" --sender agent-abc
 
 # Read recent messages
-nous-mcp room read 018f3a5e-... --limit 50
+nous-cli room read 018f3a5e-... --limit 50
 
 # Search messages
-nous-mcp room search 018f3a5e-... "linter failed"
+nous-cli room search 018f3a5e-... "linter failed"
 
 # Delete room (soft)
-nous-mcp room delete 018f3a5e-...
+nous-cli room delete 018f3a5e-...
 
 # Delete room (hard)
-nous-mcp room delete 018f3a5e-... --hard
+nous-cli room delete 018f3a5e-... --hard
 ```
 
 ## 8. Config Additions
 
-Add `[rooms]` section to `crates/nous-mcp/src/config.rs` following existing patterns.
+Add `[rooms]` section to `crates/nous-cli/src/config.rs` following existing patterns.
 
 **Config struct** (add field at `config.rs:22`):
 ```rust
@@ -1079,8 +1079,8 @@ The `MIGRATIONS` array at `crates/nous-core/src/db.rs:12-138` currently contains
 - MCP tool: `room_mark_read(room_id, message_id)`
 
 **Export/import:**
-- CLI: `nous-mcp room export <room_id> --format json`
-- CLI: `nous-mcp room import <file>`
+- CLI: `nous-cli room export <room_id> --format json`
+- CLI: `nous-cli room import <file>`
 - Include messages, participants, metadata in JSON export
 
 **Room templates:**

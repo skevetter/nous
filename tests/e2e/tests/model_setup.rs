@@ -14,7 +14,7 @@ fn bin_dir() -> PathBuf {
     path
 }
 
-fn nous_mcp_bin() -> PathBuf {
+fn nous_cli_bin() -> PathBuf {
     let p = bin_dir().join("nous");
     assert!(p.exists(), "nous binary not found at {}", p.display());
     p
@@ -44,7 +44,7 @@ impl TestEnv {
     }
 
     fn run(&self, args: &[&str]) -> std::process::Output {
-        Command::new(nous_mcp_bin())
+        Command::new(nous_cli_bin())
             .args(args)
             .env("NOUS_DB_KEY", DB_KEY)
             .env("NOUS_MEMORY_DB", &self.mcp_db)
@@ -165,7 +165,7 @@ fn test_model_setup_mini_downloads_and_activates() {
 fn test_no_model_serve_gives_helpful_error() {
     let env = TestEnv::new();
 
-    let output = Command::new(nous_mcp_bin())
+    let output = Command::new(nous_cli_bin())
         .args([
             "serve",
             "--model",

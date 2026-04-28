@@ -1,9 +1,9 @@
 use std::path::Path;
 
+use nous_cli::config::Config;
+use nous_cli::server::NousServer;
+use nous_cli::tools::{MemorySearchParams, MemoryStoreParams, handle_search, handle_store};
 use nous_core::embed::FixtureEmbedding;
-use nous_mcp::config::Config;
-use nous_mcp::server::NousServer;
-use nous_mcp::tools::{MemorySearchParams, MemoryStoreParams, handle_search, handle_store};
 use rmcp::model::CallToolResult;
 
 fn fixture_path() -> &'static Path {

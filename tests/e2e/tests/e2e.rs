@@ -92,7 +92,7 @@ fn bin_dir() -> PathBuf {
     path
 }
 
-fn nous_mcp_bin() -> PathBuf {
+fn nous_cli_bin() -> PathBuf {
     let p = bin_dir().join("nous");
     assert!(p.exists(), "nous binary not found at {}", p.display());
     p
@@ -163,12 +163,12 @@ async fn wait_for_otlp(server: &OtlpServer) {
     panic!("nous-otlp did not become ready within 30 seconds");
 }
 
-fn run_nous_mcp(
+fn run_nous_cli(
     mcp_db: &std::path::Path,
     key_file: &std::path::Path,
     args: &[&str],
 ) -> std::process::Output {
-    Command::new(nous_mcp_bin())
+    Command::new(nous_cli_bin())
         .args(args)
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", mcp_db)
@@ -179,7 +179,7 @@ fn run_nous_mcp(
 }
 
 fn run_import(mcp_db: &std::path::Path, key_file: &std::path::Path, import_file: &std::path::Path) {
-    let output = Command::new(nous_mcp_bin())
+    let output = Command::new(nous_cli_bin())
         .args(["import"])
         .arg(import_file)
         .env("NOUS_DB_KEY", DB_KEY)
@@ -197,7 +197,7 @@ fn run_import(mcp_db: &std::path::Path, key_file: &std::path::Path, import_file:
 }
 
 fn run_export(mcp_db: &std::path::Path, key_file: &std::path::Path) -> String {
-    let output = Command::new(nous_mcp_bin())
+    let output = Command::new(nous_cli_bin())
         .args(["export"])
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", mcp_db)
@@ -364,7 +364,7 @@ async fn test_category_add_and_list() {
     // First import to initialise the DB (seeds system categories)
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
-    let output = run_nous_mcp(
+    let output = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -381,7 +381,7 @@ async fn test_category_add_and_list() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let list_output = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list_output = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     assert!(
         list_output.status.success(),
         "category list failed: {}",
@@ -404,7 +404,7 @@ async fn test_category_delete() {
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
     // Add then delete
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "to-delete"],
@@ -415,7 +415,7 @@ async fn test_category_delete() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let del = run_nous_mcp(
+    let del = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "delete", "to-delete"],
@@ -426,7 +426,7 @@ async fn test_category_delete() {
         String::from_utf8_lossy(&del.stderr)
     );
 
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
         !stdout.contains("to-delete"),
@@ -439,7 +439,7 @@ async fn test_category_rename() {
     let env = TestEnv::new();
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -456,7 +456,7 @@ async fn test_category_rename() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let rename = run_nous_mcp(
+    let rename = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "rename", "old-name", "new-name"],
@@ -467,7 +467,7 @@ async fn test_category_rename() {
         String::from_utf8_lossy(&rename.stderr)
     );
 
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
         stdout.contains("new-name"),
@@ -484,7 +484,7 @@ async fn test_category_update() {
     let env = TestEnv::new();
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "updatable", "--description", "Original"],
@@ -495,7 +495,7 @@ async fn test_category_update() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let update = run_nous_mcp(
+    let update = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -514,7 +514,7 @@ async fn test_category_update() {
         String::from_utf8_lossy(&update.stderr)
     );
 
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
         stdout.contains("Updated description"),
@@ -528,7 +528,7 @@ async fn test_category_delete_refuses_with_children() {
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
     // Add parent
-    let add_parent = run_nous_mcp(
+    let add_parent = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "parent-cat"],
@@ -540,7 +540,7 @@ async fn test_category_delete_refuses_with_children() {
     );
 
     // Add child under parent
-    let add_child = run_nous_mcp(
+    let add_child = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "child-cat", "--parent", "parent-cat"],
@@ -552,7 +552,7 @@ async fn test_category_delete_refuses_with_children() {
     );
 
     // Try deleting parent — should report error about children
-    let del = run_nous_mcp(
+    let del = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "delete", "parent-cat"],
@@ -564,7 +564,7 @@ async fn test_category_delete_refuses_with_children() {
     );
 
     // Parent should still exist in list
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
         stdout.contains("parent-cat"),
@@ -580,7 +580,7 @@ async fn test_re_classify_assigns_categories() {
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
     // Run re-classify
-    let rc = run_nous_mcp(&env.mcp_db, &env.key_file, &["re-classify"]);
+    let rc = run_nous_cli(&env.mcp_db, &env.key_file, &["re-classify"]);
     assert!(
         rc.status.success(),
         "re-classify failed: {}",
@@ -598,7 +598,7 @@ async fn test_category_list_filter_by_source() {
     let env = TestEnv::new();
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "user-only-cat"],
@@ -609,7 +609,7 @@ async fn test_category_list_filter_by_source() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let user_list = run_nous_mcp(
+    let user_list = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "list", "--source", "user"],
@@ -620,7 +620,7 @@ async fn test_category_list_filter_by_source() {
         "user source filter should include user category, got:\n{user_stdout}"
     );
 
-    let seed_list = run_nous_mcp(
+    let seed_list = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "list", "--source", "system"],
@@ -637,7 +637,7 @@ async fn test_category_update_rename_via_update() {
     let env = TestEnv::new();
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "add", "before-update"],
@@ -648,7 +648,7 @@ async fn test_category_update_rename_via_update() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let update = run_nous_mcp(
+    let update = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -665,7 +665,7 @@ async fn test_category_update_rename_via_update() {
         String::from_utf8_lossy(&update.stderr)
     );
 
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(
         stdout.contains("after-update"),
@@ -683,7 +683,7 @@ async fn test_category_crud_full_lifecycle() {
     run_import(&env.mcp_db, &env.key_file, &env.import_file);
 
     // Add
-    let add = run_nous_mcp(
+    let add = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -699,7 +699,7 @@ async fn test_category_crud_full_lifecycle() {
     assert!(add_stdout.contains("Added category 'lifecycle-cat'"));
 
     // Rename
-    let rename = run_nous_mcp(
+    let rename = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "rename", "lifecycle-cat", "lifecycle-v2"],
@@ -707,7 +707,7 @@ async fn test_category_crud_full_lifecycle() {
     assert!(rename.status.success());
 
     // Update description
-    let update = run_nous_mcp(
+    let update = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &[
@@ -721,14 +721,14 @@ async fn test_category_crud_full_lifecycle() {
     assert!(update.status.success());
 
     // Verify state
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(stdout.contains("lifecycle-v2"));
     assert!(stdout.contains("updated lifecycle"));
     assert!(!stdout.contains("lifecycle-cat"));
 
     // Delete
-    let del = run_nous_mcp(
+    let del = run_nous_cli(
         &env.mcp_db,
         &env.key_file,
         &["category", "delete", "lifecycle-v2"],
@@ -738,7 +738,7 @@ async fn test_category_crud_full_lifecycle() {
     assert!(del_stdout.contains("Deleted category 'lifecycle-v2'"));
 
     // Verify gone
-    let list = run_nous_mcp(&env.mcp_db, &env.key_file, &["category", "list"]);
+    let list = run_nous_cli(&env.mcp_db, &env.key_file, &["category", "list"]);
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(!stdout.contains("lifecycle-v2"));
 }
@@ -882,7 +882,7 @@ impl TraceTestEnv {
     }
 
     fn run_trace(&self, args: &[&str]) -> std::process::Output {
-        Command::new(nous_mcp_bin())
+        Command::new(nous_cli_bin())
             .arg("trace")
             .args(args)
             .env("NOUS_DB_KEY", DB_KEY)
@@ -904,7 +904,7 @@ async fn test_status_format_json() {
 
     let _db = MemoryDb::open(mcp_db.to_str().unwrap(), Some(DB_KEY), 384).unwrap();
 
-    let output = Command::new(nous_mcp_bin())
+    let output = Command::new(nous_cli_bin())
         .args(["status", "--format", "json"])
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", &mcp_db)

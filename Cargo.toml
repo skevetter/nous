@@ -2,7 +2,7 @@
 members = [
     "crates/nous-shared",
     "crates/nous-core",
-    "crates/nous-mcp",
+    "crates/nous-cli",
     "crates/nous-otlp",
     "tests/correlation",
     "tests/e2e",

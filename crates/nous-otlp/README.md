@@ -46,7 +46,7 @@ database path follows XDG conventions via `nous-shared`, placing the file at
 ## How It Fits in Nous
 
 The OTLP server runs alongside the MCP server. AI agent sessions emit telemetry
-(logs, traces) that land in the OTLP database. The `nous-mcp` crate's
+(logs, traces) that land in the OTLP database. The `nous-cli` crate's
 `otlp_trace_context` and `otlp_memory_context` tools query both databases to
 correlate memories with their originating telemetry using shared `trace_id` and
 `session_id` fields.

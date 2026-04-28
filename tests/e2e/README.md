@@ -1,7 +1,7 @@
 # e2e-tests
 
 End-to-end test crate that validates the Nous system by running the actual compiled
-binaries (`nous-mcp` and `nous-otlp`) as subprocesses. Unlike unit and integration
+binaries (`nous-cli` and `nous-otlp`) as subprocesses. Unlike unit and integration
 tests that call Rust APIs directly, these tests exercise the full stack including
 CLI argument parsing, environment variable configuration, database creation,
 process lifecycle, and HTTP communication.
@@ -12,7 +12,7 @@ The `TestEnv` struct manages a temporary directory containing isolated database
 files (`memory.db`, `otlp.db`), a key file, and import data. All paths are passed
 to binaries via environment variables (`NOUS_DB_KEY`, `NOUS_MEMORY_DB`,
 `NOUS_DB_KEY_FILE`, `NOUS_OTLP_DB`). Helper functions locate the compiled binaries
-in the cargo target directory and provide wrappers for running `nous-mcp`
+in the cargo target directory and provide wrappers for running `nous-cli`
 subcommands. `OtlpServer` starts `nous-otlp serve` as a child process on an
 ephemeral port, with automatic cleanup on drop. `wait_for_otlp` polls the
 `/v1/logs` endpoint until the server is ready, with a 30-second timeout.
@@ -22,7 +22,7 @@ ephemeral port, with automatic cleanup on drop. `wait_for_otlp` polls the
 ### Import and Export
 
 Tests verify that JSON import files containing memories, tags, and categories are
-correctly ingested via `nous-mcp import` and that `nous-mcp export` produces
+correctly ingested via `nous-cli import` and that `nous-cli export` produces
 output containing the expected data. A roundtrip test imports a dataset with
 hierarchical categories and confirms both parent and child categories survive
 the export cycle.
@@ -48,13 +48,13 @@ complete lifecycle test (add, rename, update, verify, delete, verify deletion).
 
 ### Re-classify
 
-Verifies that `nous-mcp re-classify` runs successfully and reports progress on
+Verifies that `nous-cli re-classify` runs successfully and reports progress on
 stderr after importing memories with seeded system categories.
 
 ### OTLP Correlation CLI
 
 The `TraceTestEnv` struct seeds memories and OTLP data directly via library APIs,
-then runs `nous-mcp trace` as a subprocess. Tests cover lookup by trace ID, dual
+then runs `nous-cli trace` as a subprocess. Tests cover lookup by trace ID, dual
 lookup by trace and session ID, reverse lookup by memory ID, empty results for
 unknown trace IDs, and error reporting when a memory lacks correlation identifiers.
 
