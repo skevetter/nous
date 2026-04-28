@@ -615,12 +615,20 @@ impl MemoryDb {
     }
 
     fn log_access_for_results(&self, results: &[SearchResult]) -> Result<()> {
-        for result in results {
-            self.connection().execute(
-                "INSERT INTO access_log (memory_id, access_type) VALUES (?1, 'search')",
-                params![result.memory.id],
-            )?;
+        if results.is_empty() {
+            return Ok(());
         }
+        let placeholders: String = (1..=results.len())
+            .map(|i| format!("(?{i}, 'search')"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT INTO access_log (memory_id, access_type) VALUES {placeholders}");
+        let mut stmt = self.connection().prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = results
+            .iter()
+            .map(|r| &r.memory.id as &dyn rusqlite::types::ToSql)
+            .collect();
+        stmt.execute(params.as_slice())?;
         Ok(())
     }
 }
