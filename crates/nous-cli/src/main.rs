@@ -874,6 +874,12 @@ fn run_command(
             } else {
                 None
             };
+            if found_in_db && local_dir.is_none() {
+                eprintln!(
+                    "Warning: model '{}' found in DB but not in local cache, downloading from HuggingFace",
+                    model_name
+                );
+            }
             let embedding = build_embedding(&model_name, &model_variant, dimensions, local_dir)?;
             commands::run_re_embed(config, embedding.as_ref())?;
         }
