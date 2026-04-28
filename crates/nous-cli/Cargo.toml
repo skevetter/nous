@@ -33,6 +33,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 uuid = { workspace = true }
 libc = "0.2"
 reqwest = { workspace = true }
+hf-hub = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

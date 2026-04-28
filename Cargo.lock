@@ -1732,6 +1732,7 @@ dependencies = [
  "bytes",
  "clap",
  "csv",
+ "hf-hub 0.5.0",
  "http-body-util",
  "hyper",
  "hyper-util",
