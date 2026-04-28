@@ -73,7 +73,7 @@ impl OnnxBackendBuilder {
             .get("tokenizer.json")
             .map_err(|e| NousError::Embedding(format!("download tokenizer: {e}")))?;
 
-        let max_tokens = detect_max_tokens(&tokenizer_path)?;
+        let mut max_tokens = detect_max_tokens(&tokenizer_path)?;
 
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| NousError::Embedding(format!("load tokenizer: {e}")))?;
@@ -94,6 +94,32 @@ impl OnnxBackendBuilder {
 
         let hidden_states_idx = find_hidden_states_output(&session)?;
         let dimensions = detect_dimensions(&session, &model_path, hidden_states_idx)?;
+
+        let onnx_max_seq = session
+            .inputs()
+            .iter()
+            .find(|i| i.name() == "input_ids")
+            .and_then(|i| {
+                if let ort::value::ValueType::Tensor { shape, .. } = i.dtype()
+                    && shape.len() == 2
+                    && shape[1] > 0
+                {
+                    Some(shape[1] as usize)
+                } else {
+                    None
+                }
+            });
+        if let Some(onnx_seq) = onnx_max_seq
+            && onnx_seq < max_tokens
+        {
+            max_tokens = onnx_seq;
+            tokenizer
+                .with_truncation(Some(TruncationParams {
+                    max_length: max_tokens,
+                    ..Default::default()
+                }))
+                .map_err(|e| NousError::Embedding(format!("set truncation: {e}")))?;
+        }
 
         let needs_token_type_ids = session
             .inputs()

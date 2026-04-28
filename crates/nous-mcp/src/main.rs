@@ -64,8 +64,11 @@ enum Command {
         no_scheduler: bool,
     },
     ReEmbed {
-        #[arg(long)]
-        model: String,
+        #[arg(
+            long,
+            help = "Model name, HuggingFace repo, or numeric DB ID (defaults to active model)"
+        )]
+        model: Option<String>,
         #[arg(long)]
         variant: Option<String>,
     },
@@ -803,26 +806,56 @@ fn run_command(
             rt.block_on(run_serve(config, transport, port, &model, &variant))?;
         }
         Command::ReEmbed { model, variant } => {
-            let (model, variant, dimensions) = if let Ok(id) = model.parse::<i64>() {
-                let db_path = commands::expand_tilde(&config.memory.db_path);
-                let db_key = config.resolve_db_key().ok();
-                let db = nous_core::db::MemoryDb::open(
-                    &db_path,
-                    db_key.as_deref(),
-                    config.embedding.dimensions,
-                )?;
-                let m = db.get_model(id)?;
-                (
-                    m.name,
-                    m.variant
-                        .unwrap_or_else(|| config.embedding.variant.clone()),
-                    m.dimensions as usize,
-                )
-            } else {
-                let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
-                (model, variant, config.embedding.dimensions)
+            let db_path = commands::expand_tilde(&config.memory.db_path);
+            let db_key = config.resolve_db_key().ok();
+            let db = nous_core::db::MemoryDb::open(
+                &db_path,
+                db_key.as_deref(),
+                config.embedding.dimensions,
+            )?;
+
+            let (model_name, model_variant, dimensions) = match model {
+                Some(ref val) => {
+                    if let Ok(id) = val.parse::<i64>() {
+                        let m = db.get_model(id)?;
+                        (
+                            m.name,
+                            m.variant
+                                .unwrap_or_else(|| config.embedding.variant.clone()),
+                            m.dimensions as usize,
+                        )
+                    } else if let Some(m) = db.get_model_by_name(val)? {
+                        (
+                            m.name,
+                            m.variant
+                                .unwrap_or_else(|| config.embedding.variant.clone()),
+                            m.dimensions as usize,
+                        )
+                    } else {
+                        eprintln!(
+                            "Warning: model '{}' not found in DB, attempting HuggingFace download",
+                            val
+                        );
+                        let v = variant.unwrap_or_else(|| config.embedding.variant.clone());
+                        (val.clone(), v, config.embedding.dimensions)
+                    }
+                }
+                None => {
+                    let m = db.active_model()?.ok_or_else(|| {
+                        nous_shared::NousError::Validation(
+                            "No active model found. Run 'nous model setup mini' to configure one."
+                                .into(),
+                        )
+                    })?;
+                    (
+                        m.name,
+                        m.variant
+                            .unwrap_or_else(|| config.embedding.variant.clone()),
+                        m.dimensions as usize,
+                    )
+                }
             };
-            let embedding = build_embedding(&model, &variant, dimensions)?;
+            let embedding = build_embedding(&model_name, &model_variant, dimensions)?;
             commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
@@ -1324,15 +1357,8 @@ mod tests {
 
     #[test]
     fn serve_with_model_and_variant() {
-        let cli = Cli::try_parse_from([
-            "nous-mcp",
-            "serve",
-            "--model",
-            "org/repo",
-            "--variant",
-            "q4",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["nous", "serve", "--model", "org/repo", "--variant", "q4"])
+            .unwrap();
         match cli.command {
             Command::Serve { model, variant, .. } => {
                 assert_eq!(model.as_deref(), Some("org/repo"));
@@ -1365,7 +1391,19 @@ mod tests {
         let cli = Cli::try_parse_from(["nous", "re-embed", "--model", "org/repo"]).unwrap();
         match cli.command {
             Command::ReEmbed { model, variant } => {
-                assert_eq!(model, "org/repo");
+                assert_eq!(model.as_deref(), Some("org/repo"));
+                assert!(variant.is_none());
+            }
+            _ => panic!("expected ReEmbed"),
+        }
+    }
+
+    #[test]
+    fn re_embed_no_model_defaults() {
+        let cli = Cli::try_parse_from(["nous", "re-embed"]).unwrap();
+        match cli.command {
+            Command::ReEmbed { model, variant } => {
+                assert!(model.is_none());
                 assert!(variant.is_none());
             }
             _ => panic!("expected ReEmbed"),
@@ -1374,18 +1412,12 @@ mod tests {
 
     #[test]
     fn re_embed_with_variant() {
-        let cli = Cli::try_parse_from([
-            "nous-mcp",
-            "re-embed",
-            "--model",
-            "org/repo",
-            "--variant",
-            "q4",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["nous", "re-embed", "--model", "org/repo", "--variant", "q4"])
+                .unwrap();
         match cli.command {
             Command::ReEmbed { model, variant } => {
-                assert_eq!(model, "org/repo");
+                assert_eq!(model.as_deref(), Some("org/repo"));
                 assert_eq!(variant.as_deref(), Some("q4"));
             }
             _ => panic!("expected ReEmbed"),
@@ -1435,7 +1467,7 @@ mod tests {
     #[test]
     fn category_add_with_parent_and_description() {
         let cli = Cli::try_parse_from([
-            "nous-mcp",
+            "nous",
             "category",
             "add",
             "unit-tests",
@@ -1619,7 +1651,7 @@ mod tests {
     #[test]
     fn trace_with_trace_id_and_session_id() {
         let cli = Cli::try_parse_from([
-            "nous-mcp",
+            "nous",
             "trace",
             "--trace-id",
             "abc123",
@@ -1677,9 +1709,14 @@ mod tests {
     }
 
     #[test]
-    fn re_embed_missing_model_errors() {
-        let result = Cli::try_parse_from(["nous", "re-embed"]);
-        assert!(result.is_err());
+    fn re_embed_with_numeric_id() {
+        let cli = Cli::try_parse_from(["nous", "re-embed", "--model", "215"]).unwrap();
+        match cli.command {
+            Command::ReEmbed { model, .. } => {
+                assert_eq!(model.as_deref(), Some("215"));
+            }
+            _ => panic!("expected ReEmbed"),
+        }
     }
 
     #[test]
@@ -1705,7 +1742,7 @@ mod tests {
     #[test]
     fn room_create_with_purpose() {
         let cli = Cli::try_parse_from([
-            "nous-mcp",
+            "nous",
             "room",
             "create",
             "dev-chat",
@@ -1754,7 +1791,7 @@ mod tests {
     #[test]
     fn room_post() {
         let cli = Cli::try_parse_from([
-            "nous-mcp",
+            "nous",
             "room",
             "post",
             "my-room",
