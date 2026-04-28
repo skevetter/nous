@@ -364,6 +364,7 @@ fn context_entry_roundtrip_json() {
         content: Some("content".into()),
         memory_type: MemoryType::Observation,
         importance: Importance::High,
+        tags: vec!["rust".into(), "test".into()],
         created_at: "2025-01-01T00:00:00Z".into(),
     };
     let json = serde_json::to_string(&ce).unwrap();
