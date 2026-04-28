@@ -37,7 +37,7 @@ The `nous` binary (crate `nous-mcp`, `src/main.rs`) defines a single `Command` e
 | `workspaces` | List workspaces with memory counts | `main.rs:1149` — delegates to `commands::run_workspaces` |
 | `tags` | List tags with usage counts | `main.rs:1152` — delegates to `commands::run_tags` |
 
-### Grouped Subcommand Namespaces (6 groups, 30 subcommands)
+### Grouped Subcommand Namespaces (6 groups, 32 subcommands)
 
 | Group | Subcommands | Struct | Definition |
 |-------|-------------|--------|------------|
@@ -171,7 +171,7 @@ nous
 | Conflict | Resolution |
 |----------|------------|
 | `status` at top-level vs. `daemon status` | Move top-level `status` to `admin status`. `daemon status` remains unchanged. The two commands report different things: `admin status` shows DB stats; `daemon status` shows PID and uptime. |
-| `serve` placement | Keep `serve` at the top level. It is the primary entrypoint for MCP integration and used in systemd units, Docker entrypoints, and daemon internals (`main.rs:533`). Nesting it under `nous mcp serve` would break all deployment configurations for no user benefit. |
+| `serve` placement | Keep `serve` at the top level. It is the primary entrypoint for MCP integration and used in systemd units and Docker entrypoints. Nesting it under `nous mcp serve` would break all deployment configurations for no user benefit. |
 | `import`/`export` in `admin` vs. `query` | Placed in `admin` because `import` mutates the database and `export` is its counterpart. Keeping them together preserves the mental model of "backup and restore." |
 | `re-embed` in `admin` vs. `query` | `admin`. Re-embedding rewrites every vector in the database — it is a maintenance operation, not a query. |
 | `trace` in `query` vs. top-level | `query`. Trace lookups are read-only introspection, same as `sql` and `schema`. |
