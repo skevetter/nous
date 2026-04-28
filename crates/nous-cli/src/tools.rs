@@ -71,6 +71,7 @@ pub struct MemoryContextParams {
     pub workspace_path: String,
     #[serde(default)]
     pub summary: bool,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1107,6 +1108,7 @@ pub async fn handle_context(
 ) -> CallToolResult {
     let workspace_path = params.workspace_path;
     let summary = params.summary;
+    let limit = params.limit.unwrap_or(50);
 
     let db_path = db_path.to_owned();
     let db_key = db_key.map(|k| k.to_owned());
@@ -1123,7 +1125,7 @@ pub async fn handle_context(
             Err(e) => return Err(e.into()),
         };
 
-        db.context(ws_id, summary)
+        db.context(ws_id, summary, limit)
     })
     .await
     {

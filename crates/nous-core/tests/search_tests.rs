@@ -431,7 +431,7 @@ fn context_returns_workspace_scoped() {
         )
         .unwrap();
 
-    let entries = db.context(ws_a_id, false).unwrap();
+    let entries = db.context(ws_a_id, false, 50).unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].title.contains("workspace A"));
 }
@@ -453,11 +453,11 @@ fn context_summary_omits_content() {
         )
         .unwrap();
 
-    let entries = db.context(ws_id, true).unwrap();
+    let entries = db.context(ws_id, true, 50).unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].content.is_none());
 
-    let entries_full = db.context(ws_id, false).unwrap();
+    let entries_full = db.context(ws_id, false, 50).unwrap();
     assert!(entries_full[0].content.is_some());
 }
 
@@ -484,7 +484,7 @@ fn context_excludes_archived() {
         )
         .unwrap();
 
-    let entries = db.context(ws_id, false).unwrap();
+    let entries = db.context(ws_id, false, 50).unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].title.contains("active"));
 }
