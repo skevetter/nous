@@ -66,7 +66,7 @@ On first launch, nous downloads an ONNX embedding model from Hugging Face Hub. T
 
 - **Network required** — the first run must reach `huggingface.co` to fetch the model
 - **Cache location** — models are cached by the `hf-hub` crate at `~/.cache/huggingface/hub` (the standard Hugging Face cache directory); subsequent runs load from cache
-- **Fallback** — if the download fails, nous falls back to `MockEmbedding`: FTS full-text search continues working, but semantic/vector search is unavailable until a model is successfully downloaded
+- **Error on failure** — if the download fails, nous exits with an error message suggesting `nous-mcp model setup mini` or `nous-mcp model setup full` to download a working model
 
 ## Models
 

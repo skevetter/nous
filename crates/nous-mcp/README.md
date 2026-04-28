@@ -39,8 +39,9 @@ The server registers 21 tools via the rmcp `#[tool_router]` macro:
 `NousServer` holds a `WriteChannel` for batched mutations, a `ReadPool` for
 concurrent queries, an `Arc<dyn EmbeddingBackend>` for vector generation, a
 `CategoryClassifier`, a `Chunker`, and a `Config`. All MCP tool handlers route
-through these shared components. The embedding backend tries `OnnxBackend` first
-and falls back to `MockEmbedding(384)` if ONNX initialization fails.
+through these shared components. The embedding backend requires a working
+`OnnxBackend`; if model loading fails, nous exits with an error suggesting
+`nous-mcp model setup mini` or `nous-mcp model setup full`.
 
 ## Configuration
 
