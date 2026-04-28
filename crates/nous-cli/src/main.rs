@@ -418,25 +418,35 @@ enum DaemonSubcommand {
     Status,
 }
 
+fn resolve_hf_cache_dir(model: &str) -> Option<std::path::PathBuf> {
+    let cache = hf_hub::Cache::from_env();
+    let repo = cache.model(model.to_string());
+    let dir = repo.get("tokenizer.json")?.parent()?.to_path_buf();
+    Some(dir)
+}
+
 fn build_embedding(
     model: &str,
     variant: &str,
     dimensions: usize,
+    local_dir: Option<std::path::PathBuf>,
 ) -> Result<Box<dyn nous_core::embed::EmbeddingBackend>, Box<dyn std::error::Error>> {
     if std::env::var("NOUS_MOCK_EMBEDDING").is_ok() {
         return Ok(Box::new(nous_core::embed::MockEmbedding::new(dimensions)));
     }
-    let backend = nous_core::embed::OnnxBackend::builder()
+    let mut builder = nous_core::embed::OnnxBackend::builder()
         .model(model)
-        .variant(variant)
-        .build()
-        .map_err(|e| {
-            format!(
-                "Failed to load embedding model '{model}': {e}\n\n\
-                 Hint: Run 'nous model setup mini' to download a lightweight model,\n\
-                 or 'nous model setup full' for higher quality embeddings."
-            )
-        })?;
+        .variant(variant);
+    if let Some(dir) = local_dir {
+        builder = builder.model_dir(dir);
+    }
+    let backend = builder.build().map_err(|e| {
+        format!(
+            "Failed to load embedding model '{model}': {e}\n\n\
+             Hint: Run 'nous model setup mini' to download a lightweight model,\n\
+             or 'nous model setup full' for higher quality embeddings."
+        )
+    })?;
     Ok(Box::new(backend))
 }
 
@@ -487,6 +497,7 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
                 &config.embedding.model,
                 &config.embedding.variant,
                 config.embedding.dimensions,
+                None,
             ) {
                 Ok(e) => e,
                 Err(e) => {
@@ -814,7 +825,7 @@ fn run_command(
                 config.embedding.dimensions,
             )?;
 
-            let (model_name, model_variant, dimensions) = match model {
+            let (model_name, model_variant, dimensions, found_in_db) = match model {
                 Some(ref val) => {
                     if let Ok(id) = val.parse::<i64>() {
                         let m = db.get_model(id)?;
@@ -823,6 +834,7 @@ fn run_command(
                             m.variant
                                 .unwrap_or_else(|| config.embedding.variant.clone()),
                             m.dimensions as usize,
+                            true,
                         )
                     } else if let Some(m) = db.get_model_by_name(val)? {
                         (
@@ -830,6 +842,7 @@ fn run_command(
                             m.variant
                                 .unwrap_or_else(|| config.embedding.variant.clone()),
                             m.dimensions as usize,
+                            true,
                         )
                     } else {
                         eprintln!(
@@ -837,7 +850,7 @@ fn run_command(
                             val
                         );
                         let v = variant.unwrap_or_else(|| config.embedding.variant.clone());
-                        (val.clone(), v, config.embedding.dimensions)
+                        (val.clone(), v, config.embedding.dimensions, false)
                     }
                 }
                 None => {
@@ -852,10 +865,16 @@ fn run_command(
                         m.variant
                             .unwrap_or_else(|| config.embedding.variant.clone()),
                         m.dimensions as usize,
+                        true,
                     )
                 }
             };
-            let embedding = build_embedding(&model_name, &model_variant, dimensions)?;
+            let local_dir = if found_in_db {
+                resolve_hf_cache_dir(&model_name)
+            } else {
+                None
+            };
+            let embedding = build_embedding(&model_name, &model_variant, dimensions, local_dir)?;
             commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
@@ -863,6 +882,7 @@ fn run_command(
                 &config.embedding.model,
                 &config.embedding.variant,
                 config.embedding.dimensions,
+                None,
             )?;
             commands::run_re_classify(config, since.as_deref(), embedding.as_ref())?;
         }
@@ -879,6 +899,7 @@ fn run_command(
                     &config.embedding.model,
                     &config.embedding.variant,
                     config.embedding.dimensions,
+                    None,
                 )?;
                 commands::run_category_add(
                     config,
@@ -896,6 +917,7 @@ fn run_command(
                     &config.embedding.model,
                     &config.embedding.variant,
                     config.embedding.dimensions,
+                    None,
                 )?;
                 commands::run_category_rename(config, &old, &new, embedding.as_ref())?;
             }
@@ -909,6 +931,7 @@ fn run_command(
                     &config.embedding.model,
                     &config.embedding.variant,
                     config.embedding.dimensions,
+                    None,
                 )?;
                 commands::run_category_update(
                     config,
@@ -929,6 +952,7 @@ fn run_command(
                     &config.embedding.model,
                     &config.embedding.variant,
                     config.embedding.dimensions,
+                    None,
                 )?;
                 commands::run_category_suggest(
                     config,
@@ -1025,6 +1049,7 @@ fn run_command(
                 &config.embedding.model,
                 &config.embedding.variant,
                 config.embedding.dimensions,
+                None,
             )?;
             commands::run_import(config, &file, embedding.as_ref())?;
         }
@@ -1261,7 +1286,7 @@ async fn run_serve(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = commands::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let embedding = build_embedding(model, variant, config.embedding.dimensions)?;
+    let embedding = build_embedding(model, variant, config.embedding.dimensions, None)?;
     let server = NousServer::new(config, embedding, &db_path, db_key.as_deref())?;
 
     match transport {
@@ -1285,6 +1310,7 @@ async fn run_serve(
                         &user_model,
                         &user_variant,
                         user_config.embedding.dimensions,
+                        None,
                     )
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
                     let cfg = user_config.clone();

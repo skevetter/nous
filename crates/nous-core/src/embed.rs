@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use nous_shared::NousError;
@@ -35,6 +35,7 @@ pub trait EmbeddingBackend: Send + Sync {
 pub struct OnnxBackendBuilder {
     model: Option<String>,
     variant: Option<String>,
+    model_dir: Option<PathBuf>,
     batch_size: usize,
 }
 
@@ -46,6 +47,11 @@ impl OnnxBackendBuilder {
 
     pub fn variant(mut self, variant: &str) -> Self {
         self.variant = Some(variant.to_string());
+        self
+    }
+
+    pub fn model_dir(mut self, dir: PathBuf) -> Self {
+        self.model_dir = Some(dir);
         self
     }
 
@@ -62,16 +68,35 @@ impl OnnxBackendBuilder {
             .variant
             .ok_or_else(|| NousError::Validation("variant is required".into()))?;
 
-        let api = hf_hub::api::sync::Api::new()
-            .map_err(|e| NousError::Embedding(format!("hf-hub API init: {e}")))?;
-        let repo = api.model(model_repo.clone());
+        let (model_path, tokenizer_path) = if let Some(dir) = &self.model_dir {
+            let mp = dir.join(&variant);
+            let tp = dir.join("tokenizer.json");
+            if !mp.exists() {
+                return Err(NousError::Embedding(format!(
+                    "model file not found at {}",
+                    mp.display()
+                )));
+            }
+            if !tp.exists() {
+                return Err(NousError::Embedding(format!(
+                    "tokenizer.json not found at {}",
+                    tp.display()
+                )));
+            }
+            (mp, tp)
+        } else {
+            let api = hf_hub::api::sync::Api::new()
+                .map_err(|e| NousError::Embedding(format!("hf-hub API init: {e}")))?;
+            let repo = api.model(model_repo.clone());
 
-        let model_path = repo
-            .get(&variant)
-            .map_err(|e| NousError::Embedding(format!("download model: {e}")))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| NousError::Embedding(format!("download tokenizer: {e}")))?;
+            let mp = repo
+                .get(&variant)
+                .map_err(|e| NousError::Embedding(format!("download model: {e}")))?;
+            let tp = repo
+                .get("tokenizer.json")
+                .map_err(|e| NousError::Embedding(format!("download tokenizer: {e}")))?;
+            (mp, tp)
+        };
 
         let mut max_tokens = detect_max_tokens(&tokenizer_path)?;
 
@@ -263,6 +288,7 @@ impl OnnxBackend {
         OnnxBackendBuilder {
             model: None,
             variant: None,
+            model_dir: None,
             batch_size: 32,
         }
     }
