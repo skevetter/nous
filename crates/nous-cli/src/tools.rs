@@ -73,7 +73,9 @@ pub struct MemoryContextParams {
     #[serde(default)]
     pub summary: bool,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
     pub memory_type: Option<String>,
+    pub since: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1133,6 +1135,7 @@ pub async fn handle_context(
     let workspace_path = params.workspace_path;
     let summary = params.summary;
     let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
 
     let memory_type = match params.memory_type.as_deref() {
         Some(v) => match parse_enum::<MemoryType>(v, "memory_type") {
@@ -1141,6 +1144,8 @@ pub async fn handle_context(
         },
         None => None,
     };
+
+    let since = params.since;
 
     let db_path = db_path.to_owned();
     let db_key = db_key.map(|k| k.to_owned());
@@ -1157,7 +1162,7 @@ pub async fn handle_context(
             Err(e) => return Err(e.into()),
         };
 
-        db.context(ws_id, summary, limit, memory_type.as_ref())
+        db.context(ws_id, summary, limit, offset, memory_type.as_ref(), since.as_deref())
     })
     .await
     {

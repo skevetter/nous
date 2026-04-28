@@ -36,7 +36,7 @@ pub fn run_context(
             ))) as Box<dyn std::error::Error>
         })?;
 
-    let entries = db.context(ws_id, summary.is_some(), 50, None)?;
+    let entries = db.context(ws_id, summary.is_some(), 50, 0, None, None)?;
 
     match format {
         OutputFormat::Json => {
