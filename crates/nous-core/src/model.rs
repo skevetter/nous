@@ -29,12 +29,24 @@ impl MemoryDb {
             ));
         }
 
-        self.connection().execute(
+        let conn = self.connection();
+        conn.execute(
             "INSERT INTO models (name, dimensions, max_tokens, variant, chunk_size, chunk_overlap, active)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+             ON CONFLICT(name) DO UPDATE SET
+                dimensions = excluded.dimensions,
+                max_tokens = excluded.max_tokens,
+                variant = excluded.variant,
+                chunk_size = excluded.chunk_size,
+                chunk_overlap = excluded.chunk_overlap",
             params![name, dimensions, max_tokens, variant, chunk_size, chunk_overlap],
         )?;
-        Ok(self.connection().last_insert_rowid())
+        let id: i64 = conn.query_row(
+            "SELECT id FROM models WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(id)
     }
 
     pub fn activate_model(&self, id: i64) -> Result<()> {

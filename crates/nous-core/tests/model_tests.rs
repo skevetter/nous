@@ -195,6 +195,67 @@ fn multi_model_isolation() {
 }
 
 #[test]
+fn register_model_is_idempotent() {
+    let db = open_test_db();
+    let id1 = db
+        .register_model("same-model", Some("fp16"), 384, 512, 256, 32)
+        .unwrap();
+    let id2 = db
+        .register_model("same-model", Some("fp16"), 384, 512, 256, 32)
+        .unwrap();
+    assert_eq!(
+        id1, id2,
+        "registering the same model twice should return the same id"
+    );
+
+    let models: Vec<_> = db
+        .list_models()
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.name == "same-model")
+        .collect();
+    assert_eq!(models.len(), 1, "only one row should exist for the model");
+}
+
+#[test]
+fn register_model_updates_fields_on_conflict() {
+    let db = open_test_db();
+
+    let id1 = db
+        .register_model("upgrading-model", Some("fp16"), 384, 512, 256, 32)
+        .unwrap();
+
+    let id2 = db
+        .register_model("upgrading-model", Some("q8"), 1024, 8192, 512, 64)
+        .unwrap();
+    assert_eq!(id1, id2, "should reuse the same row id");
+
+    let model = db
+        .list_models()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.id == id1)
+        .unwrap();
+    assert_eq!(model.dimensions, 1024, "dimensions should be updated");
+    assert_eq!(model.max_tokens, 8192, "max_tokens should be updated");
+    assert_eq!(
+        model.variant.as_deref(),
+        Some("q8"),
+        "variant should be updated"
+    );
+    assert_eq!(model.chunk_size, 512, "chunk_size should be updated");
+    assert_eq!(model.chunk_overlap, 64, "chunk_overlap should be updated");
+
+    let count = db
+        .list_models()
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.name == "upgrading-model")
+        .count();
+    assert_eq!(count, 1, "only one row should exist");
+}
+
+#[test]
 fn register_and_activate_new_model() {
     let db = open_test_db();
     let id = db

@@ -430,8 +430,8 @@ fn build_embedding(
         .map_err(|e| {
             format!(
                 "Failed to load embedding model '{model}': {e}\n\n\
-                 Hint: Run 'nous-mcp model setup mini' to download a lightweight model,\n\
-                 or 'nous-mcp model setup full' for higher quality embeddings."
+                 Hint: Run 'nous model setup mini' to download a lightweight model,\n\
+                 or 'nous model setup full' for higher quality embeddings."
             )
         })?;
     Ok(Box::new(backend))
@@ -803,8 +803,26 @@ fn run_command(
             rt.block_on(run_serve(config, transport, port, &model, &variant))?;
         }
         Command::ReEmbed { model, variant } => {
-            let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
-            let embedding = build_embedding(&model, &variant, config.embedding.dimensions)?;
+            let (model, variant, dimensions) = if let Ok(id) = model.parse::<i64>() {
+                let db_path = commands::expand_tilde(&config.memory.db_path);
+                let db_key = config.resolve_db_key().ok();
+                let db = nous_core::db::MemoryDb::open(
+                    &db_path,
+                    db_key.as_deref(),
+                    config.embedding.dimensions,
+                )?;
+                let m = db.get_model(id)?;
+                (
+                    m.name,
+                    m.variant
+                        .unwrap_or_else(|| config.embedding.variant.clone()),
+                    m.dimensions as usize,
+                )
+            } else {
+                let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
+                (model, variant, config.embedding.dimensions)
+            };
+            let embedding = build_embedding(&model, &variant, dimensions)?;
             commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
