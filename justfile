@@ -32,7 +32,7 @@ e2e: build
 
 # start the MCP server
 serve-mcp:
-    cargo run -p nous-mcp -- serve
+    cargo run -p nous-cli -- serve
 
 # start the OTLP receiver
 serve-otlp:

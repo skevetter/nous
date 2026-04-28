@@ -17,7 +17,7 @@ cargo build --release
 The binary is at:
 
 ```
-target/release/nous-mcp
+target/release/nous-cli
 ```
 
 Run the test suite to verify the build:
@@ -35,7 +35,7 @@ Add the following to your Claude Code MCP settings. The config file lives at `~/
 {
   "mcpServers": {
     "nous": {
-      "command": "/home/skevetter/ws/nous/target/release/nous-mcp",
+      "command": "/home/skevetter/ws/nous/target/release/nous-cli",
       "args": ["serve", "--transport", "stdio"]
     }
   }
@@ -167,15 +167,15 @@ Nous exposes 30 MCP tools organized into these groups:
 If Claude Code reports that the MCP server binary cannot be found:
 
 ```
-Error: spawn /path/to/nous-mcp ENOENT
+Error: spawn /path/to/nous-cli ENOENT
 ```
 
-Build the binary first with `cargo build --release`, then verify the path in your config matches `target/release/nous-mcp` in your clone directory.
+Build the binary first with `cargo build --release`, then verify the path in your config matches `target/release/nous-cli` in your clone directory.
 
 ### Permission denied on binary
 
 ```bash
-chmod +x target/release/nous-mcp
+chmod +x target/release/nous-cli
 ```
 
 ### Model download failures
@@ -195,7 +195,7 @@ If the embedding model download fails (network issues, proxy, air-gapped environ
 If you see `database is locked` errors, check for multiple Nous processes writing to the same database. Nous uses WAL mode with a single-writer channel, so only one instance should write at a time. Kill duplicate processes:
 
 ```bash
-pgrep -f nous-mcp
+pgrep -f nous-cli
 ```
 
 ### Config file location

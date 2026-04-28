@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use nous_cli::config::Config;
+use nous_cli::server::NousServer;
+use nous_cli::tools::*;
 use nous_core::embed::MockEmbedding;
-use nous_mcp::config::Config;
-use nous_mcp::server::NousServer;
-use nous_mcp::tools::*;
 use rmcp::model::CallToolResult;
 
 fn test_db_path() -> String {

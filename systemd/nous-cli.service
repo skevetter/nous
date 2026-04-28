@@ -1,5 +1,5 @@
 [Unit]
-Description=Nous MCP Daemon
+Description=Nous CLI Daemon
 After=default.target
 
 [Service]
@@ -9,7 +9,7 @@ RestartSec=5
 Environment=RUST_LOG=info
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=nous-mcp
+SyslogIdentifier=nous-cli
 
 [Install]
 WantedBy=default.target

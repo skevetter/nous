@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use nous_mcp::config::Config;
-use nous_mcp::server::NousServer;
-use nous_mcp::tools::{MemoryRecallParams, MemorySqlParams, MemoryStoreParams, handle_store};
+use nous_cli::config::Config;
+use nous_cli::server::NousServer;
+use nous_cli::tools::{MemoryRecallParams, MemorySqlParams, MemoryStoreParams, handle_store};
 use tokio::task::JoinSet;
 
 fn test_db_path() -> String {
@@ -96,7 +96,7 @@ async fn ten_concurrent_writes_no_data_loss() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     for id in &ids {
-        let result = nous_mcp::tools::handle_recall(
+        let result = nous_cli::tools::handle_recall(
             MemoryRecallParams { id: id.clone() },
             &server.read_pool,
             &server.write_channel,
@@ -111,7 +111,7 @@ async fn ten_concurrent_writes_no_data_loss() {
         assert_eq!(json["id"].as_str().unwrap(), id.as_str());
     }
 
-    let integrity = nous_mcp::tools::handle_sql(
+    let integrity = nous_cli::tools::handle_sql(
         MemorySqlParams {
             query: "PRAGMA integrity_check".into(),
         },

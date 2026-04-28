@@ -741,8 +741,8 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "e2e-tests"
 version = "0.0.0"
 dependencies = [
+ "nous-cli",
  "nous-core",
- "nous-mcp",
  "nous-otlp",
  "reqwest",
  "rmcp",
@@ -1724,32 +1724,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nous-core"
-version = "0.1.0"
-dependencies = [
- "cc",
- "chrono",
- "chrono-tz",
- "hf-hub 0.5.0",
- "libsqlite3-sys",
- "ndarray",
- "nous-otlp",
- "nous-shared",
- "ort",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokenizers",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "nous-mcp"
+name = "nous-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1773,6 +1748,31 @@ dependencies = [
  "tokio",
  "toml",
  "tower 0.5.3",
+ "uuid",
+]
+
+[[package]]
+name = "nous-core"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "chrono",
+ "chrono-tz",
+ "hf-hub 0.5.0",
+ "libsqlite3-sys",
+ "ndarray",
+ "nous-otlp",
+ "nous-shared",
+ "ort",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokenizers",
+ "tokio",
  "uuid",
 ]
 

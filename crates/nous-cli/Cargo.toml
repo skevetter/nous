@@ -1,11 +1,11 @@
 [package]
-name = "nous-mcp"
+name = "nous-cli"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "nous_mcp"
+name = "nous_cli"
 path = "src/lib.rs"
 
 [[bin]]
