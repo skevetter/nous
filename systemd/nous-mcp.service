@@ -1,0 +1,15 @@
+[Unit]
+Description=Nous MCP Daemon
+After=default.target
+
+[Service]
+ExecStart=%h/.cargo/bin/nous serve --transport http
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nous-mcp
+
+[Install]
+WantedBy=default.target
