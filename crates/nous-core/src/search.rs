@@ -301,11 +301,11 @@ impl MemoryDb {
                 None => continue,
             };
 
-            let tags = tags_map.get(memory_id).cloned().unwrap_or_default();
-
-            if !self.matches_filters(&memory, filters, Some(&tags))? {
+            if !self.matches_filters(&memory, filters, Some(&tags_map))? {
                 continue;
             }
+
+            let tags = tags_map.get(memory_id).cloned().unwrap_or_default();
             let rank = (1.0 / (1.0 + distance)) * importance_weight(&memory.importance);
             results.push(SearchResult { memory, tags, rank });
         }
