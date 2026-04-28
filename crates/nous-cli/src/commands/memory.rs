@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use nous_core::db::MemoryDb;
+use nous_core::embed::EmbeddingBackend;
 use nous_core::types::{
     Confidence, Importance, MemoryPatch, MemoryType, MemoryWithRelations, NewMemory, RelationType,
     SearchFilters, SearchMode,
@@ -393,6 +394,7 @@ pub fn run_search(
     valid_only: bool,
     limit: usize,
     format: &OutputFormat,
+    embedding: Option<&dyn EmbeddingBackend>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let search_mode: SearchMode = parse_field(mode, "mode")?;
 
@@ -428,7 +430,12 @@ pub fn run_search(
 
     let query_embedding = match search_mode {
         SearchMode::Semantic | SearchMode::Hybrid => {
-            vec![0.0f32; config.embedding.dimensions]
+            let emb = embedding.ok_or_else(|| {
+                Box::new(NousError::Validation(
+                    "embedding backend required for semantic/hybrid search".to_string(),
+                )) as Box<dyn std::error::Error>
+            })?;
+            emb.embed_one(query)?
         }
         SearchMode::Fts => vec![],
     };

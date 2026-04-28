@@ -1184,6 +1184,15 @@ fn run_command(
                 SearchMode::Semantic => "semantic",
                 SearchMode::Hybrid => "hybrid",
             };
+            let embedding = match mode {
+                SearchMode::Semantic | SearchMode::Hybrid => Some(build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                    None,
+                )?),
+                SearchMode::Fts => None,
+            };
             commands::run_search(
                 config,
                 &query,
@@ -1199,6 +1208,7 @@ fn run_command(
                 valid_only,
                 limit,
                 format,
+                embedding.as_ref().map(|e| e.as_ref()),
             )?;
         }
         Command::Context { workspace, summary } => {
@@ -2993,6 +3003,7 @@ mod tests {
             false,
             10,
             &format,
+            None,
         )
         .unwrap();
 
