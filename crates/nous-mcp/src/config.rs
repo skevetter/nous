@@ -151,6 +151,35 @@ impl Default for RoomsConfig {
     }
 }
 
+pub struct ModelPreset {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub model: &'static str,
+    pub variant: &'static str,
+    pub dimensions: usize,
+}
+
+pub const MODEL_PRESETS: &[ModelPreset] = &[
+    ModelPreset {
+        name: "full",
+        description: "Qwen3 0.6B — 1024-dim, high quality embeddings",
+        model: "onnx-community/Qwen3-Embedding-0.6B-ONNX",
+        variant: "onnx/model_q4.onnx",
+        dimensions: 1024,
+    },
+    ModelPreset {
+        name: "mini",
+        description: "MiniLM-L6-v2 — 384-dim, lightweight and fast",
+        model: "sentence-transformers/all-MiniLM-L6-v2",
+        variant: "onnx/model.onnx",
+        dimensions: 384,
+    },
+];
+
+pub fn find_preset(name: &str) -> Option<&'static ModelPreset> {
+    MODEL_PRESETS.iter().find(|p| p.name == name)
+}
+
 const DEFAULT_CONFIG_TOML: &str = r#"[memory]
 db_path = "~/.cache/nous/memory.db"
 
@@ -478,5 +507,38 @@ db_key_file = "{}"
         let from_default = EmbeddingConfig::default();
         assert_eq!(from_toml.embedding.model, from_default.model);
         assert_eq!(from_toml.embedding.variant, from_default.variant);
+    }
+
+    #[test]
+    fn find_preset_full() {
+        let preset = super::find_preset("full").expect("full preset should exist");
+        assert_eq!(preset.model, "onnx-community/Qwen3-Embedding-0.6B-ONNX");
+        assert_eq!(preset.dimensions, 1024);
+        assert!(preset.variant.ends_with(".onnx"));
+    }
+
+    #[test]
+    fn find_preset_mini() {
+        let preset = super::find_preset("mini").expect("mini preset should exist");
+        assert_eq!(preset.model, "sentence-transformers/all-MiniLM-L6-v2");
+        assert_eq!(preset.dimensions, 384);
+        assert!(preset.variant.ends_with(".onnx"));
+    }
+
+    #[test]
+    fn find_preset_unknown_returns_none() {
+        assert!(super::find_preset("nonexistent").is_none());
+    }
+
+    #[test]
+    fn preset_variants_pass_onnx_validation() {
+        for preset in super::MODEL_PRESETS {
+            assert!(
+                preset.variant.ends_with(".onnx"),
+                "preset '{}' variant must end with .onnx, got: {}",
+                preset.name,
+                preset.variant
+            );
+        }
     }
 }

@@ -21,7 +21,7 @@ pub use memory::{
 };
 pub use model::{
     run_embedding_inspect, run_embedding_reset, run_model_activate, run_model_deactivate,
-    run_model_info, run_model_list, run_model_register, run_model_switch,
+    run_model_info, run_model_list, run_model_register, run_model_setup, run_model_switch,
 };
 pub use query::{run_context, run_schema, run_sql, run_tags, run_workspaces};
 pub use room::{

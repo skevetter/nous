@@ -1,8 +1,9 @@
 use nous_core::db::MemoryDb;
+use nous_core::embed::{EmbeddingBackend, OnnxBackend};
 use nous_shared::NousError;
 
 use super::{OutputFormat, confirm, print_csv, print_json, print_table};
-use crate::config::Config;
+use crate::config::{self, Config};
 
 fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     let db_path = super::expand_tilde(&config.memory.db_path);
@@ -371,6 +372,101 @@ pub fn run_embedding_inspect(
                     println!("Status: OK");
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+pub fn run_model_setup(
+    config: &Config,
+    preset_name: Option<&str>,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let preset_name = match preset_name {
+        Some(name) => name,
+        None => {
+            match format {
+                OutputFormat::Json => {
+                    let presets: Vec<serde_json::Value> = config::MODEL_PRESETS
+                        .iter()
+                        .map(|p| {
+                            serde_json::json!({
+                                "name": p.name,
+                                "description": p.description,
+                                "model": p.model,
+                                "variant": p.variant,
+                                "dimensions": p.dimensions,
+                            })
+                        })
+                        .collect();
+                    print_json(&serde_json::json!({ "presets": presets }))?;
+                }
+                OutputFormat::Csv | OutputFormat::Human => {
+                    println!("Available model presets:\n");
+                    for p in config::MODEL_PRESETS {
+                        println!("  {:<8} {}", p.name, p.description);
+                        println!("           model: {}", p.model);
+                        println!("           variant: {}", p.variant);
+                        println!("           dimensions: {}", p.dimensions);
+                        println!();
+                    }
+                    println!("Usage: nous-mcp model setup <preset>");
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    let preset = config::find_preset(preset_name).ok_or_else(|| {
+        let available: Vec<&str> = config::MODEL_PRESETS.iter().map(|p| p.name).collect();
+        format!(
+            "Unknown preset '{}'. Available: {}",
+            preset_name,
+            available.join(", ")
+        )
+    })?;
+
+    eprintln!("Downloading model '{}' ({})...", preset.name, preset.model);
+
+    let backend = OnnxBackend::builder()
+        .model(preset.model)
+        .variant(preset.variant)
+        .build()
+        .map_err(|e| format!("Failed to download model '{}': {e}", preset.name))?;
+
+    eprintln!(
+        "Model downloaded successfully ({} dimensions)",
+        backend.dimensions()
+    );
+
+    let db = open_db(config)?;
+    let id = db.register_model(
+        preset.model,
+        Some(preset.variant),
+        preset.dimensions as i64,
+        backend.max_tokens() as i64,
+        config.embedding.chunk_size as i64,
+        config.embedding.chunk_overlap as i64,
+    )?;
+    db.activate_model(id)?;
+
+    match format {
+        OutputFormat::Json => {
+            print_json(&serde_json::json!({
+                "preset": preset.name,
+                "model": preset.model,
+                "variant": preset.variant,
+                "dimensions": preset.dimensions,
+                "id": id,
+                "active": true,
+                "message": format!("Model '{}' downloaded and activated (ID {})", preset.name, id),
+            }))?;
+        }
+        OutputFormat::Csv | OutputFormat::Human => {
+            println!(
+                "Model '{}' downloaded and activated (ID {})",
+                preset.name, id
+            );
         }
     }
     Ok(())

@@ -17,6 +17,10 @@ path = "tests/rooms.rs"
 name = "daemon"
 path = "tests/daemon.rs"
 
+[[test]]
+name = "model_setup"
+path = "tests/model_setup.rs"
+
 [dev-dependencies]
 nous-core = { path = "../../crates/nous-core" }
 nous-mcp = { path = "../../crates/nous-mcp" }
