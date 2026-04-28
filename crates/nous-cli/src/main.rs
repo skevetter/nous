@@ -47,58 +47,15 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Debug, Parser)]
+#[command(about = "Create, read, update, and search memories")]
+struct MemoryCmd {
+    #[command(subcommand)]
+    command: MemorySubcommand,
+}
+
 #[derive(Debug, Subcommand)]
-enum Command {
-    Serve {
-        #[arg(long, default_value = "stdio")]
-        transport: Transport,
-        #[arg(long, default_value_t = 8377)]
-        port: u16,
-        #[arg(long)]
-        model: Option<String>,
-        #[arg(long)]
-        variant: Option<String>,
-        #[arg(long, help = "Enable shell schedule actions at runtime")]
-        allow_shell_schedules: bool,
-        #[arg(long, help = "Disable the scheduler loop at runtime")]
-        no_scheduler: bool,
-    },
-    ReEmbed {
-        #[arg(
-            long,
-            help = "Model name, HuggingFace repo, or numeric DB ID (defaults to active model)"
-        )]
-        model: Option<String>,
-        #[arg(long)]
-        variant: Option<String>,
-    },
-    ReClassify {
-        #[arg(long)]
-        since: Option<String>,
-    },
-    Category(CategoryCmd),
-    Room(RoomCmd),
-    Daemon(DaemonCmd),
-    Export {
-        #[arg(long, default_value = "json")]
-        export_format: String,
-    },
-    Import {
-        file: PathBuf,
-    },
-    RotateKey {
-        #[arg(long)]
-        new_key_file: Option<PathBuf>,
-    },
-    Status,
-    Trace {
-        #[arg(long, group = "lookup")]
-        trace_id: Option<String>,
-        #[arg(long, group = "lookup")]
-        memory_id: Option<String>,
-        #[arg(long, requires = "trace_id")]
-        session_id: Option<String>,
-    },
+enum MemorySubcommand {
     Store {
         #[arg(long)]
         title: String,
@@ -190,6 +147,166 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    Context {
+        workspace: String,
+        #[arg(long)]
+        summary: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Serve {
+        #[arg(long, default_value = "stdio")]
+        transport: Transport,
+        #[arg(long, default_value_t = 8377)]
+        port: u16,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        variant: Option<String>,
+        #[arg(long, help = "Enable shell schedule actions at runtime")]
+        allow_shell_schedules: bool,
+        #[arg(long, help = "Disable the scheduler loop at runtime")]
+        no_scheduler: bool,
+    },
+    ReEmbed {
+        #[arg(
+            long,
+            help = "Model name, HuggingFace repo, or numeric DB ID (defaults to active model)"
+        )]
+        model: Option<String>,
+        #[arg(long)]
+        variant: Option<String>,
+    },
+    ReClassify {
+        #[arg(long)]
+        since: Option<String>,
+    },
+    Category(CategoryCmd),
+    Room(RoomCmd),
+    Daemon(DaemonCmd),
+    Memory(MemoryCmd),
+    Export {
+        #[arg(long, default_value = "json")]
+        export_format: String,
+    },
+    Import {
+        file: PathBuf,
+    },
+    RotateKey {
+        #[arg(long)]
+        new_key_file: Option<PathBuf>,
+    },
+    Status,
+    Trace {
+        #[arg(long, group = "lookup")]
+        trace_id: Option<String>,
+        #[arg(long, group = "lookup")]
+        memory_id: Option<String>,
+        #[arg(long, requires = "trace_id")]
+        session_id: Option<String>,
+    },
+    #[command(hide = true)]
+    Store {
+        #[arg(long)]
+        title: String,
+        #[arg(long, allow_hyphen_values = true)]
+        content: String,
+        #[arg(long, default_value = "observation")]
+        r#type: String,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long)]
+        trace_id: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        agent_model: Option<String>,
+        #[arg(long)]
+        valid_from: Option<String>,
+        #[arg(long)]
+        category_id: Option<i64>,
+    },
+    #[command(hide = true)]
+    Recall {
+        id: String,
+    },
+    #[command(hide = true)]
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        content: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        valid_until: Option<String>,
+    },
+    #[command(hide = true)]
+    Forget {
+        id: String,
+        #[arg(long)]
+        hard: bool,
+    },
+    #[command(hide = true)]
+    Unarchive {
+        id: String,
+    },
+    #[command(hide = true)]
+    Relate {
+        source: String,
+        target: String,
+        r#type: String,
+    },
+    #[command(hide = true)]
+    Unrelate {
+        source: String,
+        target: String,
+        r#type: String,
+    },
+    #[command(hide = true)]
+    Search {
+        query: String,
+        #[arg(long, default_value = "hybrid")]
+        mode: SearchMode,
+        #[arg(long)]
+        r#type: Option<String>,
+        #[arg(long)]
+        importance: Option<String>,
+        #[arg(long)]
+        confidence: Option<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        archived: bool,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long)]
+        valid_only: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    #[command(hide = true)]
     Context {
         workspace: String,
         #[arg(long)]
@@ -790,6 +907,143 @@ fn main() {
     }
 }
 
+fn dispatch_memory(
+    sub: MemorySubcommand,
+    config: &config::Config,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match sub {
+        MemorySubcommand::Store {
+            title,
+            content,
+            r#type,
+            source,
+            importance,
+            confidence,
+            tags,
+            workspace,
+            session_id,
+            trace_id,
+            agent_id,
+            agent_model,
+            valid_from,
+            category_id,
+        } => {
+            let actual_content = if content == "-" {
+                std::io::read_to_string(std::io::stdin())?
+            } else {
+                content
+            };
+            commands::run_store(
+                config,
+                &title,
+                &actual_content,
+                &r#type,
+                source.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                &tags.unwrap_or_default(),
+                workspace.as_deref(),
+                session_id.as_deref(),
+                trace_id.as_deref(),
+                agent_id.as_deref(),
+                agent_model.as_deref(),
+                valid_from.as_deref(),
+                category_id,
+                format,
+            )?;
+        }
+        MemorySubcommand::Recall { id } => {
+            commands::run_recall(config, &id, format)?;
+        }
+        MemorySubcommand::Update {
+            id,
+            title,
+            content,
+            importance,
+            confidence,
+            tags,
+            valid_until,
+        } => {
+            let actual_content = match content.as_deref() {
+                Some("-") => Some(std::io::read_to_string(std::io::stdin())?),
+                other => other.map(String::from),
+            };
+            commands::run_update(
+                config,
+                &id,
+                title.as_deref(),
+                actual_content.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                tags.as_deref(),
+                valid_until.as_deref(),
+                format,
+            )?;
+        }
+        MemorySubcommand::Forget { id, hard } => {
+            commands::run_forget(config, &id, hard, format)?;
+        }
+        MemorySubcommand::Unarchive { id } => {
+            commands::run_unarchive(config, &id, format)?;
+        }
+        MemorySubcommand::Relate {
+            source,
+            target,
+            r#type,
+        } => {
+            commands::run_relate(config, &source, &target, &r#type, format)?;
+        }
+        MemorySubcommand::Unrelate {
+            source,
+            target,
+            r#type,
+        } => {
+            commands::run_unrelate(config, &source, &target, &r#type, format)?;
+        }
+        MemorySubcommand::Search {
+            query,
+            mode,
+            r#type,
+            importance,
+            confidence,
+            workspace,
+            tags,
+            archived,
+            since,
+            until,
+            valid_only,
+            limit,
+        } => {
+            let mode_str = match mode {
+                SearchMode::Fts => "fts",
+                SearchMode::Semantic => "semantic",
+                SearchMode::Hybrid => "hybrid",
+            };
+            commands::run_search(
+                config,
+                &query,
+                mode_str,
+                r#type.as_deref(),
+                importance.as_deref(),
+                confidence.as_deref(),
+                workspace.as_deref(),
+                tags.as_deref(),
+                archived,
+                since.as_deref(),
+                until.as_deref(),
+                valid_only,
+                limit,
+                format,
+            )?;
+        }
+        MemorySubcommand::Context { workspace, summary } => {
+            commands::run_context(config, &workspace, summary.as_deref(), format)?;
+        }
+    }
+    Ok(())
+}
+
 fn run_command(
     cli: Cli,
     config: &config::Config,
@@ -1076,6 +1330,9 @@ fn run_command(
                 memory_id.as_deref(),
                 session_id.as_deref(),
             )?;
+        }
+        Command::Memory(mem) => {
+            dispatch_memory(mem.command, config, format)?;
         }
         Command::Store {
             title,
@@ -4064,5 +4321,253 @@ mod tests {
         assert_eq!(desc.as_deref(), Some("Category with description"));
 
         let _ = std::fs::remove_file(&cfg.memory.db_path);
+    }
+
+    #[test]
+    fn memory_namespace_store_parses() {
+        let cli = Cli::try_parse_from([
+            "nous",
+            "memory",
+            "store",
+            "--title",
+            "test",
+            "--content",
+            "hello",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Store { title, content, .. } => {
+                    assert_eq!(title, "test");
+                    assert_eq!(content, "hello");
+                }
+                _ => panic!("expected MemorySubcommand::Store"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_recall_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "recall", "abc123"]).unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Recall { id } => {
+                    assert_eq!(id, "abc123");
+                }
+                _ => panic!("expected MemorySubcommand::Recall"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_search_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "search", "test query", "--mode", "fts"])
+            .unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Search { query, mode, .. } => {
+                    assert_eq!(query, "test query");
+                    assert!(matches!(mode, SearchMode::Fts));
+                }
+                _ => panic!("expected MemorySubcommand::Search"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_context_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "context", "/tmp/workspace"]).unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Context { workspace, .. } => {
+                    assert_eq!(workspace, "/tmp/workspace");
+                }
+                _ => panic!("expected MemorySubcommand::Context"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_relate_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "relate", "src-id", "tgt-id", "related"])
+            .unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Relate {
+                    source,
+                    target,
+                    r#type,
+                } => {
+                    assert_eq!(source, "src-id");
+                    assert_eq!(target, "tgt-id");
+                    assert_eq!(r#type, "related");
+                }
+                _ => panic!("expected MemorySubcommand::Relate"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_unrelate_parses() {
+        let cli =
+            Cli::try_parse_from(["nous", "memory", "unrelate", "src-id", "tgt-id", "related"])
+                .unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Unrelate {
+                    source,
+                    target,
+                    r#type,
+                } => {
+                    assert_eq!(source, "src-id");
+                    assert_eq!(target, "tgt-id");
+                    assert_eq!(r#type, "related");
+                }
+                _ => panic!("expected MemorySubcommand::Unrelate"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_update_parses() {
+        let cli =
+            Cli::try_parse_from(["nous", "memory", "update", "id123", "--title", "new title"])
+                .unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Update { id, title, .. } => {
+                    assert_eq!(id, "id123");
+                    assert_eq!(title.as_deref(), Some("new title"));
+                }
+                _ => panic!("expected MemorySubcommand::Update"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_forget_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "forget", "id123", "--hard"]).unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Forget { id, hard } => {
+                    assert_eq!(id, "id123");
+                    assert!(hard);
+                }
+                _ => panic!("expected MemorySubcommand::Forget"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn memory_namespace_unarchive_parses() {
+        let cli = Cli::try_parse_from(["nous", "memory", "unarchive", "id123"]).unwrap();
+        match cli.command {
+            Command::Memory(mem) => match mem.command {
+                MemorySubcommand::Unarchive { id } => {
+                    assert_eq!(id, "id123");
+                }
+                _ => panic!("expected MemorySubcommand::Unarchive"),
+            },
+            _ => panic!("expected Command::Memory"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_store_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "store", "--title", "t", "--content", "c"]).unwrap();
+        match cli.command {
+            Command::Store { title, content, .. } => {
+                assert_eq!(title, "t");
+                assert_eq!(content, "c");
+            }
+            _ => panic!("expected Command::Store (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_recall_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "recall", "abc"]).unwrap();
+        match cli.command {
+            Command::Recall { id } => {
+                assert_eq!(id, "abc");
+            }
+            _ => panic!("expected Command::Recall (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_search_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "search", "q"]).unwrap();
+        match cli.command {
+            Command::Search { query, .. } => {
+                assert_eq!(query, "q");
+            }
+            _ => panic!("expected Command::Search (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_context_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "context", "/ws"]).unwrap();
+        match cli.command {
+            Command::Context { workspace, .. } => {
+                assert_eq!(workspace, "/ws");
+            }
+            _ => panic!("expected Command::Context (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_forget_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "forget", "id1"]).unwrap();
+        match cli.command {
+            Command::Forget { id, hard } => {
+                assert_eq!(id, "id1");
+                assert!(!hard);
+            }
+            _ => panic!("expected Command::Forget (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_relate_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "relate", "a", "b", "related"]).unwrap();
+        match cli.command {
+            Command::Relate {
+                source,
+                target,
+                r#type,
+            } => {
+                assert_eq!(source, "a");
+                assert_eq!(target, "b");
+                assert_eq!(r#type, "related");
+            }
+            _ => panic!("expected Command::Relate (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_unrelate_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "unrelate", "a", "b", "related"]).unwrap();
+        match cli.command {
+            Command::Unrelate {
+                source,
+                target,
+                r#type,
+            } => {
+                assert_eq!(source, "a");
+                assert_eq!(target, "b");
+                assert_eq!(r#type, "related");
+            }
+            _ => panic!("expected Command::Unrelate (hidden alias)"),
+        }
     }
 }
