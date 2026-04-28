@@ -418,7 +418,11 @@ enum DaemonSubcommand {
 fn build_embedding(
     model: &str,
     variant: &str,
+    dimensions: usize,
 ) -> Result<Box<dyn nous_core::embed::EmbeddingBackend>, Box<dyn std::error::Error>> {
+    if std::env::var("NOUS_MOCK_EMBEDDING").is_ok() {
+        return Ok(Box::new(nous_core::embed::MockEmbedding::new(dimensions)));
+    }
     let backend = nous_core::embed::OnnxBackend::builder()
         .model(model)
         .variant(variant)
@@ -476,14 +480,17 @@ fn run_daemon_start(config: &config::Config, foreground: bool) {
 
             let db_path = commands::expand_tilde(&config.memory.db_path);
             let db_key = config.resolve_db_key().ok();
-            let embedding =
-                match build_embedding(&config.embedding.model, &config.embedding.variant) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!("embedding init failed: {e}");
-                        std::process::exit(1);
-                    }
-                };
+            let embedding = match build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            ) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("embedding init failed: {e}");
+                    std::process::exit(1);
+                }
+            };
             let server =
                 match NousServer::new(config.clone(), embedding, &db_path, db_key.as_deref()) {
                     Ok(s) => Arc::new(s),
@@ -797,11 +804,15 @@ fn run_command(
         }
         Command::ReEmbed { model, variant } => {
             let variant = variant.unwrap_or_else(|| config.embedding.variant.clone());
-            let embedding = build_embedding(&model, &variant)?;
+            let embedding = build_embedding(&model, &variant, config.embedding.dimensions)?;
             commands::run_re_embed(config, embedding.as_ref())?;
         }
         Command::ReClassify { since } => {
-            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant)?;
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            )?;
             commands::run_re_classify(config, since.as_deref(), embedding.as_ref())?;
         }
         Command::Category(cat) => match cat.command {
@@ -813,8 +824,11 @@ fn run_command(
                 parent,
                 description,
             } => {
-                let embedding =
-                    build_embedding(&config.embedding.model, &config.embedding.variant)?;
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                )?;
                 commands::run_category_add(
                     config,
                     &name,
@@ -827,8 +841,11 @@ fn run_command(
                 commands::run_category_delete(config, &name)?;
             }
             CategorySubcommand::Rename { old, new } => {
-                let embedding =
-                    build_embedding(&config.embedding.model, &config.embedding.variant)?;
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                )?;
                 commands::run_category_rename(config, &old, &new, embedding.as_ref())?;
             }
             CategorySubcommand::Update {
@@ -837,8 +854,11 @@ fn run_command(
                 description,
                 threshold,
             } => {
-                let embedding =
-                    build_embedding(&config.embedding.model, &config.embedding.variant)?;
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                )?;
                 commands::run_category_update(
                     config,
                     &name,
@@ -854,8 +874,11 @@ fn run_command(
                 description,
                 parent,
             } => {
-                let embedding =
-                    build_embedding(&config.embedding.model, &config.embedding.variant)?;
+                let embedding = build_embedding(
+                    &config.embedding.model,
+                    &config.embedding.variant,
+                    config.embedding.dimensions,
+                )?;
                 commands::run_category_suggest(
                     config,
                     &memory_id,
@@ -947,7 +970,11 @@ fn run_command(
             commands::run_export(config)?;
         }
         Command::Import { file } => {
-            let embedding = build_embedding(&config.embedding.model, &config.embedding.variant)?;
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+            )?;
             commands::run_import(config, &file, embedding.as_ref())?;
         }
         Command::RotateKey { new_key_file } => {
@@ -1183,7 +1210,7 @@ async fn run_serve(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = commands::expand_tilde(&config.memory.db_path);
     let db_key = config.resolve_db_key().ok();
-    let embedding = build_embedding(model, variant)?;
+    let embedding = build_embedding(model, variant, config.embedding.dimensions)?;
     let server = NousServer::new(config, embedding, &db_path, db_key.as_deref())?;
 
     match transport {
@@ -1203,8 +1230,12 @@ async fn run_serve(
             let session_manager = Arc::new(LocalSessionManager::default());
             let service = StreamableHttpService::new(
                 move || {
-                    let embedding = build_embedding(&user_model, &user_variant)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    let embedding = build_embedding(
+                        &user_model,
+                        &user_variant,
+                        user_config.embedding.dimensions,
+                    )
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
                     let cfg = user_config.clone();
                     NousServer::new(cfg, embedding, &user_db_path, user_db_key.as_deref())
                         .map_err(|e| std::io::Error::other(e.to_string()))

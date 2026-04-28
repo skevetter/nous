@@ -173,6 +173,7 @@ fn run_nous_mcp(
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
+        .env("NOUS_MOCK_EMBEDDING", "1")
         .output()
         .expect("failed to run nous")
 }
@@ -184,6 +185,7 @@ fn run_import(mcp_db: &std::path::Path, key_file: &std::path::Path, import_file:
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
+        .env("NOUS_MOCK_EMBEDDING", "1")
         .output()
         .expect("failed to run nous import");
 
@@ -200,6 +202,7 @@ fn run_export(mcp_db: &std::path::Path, key_file: &std::path::Path) -> String {
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", mcp_db)
         .env("NOUS_DB_KEY_FILE", key_file)
+        .env("NOUS_MOCK_EMBEDDING", "1")
         .output()
         .expect("failed to run nous export");
 
@@ -886,6 +889,7 @@ impl TraceTestEnv {
             .env("NOUS_MEMORY_DB", &self.mcp_db)
             .env("NOUS_DB_KEY_FILE", &self.key_file)
             .env("NOUS_OTLP_DB", &self.otlp_db)
+            .env("NOUS_MOCK_EMBEDDING", "1")
             .output()
             .expect("failed to run nous trace")
     }
@@ -905,6 +909,7 @@ async fn test_status_format_json() {
         .env("NOUS_DB_KEY", DB_KEY)
         .env("NOUS_MEMORY_DB", &mcp_db)
         .env("NOUS_DB_KEY_FILE", &key_file)
+        .env("NOUS_MOCK_EMBEDDING", "1")
         .output()
         .expect("failed to run nous status --format json");
 
