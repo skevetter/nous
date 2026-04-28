@@ -175,7 +175,7 @@ impl MemoryDb {
             "SELECT m.id, m.title, m.content, m.memory_type, m.source, m.importance, m.confidence,
                     m.workspace_id, m.session_id, m.trace_id, m.agent_id, m.agent_model,
                     m.valid_from, m.valid_until, m.archived, m.category_id, m.created_at, m.updated_at,
-                    bm25(memories_fts) AS rank
+                    bm25(memories_fts, 10.0, 1.0, 0.5) AS rank
              FROM memories_fts
              JOIN memories m ON m.rowid = memories_fts.rowid
              WHERE {}
