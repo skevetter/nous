@@ -301,11 +301,11 @@ impl MemoryDb {
                 None => continue,
             };
 
-            if !self.matches_filters(&memory, filters)? {
+            let tags = tags_map.get(memory_id).cloned().unwrap_or_default();
+
+            if !self.matches_filters(&memory, filters, Some(&tags))? {
                 continue;
             }
-
-            let tags = tags_map.get(memory_id).cloned().unwrap_or_default();
             let rank = (1.0 / (1.0 + distance)) * importance_weight(&memory.importance);
             results.push(SearchResult { memory, tags, rank });
         }
@@ -504,7 +504,12 @@ impl MemoryDb {
         Ok(map)
     }
 
-    fn matches_filters(&self, memory: &Memory, filters: &SearchFilters) -> Result<bool> {
+    fn matches_filters(
+        &self,
+        memory: &Memory,
+        filters: &SearchFilters,
+        preloaded_tags: Option<&HashMap<String, Vec<String>>>,
+    ) -> Result<bool> {
         let archived = filters.archived.unwrap_or(false);
         if memory.archived != archived {
             return Ok(false);
@@ -577,7 +582,10 @@ impl MemoryDb {
         if let Some(ref tag_names) = filters.tags
             && !tag_names.is_empty()
         {
-            let tags = load_tags_for(self.connection(), &memory.id)?;
+            let tags = match preloaded_tags.and_then(|m| m.get(&memory.id)) {
+                Some(t) => t.clone(),
+                None => load_tags_for(self.connection(), &memory.id)?,
+            };
             if !tag_names.iter().any(|t| tags.contains(t)) {
                 return Ok(false);
             }
