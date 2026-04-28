@@ -405,7 +405,10 @@ struct ModelCmd {
 
 #[derive(Debug, Subcommand)]
 enum ModelSubcommand {
-    List,
+    List {
+        #[arg(long = "all", help = "Show all models including test/internal ones")]
+        show_all: bool,
+    },
     Info {
         id: i64,
     },
@@ -1688,8 +1691,8 @@ fn run_command(
             commands::run_tags(config, format)?;
         }
         Command::Model(model) => match model.command {
-            ModelSubcommand::List => {
-                commands::run_model_list(config, format)?;
+            ModelSubcommand::List { show_all } => {
+                commands::run_model_list(config, show_all, format)?;
             }
             ModelSubcommand::Info { id } => {
                 commands::run_model_info(config, id, format)?;
@@ -3753,9 +3756,24 @@ mod tests {
         let cli = Cli::try_parse_from(["nous", "model", "list"]).unwrap();
         match cli.command {
             Command::Model(ModelCmd {
-                command: ModelSubcommand::List,
-            }) => {}
+                command: ModelSubcommand::List { show_all },
+            }) => {
+                assert!(!show_all);
+            }
             _ => panic!("expected Model List"),
+        }
+    }
+
+    #[test]
+    fn model_list_all() {
+        let cli = Cli::try_parse_from(["nous", "model", "list", "--all"]).unwrap();
+        match cli.command {
+            Command::Model(ModelCmd {
+                command: ModelSubcommand::List { show_all },
+            }) => {
+                assert!(show_all);
+            }
+            _ => panic!("expected Model List with --all"),
         }
     }
 
@@ -4036,7 +4054,7 @@ mod tests {
         assert!(matches!(cli.format, OutputFormat::Json));
         match cli.command {
             Command::Model(ModelCmd {
-                command: ModelSubcommand::List,
+                command: ModelSubcommand::List { .. },
             }) => {}
             _ => panic!("expected Model List"),
         }
@@ -4073,9 +4091,9 @@ mod tests {
         )
         .unwrap();
 
-        commands::run_model_list(&cfg, &format).unwrap();
-        commands::run_model_list(&cfg, &OutputFormat::Csv).unwrap();
-        commands::run_model_list(&cfg, &OutputFormat::Human).unwrap();
+        commands::run_model_list(&cfg, true, &format).unwrap();
+        commands::run_model_list(&cfg, true, &OutputFormat::Csv).unwrap();
+        commands::run_model_list(&cfg, true, &OutputFormat::Human).unwrap();
 
         let _ = std::fs::remove_file(&cfg.memory.db_path);
     }
@@ -4343,7 +4361,7 @@ mod tests {
             .id;
 
         commands::run_model_activate(&cfg, id_small, &format).unwrap();
-        commands::run_model_list(&cfg, &format).unwrap();
+        commands::run_model_list(&cfg, true, &format).unwrap();
         commands::run_model_info(&cfg, id_small, &format).unwrap();
         commands::run_embedding_inspect(&cfg, &format).unwrap();
 
