@@ -155,6 +155,31 @@ enum MemorySubcommand {
 }
 
 #[derive(Debug, Parser)]
+#[command(about = "Read-only database introspection tools")]
+struct QueryCmd {
+    #[command(subcommand)]
+    command: QuerySubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum QuerySubcommand {
+    Sql {
+        query: String,
+    },
+    Schema,
+    Workspaces,
+    Tags,
+    Trace {
+        #[arg(long, group = "lookup")]
+        trace_id: Option<String>,
+        #[arg(long, group = "lookup")]
+        memory_id: Option<String>,
+        #[arg(long, requires = "trace_id")]
+        session_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Parser)]
 #[command(about = "Database administration and maintenance")]
 struct AdminCmd {
     #[command(subcommand)]
@@ -226,6 +251,7 @@ enum Command {
     Daemon(DaemonCmd),
     Memory(MemoryCmd),
     Admin(AdminCmd),
+    Query(QueryCmd),
     #[command(hide = true)]
     Export {
         #[arg(long, default_value = "json")]
@@ -242,6 +268,7 @@ enum Command {
     },
     #[command(hide = true)]
     Status,
+    #[command(hide = true)]
     Trace {
         #[arg(long, group = "lookup")]
         trace_id: Option<String>,
@@ -355,11 +382,15 @@ enum Command {
         #[arg(long)]
         summary: Option<String>,
     },
+    #[command(hide = true)]
     Sql {
         query: String,
     },
+    #[command(hide = true)]
     Schema,
+    #[command(hide = true)]
     Workspaces,
+    #[command(hide = true)]
     Tags,
     Schedule(ScheduleCmd),
     Model(ModelCmd),
@@ -1052,6 +1083,40 @@ fn dispatch_admin(
     Ok(())
 }
 
+fn dispatch_query(
+    sub: QuerySubcommand,
+    config: &config::Config,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match sub {
+        QuerySubcommand::Sql { query } => {
+            commands::run_sql(config, &query, format)?;
+        }
+        QuerySubcommand::Schema => {
+            commands::run_schema(config)?;
+        }
+        QuerySubcommand::Workspaces => {
+            commands::run_workspaces(config, format)?;
+        }
+        QuerySubcommand::Tags => {
+            commands::run_tags(config, format)?;
+        }
+        QuerySubcommand::Trace {
+            trace_id,
+            memory_id,
+            session_id,
+        } => {
+            commands::run_trace(
+                config,
+                trace_id.as_deref(),
+                memory_id.as_deref(),
+                session_id.as_deref(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_memory(
     sub: MemorySubcommand,
     config: &config::Config,
@@ -1217,6 +1282,9 @@ fn run_command(
         }
         Command::Admin(adm) => {
             dispatch_admin(adm.command, config, format)?;
+        }
+        Command::Query(q) => {
+            dispatch_query(q.command, config, format)?;
         }
         Command::ReEmbed { model, variant } => {
             let db_path = commands::expand_tilde(&config.memory.db_path);
@@ -4857,5 +4925,117 @@ mod admin_tests {
     fn hidden_alias_rotate_key_still_parses() {
         let cli = Cli::try_parse_from(["nous", "rotate-key"]).unwrap();
         assert!(matches!(cli.command, Command::RotateKey { .. }));
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    #[test]
+    fn query_namespace_sql_parses() {
+        let cli = Cli::try_parse_from(["nous", "query", "sql", "SELECT 1"]).unwrap();
+        match cli.command {
+            Command::Query(q) => match q.command {
+                QuerySubcommand::Sql { query } => {
+                    assert_eq!(query, "SELECT 1");
+                }
+                _ => panic!("expected QuerySubcommand::Sql"),
+            },
+            _ => panic!("expected Command::Query"),
+        }
+    }
+
+    #[test]
+    fn query_namespace_schema_parses() {
+        let cli = Cli::try_parse_from(["nous", "query", "schema"]).unwrap();
+        match cli.command {
+            Command::Query(q) => {
+                assert!(matches!(q.command, QuerySubcommand::Schema));
+            }
+            _ => panic!("expected Command::Query"),
+        }
+    }
+
+    #[test]
+    fn query_namespace_workspaces_parses() {
+        let cli = Cli::try_parse_from(["nous", "query", "workspaces"]).unwrap();
+        match cli.command {
+            Command::Query(q) => {
+                assert!(matches!(q.command, QuerySubcommand::Workspaces));
+            }
+            _ => panic!("expected Command::Query"),
+        }
+    }
+
+    #[test]
+    fn query_namespace_tags_parses() {
+        let cli = Cli::try_parse_from(["nous", "query", "tags"]).unwrap();
+        match cli.command {
+            Command::Query(q) => {
+                assert!(matches!(q.command, QuerySubcommand::Tags));
+            }
+            _ => panic!("expected Command::Query"),
+        }
+    }
+
+    #[test]
+    fn query_namespace_trace_parses() {
+        let cli = Cli::try_parse_from(["nous", "query", "trace", "--trace-id", "abc123"]).unwrap();
+        match cli.command {
+            Command::Query(q) => match q.command {
+                QuerySubcommand::Trace {
+                    trace_id,
+                    memory_id,
+                    session_id,
+                } => {
+                    assert_eq!(trace_id.as_deref(), Some("abc123"));
+                    assert!(memory_id.is_none());
+                    assert!(session_id.is_none());
+                }
+                _ => panic!("expected QuerySubcommand::Trace"),
+            },
+            _ => panic!("expected Command::Query"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_sql_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "sql", "SELECT 1"]).unwrap();
+        match cli.command {
+            Command::Sql { query } => {
+                assert_eq!(query, "SELECT 1");
+            }
+            _ => panic!("expected Command::Sql (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_schema_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "schema"]).unwrap();
+        assert!(matches!(cli.command, Command::Schema));
+    }
+
+    #[test]
+    fn hidden_alias_workspaces_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "workspaces"]).unwrap();
+        assert!(matches!(cli.command, Command::Workspaces));
+    }
+
+    #[test]
+    fn hidden_alias_tags_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "tags"]).unwrap();
+        assert!(matches!(cli.command, Command::Tags));
+    }
+
+    #[test]
+    fn hidden_alias_trace_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "trace", "--trace-id", "xyz"]).unwrap();
+        match cli.command {
+            Command::Trace { trace_id, .. } => {
+                assert_eq!(trace_id.as_deref(), Some("xyz"));
+            }
+            _ => panic!("expected Command::Trace (hidden alias)"),
+        }
     }
 }
