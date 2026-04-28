@@ -201,9 +201,12 @@ impl MemoryDb {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
+        let memory_ids: Vec<&str> = results.iter().map(|(m, _)| m.id.as_str()).collect();
+        let tags_map = batch_load_tags(self.connection(), &memory_ids)?;
+
         let mut search_results = Vec::new();
         for (memory, bm25_rank) in results {
-            let tags = load_tags_for(self.connection(), &memory.id)?;
+            let tags = tags_map.get(&memory.id).cloned().unwrap_or_default();
             let rank = -bm25_rank * importance_weight(&memory.importance);
             search_results.push(SearchResult { memory, tags, rank });
         }
