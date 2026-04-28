@@ -952,7 +952,7 @@ pub async fn handle_sql(params: MemorySqlParams, read_pool: &ReadPool) -> CallTo
     }
 }
 
-fn is_read_only_sql(sql: &str) -> bool {
+pub fn is_read_only_sql(sql: &str) -> bool {
     let upper = sql.to_uppercase();
     let trimmed = upper.trim_start();
 
@@ -962,7 +962,7 @@ fn is_read_only_sql(sql: &str) -> bool {
         .unwrap_or("");
 
     match first_keyword {
-        "SELECT" | "EXPLAIN" => true,
+        "SELECT" | "EXPLAIN" => !contains_write_keyword(&upper),
         "WITH" => !contains_write_keyword(&upper),
         "PRAGMA" => is_read_only_pragma(trimmed),
         _ => false,
@@ -1174,6 +1174,7 @@ pub async fn handle_context(
                 "content": e.content,
                 "memory_type": e.memory_type,
                 "importance": e.importance,
+                "tags": e.tags,
                 "created_at": e.created_at,
             })
         })

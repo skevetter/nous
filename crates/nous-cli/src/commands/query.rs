@@ -3,6 +3,7 @@ use nous_shared::NousError;
 
 use super::{OutputFormat, print_csv, print_json, print_table};
 use crate::config::Config;
+use crate::tools::is_read_only_sql;
 
 fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     let db_path = super::expand_tilde(&config.memory.db_path);
@@ -48,6 +49,7 @@ pub fn run_context(
                         "content": e.content,
                         "memory_type": e.memory_type,
                         "importance": e.importance,
+                        "tags": e.tags,
                         "created_at": e.created_at,
                     })
                 })
@@ -86,48 +88,14 @@ pub fn run_context(
                     "   Type: {} | Importance: {} | Created: {}",
                     e.memory_type, e.importance, e.created_at
                 );
+                if !e.tags.is_empty() {
+                    println!("   Tags: {}", e.tags.join(", "));
+                }
                 println!();
             }
         }
     }
     Ok(())
-}
-
-fn is_read_only_sql(sql: &str) -> bool {
-    let upper = sql.to_uppercase();
-    let trimmed = upper.trim_start();
-
-    let first_keyword = trimmed
-        .split(|c: char| c.is_whitespace() || c == '(')
-        .next()
-        .unwrap_or("");
-
-    match first_keyword {
-        "SELECT" | "EXPLAIN" => !contains_write_keyword(&upper),
-        "WITH" => !contains_write_keyword(&upper),
-        "PRAGMA" => !trimmed
-            .strip_prefix("PRAGMA")
-            .unwrap_or("")
-            .trim_start()
-            .contains('='),
-        _ => false,
-    }
-}
-
-fn contains_write_keyword(upper_sql: &str) -> bool {
-    let write_keywords = [
-        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH", "REPLACE",
-        "REINDEX", "VACUUM",
-    ];
-    let tokens: Vec<&str> = upper_sql
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .collect();
-    for kw in &write_keywords {
-        if tokens.iter().any(|t| t == kw) {
-            return true;
-        }
-    }
-    false
 }
 
 pub fn run_sql(

@@ -313,6 +313,7 @@ pub struct ContextEntry {
     pub content: Option<String>,
     pub memory_type: MemoryType,
     pub importance: Importance,
+    pub tags: Vec<String>,
     pub created_at: String,
 }
 
