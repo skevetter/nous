@@ -239,16 +239,42 @@ impl MemoryDb {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
+        let chunk_to_memory = if chunk_rows.is_empty() {
+            HashMap::new()
+        } else {
+            let placeholders: String = (1..=chunk_rows.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql =
+                format!("SELECT id, memory_id FROM memory_chunks WHERE id IN ({placeholders})");
+            let mut stmt = self.connection().prepare(&sql)?;
+            let chunk_ids: Vec<&str> = chunk_rows.iter().map(|(id, _)| id.as_str()).collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk_ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
+            let rows = stmt
+                .query_map(params.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut map: HashMap<String, String> = HashMap::with_capacity(rows.len());
+            for (chunk_id, memory_id) in rows {
+                map.insert(chunk_id, memory_id);
+            }
+            map
+        };
+
         let mut best_distances: HashMap<String, f64> = HashMap::new();
         for (chunk_id, distance) in &chunk_rows {
-            let memory_id: String = self.connection().query_row(
-                "SELECT memory_id FROM memory_chunks WHERE id = ?1",
-                params![chunk_id],
-                |row| row.get(0),
-            )?;
-            let entry = best_distances.entry(memory_id).or_insert(f64::INFINITY);
-            if *distance < *entry {
-                *entry = *distance;
+            if let Some(memory_id) = chunk_to_memory.get(chunk_id) {
+                let entry = best_distances
+                    .entry(memory_id.clone())
+                    .or_insert(f64::INFINITY);
+                if *distance < *entry {
+                    *entry = *distance;
+                }
             }
         }
 
