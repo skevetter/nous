@@ -4,7 +4,9 @@ use nous_shared::Result;
 use rusqlite::params;
 
 use crate::db::MemoryDb;
-use crate::types::{ContextEntry, Importance, Memory, SearchFilters, SearchMode, SearchResult};
+use crate::types::{
+    ContextEntry, Importance, Memory, MemoryType, SearchFilters, SearchMode, SearchResult,
+};
 
 /// Sanitize a user query for FTS5 MATCH by quoting tokens that contain
 /// characters FTS5 treats as operators (hyphens, colons, etc.).
@@ -339,20 +341,37 @@ impl MemoryDb {
         workspace_id: i64,
         summary: bool,
         limit: usize,
+        memory_type: Option<&MemoryType>,
     ) -> Result<Vec<ContextEntry>> {
-        let mut stmt = self.connection().prepare(
+        let (type_clause, type_param) = match memory_type {
+            Some(mt) => (" AND memory_type = ?3", Some(mt.to_string())),
+            None => ("", None),
+        };
+        let sql = format!(
             "SELECT id, title, content, memory_type, importance, created_at
              FROM memories
              WHERE workspace_id = ?1
                AND archived = 0
-               AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+               AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')){}
              ORDER BY CASE importance WHEN 'high' THEN 1 WHEN 'moderate' THEN 2 ELSE 3 END,
                       created_at DESC
              LIMIT ?2",
-        )?;
+            type_clause
+        );
+        let mut stmt = self.connection().prepare(&sql)?;
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(workspace_id),
+            Box::new(limit as i64),
+        ];
+        if let Some(tp) = type_param {
+            param_values.push(Box::new(tp));
+        }
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
 
         let entries = stmt
-            .query_map(params![workspace_id, limit as i64], |row| {
+            .query_map(params_ref.as_slice(), |row| {
                 let content: String = row.get(2)?;
                 Ok(ContextEntry {
                     id: row.get(0)?,
