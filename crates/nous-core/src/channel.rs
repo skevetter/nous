@@ -889,7 +889,7 @@ impl ReadPool {
                  FROM room_messages m
                  JOIN room_messages_fts ON m.rowid = room_messages_fts.rowid
                  WHERE room_messages_fts MATCH ?1 AND m.room_id = ?2
-                 ORDER BY m.created_at DESC
+                 ORDER BY bm25(room_messages_fts), m.created_at DESC
                  LIMIT ?3",
             )?;
             let rows = stmt.query_map(rusqlite::params![query, room_id, limit as i64], |row| {
