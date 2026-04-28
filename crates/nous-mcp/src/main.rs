@@ -832,14 +832,21 @@ fn run_command(
                             m.dimensions as usize,
                         )
                     } else {
+                        eprintln!(
+                            "Warning: model '{}' not found in DB, attempting HuggingFace download",
+                            val
+                        );
                         let v = variant.unwrap_or_else(|| config.embedding.variant.clone());
                         (val.clone(), v, config.embedding.dimensions)
                     }
                 }
                 None => {
-                    let m = db.active_model()?.ok_or(
-                        "No active model found. Run 'nous model setup mini' to configure one.",
-                    )?;
+                    let m = db.active_model()?.ok_or_else(|| {
+                        nous_shared::NousError::Validation(
+                            "No active model found. Run 'nous model setup mini' to configure one."
+                                .into(),
+                        )
+                    })?;
                     (
                         m.name,
                         m.variant
