@@ -370,7 +370,7 @@ impl MemoryDb {
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let entries = stmt
+        let mut entries: Vec<ContextEntry> = stmt
             .query_map(params_ref.as_slice(), |row| {
                 let content: String = row.get(2)?;
                 Ok(ContextEntry {
@@ -391,10 +391,29 @@ impl MemoryDb {
                             e.into(),
                         )
                     })?,
+                    tags: Vec::new(),
                     created_at: row.get(5)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        if !entries.is_empty() {
+            let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+            let tags_map = batch_load_tags(self.connection(), &ids)?;
+            for entry in &mut entries {
+                if let Some(tags) = tags_map.get(&entry.id) {
+                    entry.tags = tags.clone();
+                }
+            }
+        }
+
+        let entry_ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        let tags_map = batch_load_tags(self.connection(), &entry_ids)?;
+        for entry in &mut entries {
+            if let Some(tags) = tags_map.get(&entry.id) {
+                entry.tags.clone_from(tags);
+            }
+        }
 
         if !entries.is_empty() {
             let placeholders: String = (1..=entries.len())
