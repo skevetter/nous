@@ -410,7 +410,7 @@ pub fn run_model_setup(
                         println!("           dimensions: {}", p.dimensions);
                         println!();
                     }
-                    println!("Usage: nous-mcp model setup <preset>");
+                    println!("Usage: nous model setup <preset>");
                 }
             }
             return Ok(());
