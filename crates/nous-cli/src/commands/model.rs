@@ -15,12 +15,22 @@ fn open_db(config: &Config) -> Result<MemoryDb, Box<dyn std::error::Error>> {
     )?)
 }
 
+fn is_internal_model(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("placeholder") || lower.contains("mock") || lower.contains("test")
+}
+
 pub fn run_model_list(
     config: &Config,
+    show_all: bool,
     format: &OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db = open_db(config)?;
-    let models = db.list_models()?;
+    let models: Vec<_> = db
+        .list_models()?
+        .into_iter()
+        .filter(|m| show_all || !is_internal_model(&m.name))
+        .collect();
     let vec0_dims = db.vec0_dimensions()?;
 
     match format {
