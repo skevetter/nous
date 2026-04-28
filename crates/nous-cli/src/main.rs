@@ -154,6 +154,42 @@ enum MemorySubcommand {
     },
 }
 
+#[derive(Debug, Parser)]
+#[command(about = "Database administration and maintenance")]
+struct AdminCmd {
+    #[command(subcommand)]
+    command: AdminSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminSubcommand {
+    Status,
+    ReEmbed {
+        #[arg(
+            long,
+            help = "Model name, HuggingFace repo, or numeric DB ID (defaults to active model)"
+        )]
+        model: Option<String>,
+        #[arg(long)]
+        variant: Option<String>,
+    },
+    ReClassify {
+        #[arg(long)]
+        since: Option<String>,
+    },
+    RotateKey {
+        #[arg(long)]
+        new_key_file: Option<PathBuf>,
+    },
+    Import {
+        file: PathBuf,
+    },
+    Export {
+        #[arg(long, default_value = "json")]
+        export_format: String,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     Serve {
@@ -170,6 +206,7 @@ enum Command {
         #[arg(long, help = "Disable the scheduler loop at runtime")]
         no_scheduler: bool,
     },
+    #[command(hide = true)]
     ReEmbed {
         #[arg(
             long,
@@ -179,6 +216,7 @@ enum Command {
         #[arg(long)]
         variant: Option<String>,
     },
+    #[command(hide = true)]
     ReClassify {
         #[arg(long)]
         since: Option<String>,
@@ -187,17 +225,22 @@ enum Command {
     Room(RoomCmd),
     Daemon(DaemonCmd),
     Memory(MemoryCmd),
+    Admin(AdminCmd),
+    #[command(hide = true)]
     Export {
         #[arg(long, default_value = "json")]
         export_format: String,
     },
+    #[command(hide = true)]
     Import {
         file: PathBuf,
     },
+    #[command(hide = true)]
     RotateKey {
         #[arg(long)]
         new_key_file: Option<PathBuf>,
     },
+    #[command(hide = true)]
     Status,
     Trace {
         #[arg(long, group = "lookup")]
@@ -907,6 +950,108 @@ fn main() {
     }
 }
 
+fn dispatch_admin(
+    sub: AdminSubcommand,
+    config: &config::Config,
+    format: &OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match sub {
+        AdminSubcommand::Status => {
+            commands::run_status(config, format)?;
+        }
+        AdminSubcommand::ReEmbed { model, variant } => {
+            let db_path = commands::expand_tilde(&config.memory.db_path);
+            let db_key = config.resolve_db_key().ok();
+            let db = nous_core::db::MemoryDb::open(
+                &db_path,
+                db_key.as_deref(),
+                config.embedding.dimensions,
+            )?;
+
+            let (model_name, model_variant, dimensions, found_in_db) = match model {
+                Some(ref val) => {
+                    if let Ok(id) = val.parse::<i64>() {
+                        let m = db.get_model(id)?;
+                        (
+                            m.name,
+                            m.variant
+                                .unwrap_or_else(|| config.embedding.variant.clone()),
+                            m.dimensions as usize,
+                            true,
+                        )
+                    } else if let Some(m) = db.get_model_by_name(val)? {
+                        (
+                            m.name,
+                            m.variant
+                                .unwrap_or_else(|| config.embedding.variant.clone()),
+                            m.dimensions as usize,
+                            true,
+                        )
+                    } else {
+                        eprintln!(
+                            "Warning: model '{val}' not found in DB, attempting HuggingFace download"
+                        );
+                        let v = variant.unwrap_or_else(|| config.embedding.variant.clone());
+                        (val.clone(), v, config.embedding.dimensions, false)
+                    }
+                }
+                None => {
+                    let m = db.active_model()?.ok_or_else(|| {
+                        nous_shared::NousError::Validation(
+                            "No active model found. Run 'nous model setup mini' to configure one."
+                                .into(),
+                        )
+                    })?;
+                    (
+                        m.name,
+                        m.variant
+                            .unwrap_or_else(|| config.embedding.variant.clone()),
+                        m.dimensions as usize,
+                        true,
+                    )
+                }
+            };
+            let local_dir = if found_in_db {
+                resolve_hf_cache_dir(&model_name)
+            } else {
+                None
+            };
+            if found_in_db && local_dir.is_none() {
+                eprintln!(
+                    "Warning: model '{model_name}' found in DB but not in local cache, downloading from HuggingFace"
+                );
+            }
+            let embedding = build_embedding(&model_name, &model_variant, dimensions, local_dir)?;
+            commands::run_re_embed(config, embedding.as_ref())?;
+        }
+        AdminSubcommand::ReClassify { since } => {
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+                None,
+            )?;
+            commands::run_re_classify(config, since.as_deref(), embedding.as_ref())?;
+        }
+        AdminSubcommand::RotateKey { new_key_file } => {
+            commands::run_rotate_key(config, new_key_file.as_deref())?;
+        }
+        AdminSubcommand::Import { file } => {
+            let embedding = build_embedding(
+                &config.embedding.model,
+                &config.embedding.variant,
+                config.embedding.dimensions,
+                None,
+            )?;
+            commands::run_import(config, &file, embedding.as_ref())?;
+        }
+        AdminSubcommand::Export { export_format: _ } => {
+            commands::run_export(config)?;
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_memory(
     sub: MemorySubcommand,
     config: &config::Config,
@@ -1069,6 +1214,9 @@ fn run_command(
             }
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
             rt.block_on(run_serve(config, transport, port, &model, &variant))?;
+        }
+        Command::Admin(adm) => {
+            dispatch_admin(adm.command, config, format)?;
         }
         Command::ReEmbed { model, variant } => {
             let db_path = commands::expand_tilde(&config.memory.db_path);
@@ -4567,5 +4715,147 @@ mod tests {
             }
             _ => panic!("expected Command::Unrelate (hidden alias)"),
         }
+    }
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::*;
+
+    #[test]
+    fn admin_namespace_status_parses() {
+        let cli = Cli::try_parse_from(["nous", "admin", "status"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => {
+                assert!(matches!(admin.command, AdminSubcommand::Status));
+            }
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn admin_namespace_re_embed_parses() {
+        let cli =
+            Cli::try_parse_from(["nous", "admin", "re-embed", "--model", "org/repo"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => match admin.command {
+                AdminSubcommand::ReEmbed { model, variant } => {
+                    assert_eq!(model.as_deref(), Some("org/repo"));
+                    assert!(variant.is_none());
+                }
+                _ => panic!("expected AdminSubcommand::ReEmbed"),
+            },
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn admin_namespace_re_classify_parses() {
+        let cli = Cli::try_parse_from(["nous", "admin", "re-classify"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => match admin.command {
+                AdminSubcommand::ReClassify { since } => {
+                    assert!(since.is_none());
+                }
+                _ => panic!("expected AdminSubcommand::ReClassify"),
+            },
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn admin_namespace_rotate_key_parses() {
+        let cli = Cli::try_parse_from(["nous", "admin", "rotate-key"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => {
+                assert!(matches!(admin.command, AdminSubcommand::RotateKey { .. }));
+            }
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn admin_namespace_import_parses() {
+        let cli = Cli::try_parse_from(["nous", "admin", "import", "/tmp/data.json"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => match admin.command {
+                AdminSubcommand::Import { file } => {
+                    assert_eq!(file, PathBuf::from("/tmp/data.json"));
+                }
+                _ => panic!("expected AdminSubcommand::Import"),
+            },
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn admin_namespace_export_parses() {
+        let cli = Cli::try_parse_from(["nous", "admin", "export"]).unwrap();
+        match cli.command {
+            Command::Admin(admin) => match admin.command {
+                AdminSubcommand::Export { export_format } => {
+                    assert_eq!(export_format, "json");
+                }
+                _ => panic!("expected AdminSubcommand::Export"),
+            },
+            _ => panic!("expected Command::Admin"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_status_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "status"]).unwrap();
+        assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn hidden_alias_re_embed_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "re-embed"]).unwrap();
+        match cli.command {
+            Command::ReEmbed { model, variant } => {
+                assert!(model.is_none());
+                assert!(variant.is_none());
+            }
+            _ => panic!("expected Command::ReEmbed (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_re_classify_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "re-classify"]).unwrap();
+        match cli.command {
+            Command::ReClassify { since } => {
+                assert!(since.is_none());
+            }
+            _ => panic!("expected Command::ReClassify (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_export_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "export"]).unwrap();
+        match cli.command {
+            Command::Export { export_format } => {
+                assert_eq!(export_format, "json");
+            }
+            _ => panic!("expected Command::Export (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_import_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "import", "/tmp/file.json"]).unwrap();
+        match cli.command {
+            Command::Import { file } => {
+                assert_eq!(file, PathBuf::from("/tmp/file.json"));
+            }
+            _ => panic!("expected Command::Import (hidden alias)"),
+        }
+    }
+
+    #[test]
+    fn hidden_alias_rotate_key_still_parses() {
+        let cli = Cli::try_parse_from(["nous", "rotate-key"]).unwrap();
+        assert!(matches!(cli.command, Command::RotateKey { .. }));
     }
 }
