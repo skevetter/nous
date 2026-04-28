@@ -53,6 +53,7 @@ pub struct MemorySearchParams {
     pub memory_type: Option<String>,
     pub category_id: Option<i64>,
     pub workspace_id: Option<i64>,
+    pub workspace_path: Option<String>,
     pub trace_id: Option<String>,
     pub session_id: Option<String>,
     pub importance: Option<String>,
@@ -72,6 +73,7 @@ pub struct MemoryContextParams {
     #[serde(default)]
     pub summary: bool,
     pub limit: Option<usize>,
+    pub memory_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1042,10 +1044,13 @@ pub async fn handle_search(
         SearchMode::Fts => vec![],
     };
 
-    let filters = SearchFilters {
+    let workspace_id = params.workspace_id;
+    let workspace_path = params.workspace_path;
+
+    let mut filters = SearchFilters {
         memory_type,
         category_id: params.category_id,
-        workspace_id: params.workspace_id,
+        workspace_id,
         trace_id: params.trace_id,
         session_id: params.session_id,
         importance,
@@ -1063,6 +1068,18 @@ pub async fn handle_search(
     let query = params.query;
     let results = match nous_shared::sqlite::spawn_blocking(move || {
         let db = MemoryDb::open(&db_path, db_key.as_deref(), dimensions)?;
+        if filters.workspace_id.is_none() {
+            if let Some(ref ws_path) = workspace_path {
+                filters.workspace_id = db
+                    .connection()
+                    .query_row(
+                        "SELECT id FROM workspaces WHERE path = ?1",
+                        rusqlite::params![ws_path],
+                        |row| row.get(0),
+                    )
+                    .ok();
+            }
+        }
         db.search(&query, &query_embedding, &filters, mode)
     })
     .await
@@ -1110,6 +1127,14 @@ pub async fn handle_context(
     let summary = params.summary;
     let limit = params.limit.unwrap_or(50);
 
+    let memory_type = match params.memory_type.as_deref() {
+        Some(v) => match parse_enum::<MemoryType>(v, "memory_type") {
+            Ok(v) => Some(v),
+            Err(e) => return e,
+        },
+        None => None,
+    };
+
     let db_path = db_path.to_owned();
     let db_key = db_key.map(|k| k.to_owned());
     let entries = match nous_shared::sqlite::spawn_blocking(move || {
@@ -1125,7 +1150,7 @@ pub async fn handle_context(
             Err(e) => return Err(e.into()),
         };
 
-        db.context(ws_id, summary, limit)
+        db.context(ws_id, summary, limit, memory_type.as_ref())
     })
     .await
     {
