@@ -1100,8 +1100,7 @@ fn run_command(
                         )
                     } else {
                         eprintln!(
-                            "Warning: model '{}' not found in DB, attempting HuggingFace download",
-                            val
+                            "Warning: model '{val}' not found in DB, attempting HuggingFace download"
                         );
                         let v = variant.unwrap_or_else(|| config.embedding.variant.clone());
                         (val.clone(), v, config.embedding.dimensions, false)
@@ -1130,8 +1129,7 @@ fn run_command(
             };
             if found_in_db && local_dir.is_none() {
                 eprintln!(
-                    "Warning: model '{}' found in DB but not in local cache, downloading from HuggingFace",
-                    model_name
+                    "Warning: model '{model_name}' found in DB but not in local cache, downloading from HuggingFace"
                 );
             }
             let embedding = build_embedding(&model_name, &model_variant, dimensions, local_dir)?;
