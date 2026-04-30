@@ -22,6 +22,8 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal database error".to_string(),
             ),
+            NousError::CyclicLink(msg) => (StatusCode::CONFLICT, msg.clone()),
+            NousError::NoLinkedRoom(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             NousError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
         };
 
