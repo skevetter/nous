@@ -130,6 +130,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use nous_core::db::DbPools;
+    use nous_core::memory::MockEmbedder;
     use nous_core::notifications::NotificationRegistry;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -143,6 +144,7 @@ mod tests {
             pool: pools.fts.clone(),
             vec_pool: pools.vec.clone(),
             registry: Arc::new(NotificationRegistry::new()),
+            embedder: Arc::new(MockEmbedder::new()),
         };
         (state, tmp)
     }
@@ -423,7 +425,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 95);
+        assert_eq!(tools.len(), 96);
     }
 
     #[tokio::test]

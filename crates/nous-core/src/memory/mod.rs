@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod chunk;
 pub mod embed;
 pub mod rerank;
@@ -1130,15 +1131,42 @@ pub async fn search_hybrid(
     query_embedding: &[f32],
     limit: usize,
 ) -> Result<Vec<SimilarMemory>, NousError> {
+    search_hybrid_filtered(
+        fts_pool,
+        vec_pool,
+        query,
+        query_embedding,
+        limit,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn search_hybrid_filtered(
+    fts_pool: &SqlitePool,
+    vec_pool: &VecPool,
+    query: &str,
+    query_embedding: &[f32],
+    limit: usize,
+    workspace_id: Option<&str>,
+    agent_id: Option<&str>,
+    memory_type: Option<MemoryType>,
+) -> Result<Vec<SimilarMemory>, NousError> {
     let fts_limit = (limit * 2).min(100) as u32;
     let vec_limit = (limit * 2).min(100) as u32;
 
-    // FTS search
+    // FTS search with filters
     let fts_memories = search_memories(
         fts_pool,
         &SearchMemoryRequest {
             query: query.to_string(),
             limit: Some(fts_limit),
+            workspace_id: workspace_id.map(|s| s.to_string()),
+            agent_id: agent_id.map(|s| s.to_string()),
+            memory_type,
             ..Default::default()
         },
     )
@@ -1152,9 +1180,34 @@ pub async fn search_hybrid(
         })
         .collect();
 
-    // Vector search
-    let vec_results =
-        search_similar(fts_pool, vec_pool, query_embedding, vec_limit, None, None).await?;
+    // Vector search (workspace_id supported natively; agent_id/memory_type filtered post-KNN)
+    let vec_results = search_similar(
+        fts_pool,
+        vec_pool,
+        query_embedding,
+        vec_limit,
+        workspace_id,
+        None,
+    )
+    .await?;
+
+    // Post-KNN filter for agent_id and memory_type on vec results
+    let vec_results: Vec<SimilarMemory> = vec_results
+        .into_iter()
+        .filter(|sm| {
+            if let Some(aid) = agent_id {
+                if sm.memory.agent_id.as_deref() != Some(aid) {
+                    return false;
+                }
+            }
+            if let Some(mt) = memory_type {
+                if sm.memory.memory_type != mt.as_str() {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
 
     // RRF merge
     let mut merged = rerank_rrf(&fts_results, &vec_results, None);

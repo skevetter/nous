@@ -1112,15 +1112,17 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: "memory_search_hybrid",
-            description: "Hybrid search: FTS + vector similarity + RRF reranking",
+            description: "Hybrid search: FTS + vector similarity + RRF reranking. Auto-embeds query text internally.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Search query text" },
-                    "query_embedding": { "type": "array", "items": { "type": "number" }, "description": "Query embedding vector" },
-                    "limit": { "type": "integer", "description": "Max results (default: 10)" }
+                    "limit": { "type": "integer", "description": "Max results (default: 10)" },
+                    "workspace_id": { "type": "string", "description": "Filter by workspace ID" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "memory_type": { "type": "string", "description": "Filter by memory type (decision, convention, bugfix, architecture, fact, observation)" }
                 },
-                "required": ["query", "query_embedding"]
+                "required": ["query"]
             }),
         },
         ToolSchema {
@@ -1134,6 +1136,16 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                     "overlap": { "type": "integer", "description": "Overlap tokens (default: 64)" }
                 },
                 "required": ["memory_id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_search_stats",
+            description: "Get search analytics: total searches, type breakdown, zero-result rate, avg latency, top queries",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "since": { "type": "string", "description": "ISO datetime string to filter events (created_at >= since)" }
+                }
             }),
         },
         ToolSchema {
@@ -2248,12 +2260,13 @@ pub async fn dispatch(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let start = std::time::Instant::now();
             let results = memory::search_memories(
                 &state.pool,
                 &memory::SearchMemoryRequest {
-                    query,
-                    workspace_id,
-                    agent_id,
+                    query: query.clone(),
+                    workspace_id: workspace_id.clone(),
+                    agent_id: agent_id.clone(),
                     memory_type,
                     importance,
                     include_archived,
@@ -2261,6 +2274,19 @@ pub async fn dispatch(
                 },
             )
             .await?;
+            let latency_ms = start.elapsed().as_millis() as i64;
+            let _ = memory::analytics::record_search_event(
+                &state.pool,
+                &memory::analytics::SearchEvent {
+                    query_text: query,
+                    search_type: "fts".to_string(),
+                    result_count: results.len() as i64,
+                    latency_ms,
+                    workspace_id,
+                    agent_id,
+                },
+            )
+            .await;
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_get" => {
@@ -2531,6 +2557,7 @@ pub async fn dispatch(
                 .get("threshold")
                 .and_then(|v| v.as_f64())
                 .map(|f| f as f32);
+            let start = std::time::Instant::now();
             let results = memory::search_similar(
                 &state.pool,
                 &state.vec_pool,
@@ -2540,6 +2567,19 @@ pub async fn dispatch(
                 threshold,
             )
             .await?;
+            let latency_ms = start.elapsed().as_millis() as i64;
+            let _ = memory::analytics::record_search_event(
+                &state.pool,
+                &memory::analytics::SearchEvent {
+                    query_text: String::new(),
+                    search_type: "vector".to_string(),
+                    result_count: results.len() as i64,
+                    latency_ms,
+                    workspace_id: workspace_id.map(String::from),
+                    agent_id: None,
+                },
+            )
+            .await;
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_chunk" => {
@@ -2588,31 +2628,67 @@ pub async fn dispatch(
                 "chunks_embedded": chunks.len()
             }))
         }
+        "memory_search_stats" => {
+            let since = args.get("since").and_then(|v| v.as_str());
+            let stats = memory::analytics::get_search_stats(&state.pool, since).await?;
+            Ok(serde_json::to_value(stats).unwrap())
+        }
         "memory_search_hybrid" => {
             let query = require_str(args, "query")?;
-            let query_embedding: Vec<f32> = args
-                .get("query_embedding")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_f64().map(|f| f as f32))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if query_embedding.is_empty() {
-                return Err(nous_core::error::NousError::Validation(
-                    "query_embedding array cannot be empty".into(),
-                ));
-            }
+            let query_embedding = state
+                .embedder
+                .embed(&[query])?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    nous_core::error::NousError::Internal("embedder returned no results".into())
+                })?;
+
             let limit = args
                 .get("limit")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize)
                 .unwrap_or(10);
+            let workspace_id = args
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let memory_type = args
+                .get("memory_type")
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+                });
 
-            let results =
-                memory::search_hybrid(&state.pool, &state.vec_pool, query, &query_embedding, limit)
-                    .await?;
+            let start = std::time::Instant::now();
+            let results = memory::search_hybrid_filtered(
+                &state.pool,
+                &state.vec_pool,
+                query,
+                &query_embedding,
+                limit,
+                workspace_id.as_deref(),
+                agent_id.as_deref(),
+                memory_type,
+            )
+            .await?;
+            let latency_ms = start.elapsed().as_millis() as i64;
+            let _ = memory::analytics::record_search_event(
+                &state.pool,
+                &memory::analytics::SearchEvent {
+                    query_text: query.to_string(),
+                    search_type: "hybrid".to_string(),
+                    result_count: results.len() as i64,
+                    latency_ms,
+                    workspace_id,
+                    agent_id,
+                },
+            )
+            .await;
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_store_with_embedding" => {
