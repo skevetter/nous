@@ -2,6 +2,7 @@ pub mod agent;
 pub mod artifact;
 pub mod chat;
 pub mod doctor;
+pub mod inventory;
 pub mod schedule;
 pub mod serve;
 pub mod task;

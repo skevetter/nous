@@ -5,6 +5,7 @@ mod commands;
 use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
+use commands::inventory::InventoryCommands;
 use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
@@ -34,6 +35,11 @@ enum Commands {
     Chat {
         #[command(subcommand)]
         command: ChatCommands,
+    },
+    /// Inventory management (P5 artifact registry)
+    Inventory {
+        #[command(subcommand)]
+        command: InventoryCommands,
     },
     /// Task management operations
     Task {
@@ -74,6 +80,9 @@ async fn main() {
         }
         Commands::Chat { command } => {
             commands::chat::run(command).await;
+        }
+        Commands::Inventory { command } => {
+            commands::inventory::run(command).await;
         }
         Commands::Task { command } => {
             commands::task::run(command).await;

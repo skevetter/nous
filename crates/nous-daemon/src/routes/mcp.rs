@@ -12,6 +12,7 @@ use nous_core::messages::{
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::agents;
+use nous_core::inventory;
 use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
@@ -515,6 +516,102 @@ pub async fn list_tools() -> impl IntoResponse {
                     "namespace": { "type": "string", "description": "Filter by namespace" },
                     "limit": { "type": "integer", "description": "Max results" }
                 }
+            }),
+        },
+        ToolSchema {
+            name: "inventory_register",
+            description: "Register a new inventory item (P5 artifact registry)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Item name" },
+                    "type": { "type": "string", "description": "Artifact type: worktree, room, schedule, branch, file, docker-image, binary" },
+                    "owner_agent_id": { "type": "string", "description": "Owning agent ID (optional)" },
+                    "path": { "type": "string", "description": "Filesystem or logical path" },
+                    "namespace": { "type": "string", "description": "Namespace (default: 'default')" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for discovery" },
+                    "metadata": { "type": "string", "description": "JSON metadata (type-specific fields)" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_list",
+            description: "List inventory items with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "description": "Filter by artifact type" },
+                    "status": { "type": "string", "description": "Filter by status: active, archived, deleted" },
+                    "owner_agent_id": { "type": "string", "description": "Filter by owner agent ID" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "orphaned": { "type": "boolean", "description": "Show only orphaned (unowned) items" },
+                    "limit": { "type": "integer", "description": "Max results (default: 50)" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "inventory_get",
+            description: "Get an inventory item by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_update",
+            description: "Update an inventory item (name, path, tags, metadata)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" },
+                    "name": { "type": "string", "description": "New name" },
+                    "path": { "type": "string", "description": "New path" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "New tags (replaces existing)" },
+                    "metadata": { "type": "string", "description": "New JSON metadata (replaces existing)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_search",
+            description: "Search inventory by tags (AND semantics: item must have ALL specified tags)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to search (AND semantics)" },
+                    "type": { "type": "string", "description": "Filter by artifact type" },
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["tags"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_archive",
+            description: "Archive an active inventory item (status: active → archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_deregister",
+            description: "Deregister an inventory item (soft-delete by default, hard=true removes row)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" },
+                    "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                },
+                "required": ["id"]
             }),
         },
         ToolSchema {
@@ -1198,6 +1295,130 @@ async fn dispatch(
         "schedule_health" => {
             let health = schedules::schedule_health(&state.pool).await?;
             Ok(health)
+        }
+        "inventory_register" => {
+            let name = require_str(args, "name")?.to_string();
+            let type_str = require_str(args, "type")?;
+            let artifact_type: inventory::InventoryType = type_str.parse()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let item = inventory::register_item(
+                &state.pool,
+                inventory::RegisterItemRequest {
+                    name,
+                    artifact_type,
+                    owner_agent_id,
+                    namespace,
+                    path,
+                    metadata,
+                    tags,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_list" => {
+            let artifact_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .transpose()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = inventory::list_items(
+                &state.pool,
+                &inventory::ListItemsFilter {
+                    artifact_type,
+                    status,
+                    owner_agent_id,
+                    namespace,
+                    orphaned,
+                    limit,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "inventory_get" => {
+            let id = require_str(args, "id")?;
+            let item = inventory::get_item_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_update" => {
+            let id = require_str(args, "id")?.to_string();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let item = inventory::update_item(
+                &state.pool,
+                inventory::UpdateItemRequest {
+                    id,
+                    name,
+                    path,
+                    metadata,
+                    tags,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_search" => {
+            let tags: Vec<String> = args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let artifact_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .transpose()?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = inventory::search_by_tags(
+                &state.pool,
+                &inventory::SearchItemsRequest {
+                    tags,
+                    artifact_type,
+                    status,
+                    namespace,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "inventory_archive" => {
+            let id = require_str(args, "id")?;
+            let item = inventory::archive_item(&state.pool, id).await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_deregister" => {
+            let id = require_str(args, "id")?;
+            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
+            inventory::deregister_item(&state.pool, id, hard).await?;
+            Ok(serde_json::json!({"ok": true}))
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

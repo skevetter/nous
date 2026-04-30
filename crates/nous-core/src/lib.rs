@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod domain {}
 pub mod error;
+pub mod inventory;
 pub mod messages;
 pub mod notifications;
 pub mod rooms;
