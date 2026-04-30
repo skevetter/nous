@@ -424,6 +424,24 @@ struct Migration {
     sql: &'static str,
 }
 
+fn validate_tokenizer(tokenizer: &str) -> Result<(), NousError> {
+    let valid_parts: &[&str] = &["porter", "unicode61", "trigram", "ascii"];
+    for part in tokenizer.split_whitespace() {
+        if !valid_parts.contains(&part) {
+            return Err(NousError::Validation(format!(
+                "invalid FTS5 tokenizer component: {}",
+                part
+            )));
+        }
+    }
+    if tokenizer.trim().is_empty() {
+        return Err(NousError::Validation(
+            "invalid FTS5 tokenizer component: (empty)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn migration_022_fts_rebuild(tokenizer: &str) -> String {
     format!(
         "DROP TABLE IF EXISTS room_messages_fts; \
@@ -639,6 +657,7 @@ async fn run_migrations_on_pool(pool: &SqlitePool, tokenizer: &str) -> Result<()
     }
 
     // Migration 022: unconditionally drop+recreate FTS5 tables with configured tokenizer
+    validate_tokenizer(tokenizer)?;
     let m022_version = "022";
     let m022_already_applied: bool =
         sqlx::query("SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = ?)")
@@ -789,6 +808,17 @@ mod tests {
             sql.0
         );
 
+        pools.close().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_tokenizer_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let pools = DbPools::connect(tmp.path()).await.unwrap();
+        let result = pools.run_migrations("'); DROP TABLE tasks; --").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid FTS5 tokenizer component"));
         pools.close().await;
     }
 }
