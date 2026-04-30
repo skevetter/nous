@@ -7,7 +7,7 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = Config::load();
+    let config = Config::load().expect("failed to load config");
     let addr = format!("{}:{}", config.host, config.port);
 
     let listener = TcpListener::bind(&addr).await.unwrap();

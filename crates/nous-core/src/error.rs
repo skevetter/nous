@@ -5,6 +5,9 @@ pub enum NousError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("config error: {0}")]
+    Config(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -31,6 +34,64 @@ impl NousError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::error::DatabaseError;
+
+    #[derive(Debug)]
+    struct FakeDbError {
+        code: Option<String>,
+    }
+
+    impl std::fmt::Display for FakeDbError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "fake db error")
+        }
+    }
+
+    impl std::error::Error for FakeDbError {}
+
+    impl DatabaseError for FakeDbError {
+        fn message(&self) -> &str {
+            "fake db error"
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            self.code.as_deref().map(std::borrow::Cow::Borrowed)
+        }
+    }
+
+    #[test]
+    fn sqlite_busy_is_retryable() {
+        let db_err = Box::new(FakeDbError {
+            code: Some("5".to_string()),
+        });
+        let err = NousError::Sqlite(sqlx::Error::Database(db_err));
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn sqlite_other_code_is_not_retryable() {
+        let db_err = Box::new(FakeDbError {
+            code: Some("19".to_string()),
+        });
+        let err = NousError::Sqlite(sqlx::Error::Database(db_err));
+        assert!(!err.is_retryable());
+    }
 
     #[test]
     fn non_sqlite_errors_are_not_retryable() {
@@ -44,6 +105,9 @@ mod tests {
         assert!(!err.is_retryable());
 
         let err = NousError::Internal("boom".into());
+        assert!(!err.is_retryable());
+
+        let err = NousError::Config("bad toml".into());
         assert!(!err.is_retryable());
     }
 

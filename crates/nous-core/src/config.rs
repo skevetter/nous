@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::error::NousError;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -20,23 +22,42 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
+    pub fn load() -> Result<Self, NousError> {
         let config_path = config_file_path();
-        match std::fs::read_to_string(&config_path) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
-            Err(_) => Self::default(),
-        }
+        let config = match std::fs::read_to_string(&config_path) {
+            Ok(contents) => toml::from_str(&contents)
+                .map_err(|e| NousError::Config(format!("failed to parse {}: {e}", config_path.display())))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => {
+                return Err(NousError::Config(format!(
+                    "failed to read {}: {e}",
+                    config_path.display()
+                )));
+            }
+        };
+        config.validate()?;
+        Ok(config)
     }
 
-    pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
+    pub fn with_data_dir(mut self, data_dir: PathBuf) -> Result<Self, NousError> {
         self.data_dir = data_dir;
-        self
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         if let Some(parent) = config_file_path().parent() {
             std::fs::create_dir_all(parent)?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), NousError> {
+        if self.data_dir.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(NousError::Validation(
+                "data_dir must not contain '..' components".to_string(),
+            ));
         }
         Ok(())
     }
@@ -78,13 +99,21 @@ mod tests {
 
     #[test]
     fn with_data_dir_overrides() {
-        let cfg = Config::default().with_data_dir(PathBuf::from("/tmp/test-nous"));
+        let cfg = Config::default()
+            .with_data_dir(PathBuf::from("/tmp/test-nous"))
+            .unwrap();
         assert_eq!(cfg.data_dir, PathBuf::from("/tmp/test-nous"));
     }
 
     #[test]
+    fn with_data_dir_rejects_parent_traversal() {
+        let result = Config::default().with_data_dir(PathBuf::from("/tmp/../etc/nous"));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn load_returns_defaults_when_no_file() {
-        let cfg = Config::load();
+        let cfg = Config::load().unwrap();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 8377);
     }
@@ -110,5 +139,12 @@ mod tests {
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 9999);
+    }
+
+    #[test]
+    fn malformed_toml_returns_error() {
+        let toml_str = "port = not_a_number";
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
     }
 }
