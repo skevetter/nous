@@ -6,15 +6,62 @@ use sqlx::{Row, SqlitePool};
 
 use crate::error::NousError;
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: "001",
-    name: "schema_version",
-    sql: "CREATE TABLE IF NOT EXISTS schema_version (\
-          id INTEGER PRIMARY KEY, \
-          version TEXT NOT NULL, \
-          applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\
-          );",
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: "001",
+        name: "schema_version",
+        sql: "CREATE TABLE IF NOT EXISTS schema_version (\
+              id INTEGER PRIMARY KEY, \
+              version TEXT NOT NULL, \
+              applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\
+              );",
+    },
+    Migration {
+        version: "002",
+        name: "rooms",
+        sql: "CREATE TABLE IF NOT EXISTS rooms (\
+              id TEXT PRIMARY KEY, \
+              name TEXT NOT NULL, \
+              purpose TEXT, \
+              metadata TEXT, \
+              archived INTEGER NOT NULL DEFAULT 0, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_name_active ON rooms(name) WHERE archived = 0;",
+    },
+    Migration {
+        version: "003",
+        name: "room_messages",
+        sql: "CREATE TABLE IF NOT EXISTS room_messages (\
+              id TEXT PRIMARY KEY, \
+              room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, \
+              sender_id TEXT NOT NULL, \
+              content TEXT NOT NULL, \
+              reply_to TEXT, \
+              metadata TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              );",
+    },
+    Migration {
+        version: "004",
+        name: "room_messages_fts",
+        sql: "CREATE VIRTUAL TABLE IF NOT EXISTS room_messages_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS room_messages_fts_insert AFTER INSERT ON room_messages BEGIN INSERT INTO room_messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content); END; \
+              CREATE TRIGGER IF NOT EXISTS room_messages_fts_delete AFTER DELETE ON room_messages BEGIN INSERT INTO room_messages_fts(room_messages_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content); END;",
+    },
+    Migration {
+        version: "005",
+        name: "room_subscriptions",
+        sql: "CREATE TABLE IF NOT EXISTS room_subscriptions (\
+              room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, \
+              agent_id TEXT NOT NULL, \
+              topics TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              PRIMARY KEY (room_id, agent_id)\
+              );",
+    },
+];
 
 struct Migration {
     version: &'static str,
@@ -67,13 +114,12 @@ async fn run_migrations_on_pool(pool: &SqlitePool) -> Result<(), NousError> {
     .await?;
 
     for migration in MIGRATIONS {
-        let already_applied: bool = sqlx::query(
-            "SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = ?)",
-        )
-        .bind(migration.version)
-        .fetch_one(pool)
-        .await?
-        .get(0);
+        let already_applied: bool =
+            sqlx::query("SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = ?)")
+                .bind(migration.version)
+                .fetch_one(pool)
+                .await?
+                .get(0);
 
         if !already_applied {
             sqlx::raw_sql(migration.sql).execute(pool).await?;
@@ -97,7 +143,8 @@ async fn create_pool(path: &Path) -> Result<SqlitePool, NousError> {
         .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -129,17 +176,19 @@ mod tests {
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations().await.unwrap();
 
+        let expected = MIGRATIONS.len() as i64;
+
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM schema_version")
             .fetch_one(&pools.fts)
             .await
             .unwrap();
-        assert_eq!(row.0, 1);
+        assert_eq!(row.0, expected);
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM schema_version")
             .fetch_one(&pools.vec)
             .await
             .unwrap();
-        assert_eq!(row.0, 1);
+        assert_eq!(row.0, expected);
 
         pools.close().await;
     }
@@ -155,7 +204,7 @@ mod tests {
             .fetch_one(&pools.fts)
             .await
             .unwrap();
-        assert_eq!(row.0, 1);
+        assert_eq!(row.0, MIGRATIONS.len() as i64);
 
         pools.close().await;
     }

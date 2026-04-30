@@ -25,8 +25,9 @@ impl Config {
     pub fn load() -> Result<Self, NousError> {
         let config_path = config_file_path();
         let config = match std::fs::read_to_string(&config_path) {
-            Ok(contents) => toml::from_str(&contents)
-                .map_err(|e| NousError::Config(format!("failed to parse {}: {e}", config_path.display())))?,
+            Ok(contents) => toml::from_str(&contents).map_err(|e| {
+                NousError::Config(format!("failed to parse {}: {e}", config_path.display()))
+            })?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(e) => {
                 return Err(NousError::Config(format!(
@@ -54,7 +55,11 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), NousError> {
-        if self.data_dir.components().any(|c| c == std::path::Component::ParentDir) {
+        if self
+            .data_dir
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
             return Err(NousError::Validation(
                 "data_dir must not contain '..' components".to_string(),
             ));
