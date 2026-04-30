@@ -966,3 +966,701 @@ async fn mcp_worktree_lifecycle() {
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(archived["status"], "archived");
 }
+
+// --- Agent HTTP route tests ---
+
+#[tokio::test]
+async fn e2e_agent_register_list_get_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    // Register agent
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "test-director",
+                        "type": "director",
+                        "namespace": "test-ns",
+                        "room": "director-room"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let agent: Value = json_body(response).await;
+    assert_eq!(agent["name"], "test-director");
+    assert_eq!(agent["agent_type"], "director");
+    assert_eq!(agent["namespace"], "test-ns");
+    let agent_id = agent["id"].as_str().unwrap().to_string();
+
+    // List agents
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/agents?namespace=test-ns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let agents: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["name"], "test-director");
+
+    // Get agent by ID
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let fetched: Value = json_body(response).await;
+    assert_eq!(fetched["id"], agent_id);
+
+    // Deregister
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/agents/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value = json_body(response).await;
+    assert_eq!(result["result"], "deleted");
+
+    // Verify 404
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn e2e_agent_hierarchy_tree_children_ancestors() {
+    let (state, _tmp) = test_state().await;
+
+    // Register director
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "dir-1",
+                        "type": "director",
+                        "namespace": "hier"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let dir: Value = json_body(response).await;
+    let dir_id = dir["id"].as_str().unwrap().to_string();
+
+    // Register manager under director
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "mgr-1",
+                        "type": "manager",
+                        "parent_id": dir_id,
+                        "namespace": "hier"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let mgr: Value = json_body(response).await;
+    let mgr_id = mgr["id"].as_str().unwrap().to_string();
+
+    // Register engineer under manager
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "eng-1",
+                        "type": "engineer",
+                        "parent_id": mgr_id,
+                        "namespace": "hier"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let eng: Value = json_body(response).await;
+    let eng_id = eng["id"].as_str().unwrap().to_string();
+
+    // Get tree
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/agents/tree?namespace=hier")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let tree: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0]["name"], "dir-1");
+    assert_eq!(tree[0]["children"][0]["name"], "mgr-1");
+    assert_eq!(tree[0]["children"][0]["children"][0]["name"], "eng-1");
+
+    // List children of director
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{dir_id}/children?namespace=hier"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let children: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["name"], "mgr-1");
+
+    // List ancestors of engineer
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{eng_id}/ancestors?namespace=hier"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ancestors: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(ancestors.len(), 2);
+    assert_eq!(ancestors[0]["name"], "dir-1");
+    assert_eq!(ancestors[1]["name"], "mgr-1");
+}
+
+#[tokio::test]
+async fn e2e_agent_heartbeat() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "hb-agent".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{}/heartbeat", agent.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({ "status": "running" })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value = json_body(response).await;
+    assert_eq!(result["ok"], true);
+
+    // Verify agent status changed
+    let updated = nous_core::agents::get_agent_by_id(&state.pool, &agent.id)
+        .await
+        .unwrap();
+    assert_eq!(updated.status, "running");
+    assert!(updated.last_seen_at.is_some());
+}
+
+// --- Artifact HTTP route tests ---
+
+#[tokio::test]
+async fn e2e_artifact_register_list_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "art-owner".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Register artifact
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/artifacts")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "agent_id": agent.id,
+                        "type": "room",
+                        "name": "work-room"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let artifact: Value = json_body(response).await;
+    assert_eq!(artifact["name"], "work-room");
+    assert_eq!(artifact["artifact_type"], "room");
+    let art_id = artifact["id"].as_str().unwrap().to_string();
+
+    // List artifacts
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/artifacts?agent_id={}", agent.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let arts: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(arts.len(), 1);
+
+    // Deregister artifact
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/artifacts/{art_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+// --- Agent MCP tool tests ---
+
+#[tokio::test]
+async fn mcp_agent_register_lookup_list_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    // agent_register
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_register",
+                        "arguments": {
+                            "name": "mcp-eng",
+                            "type": "engineer",
+                            "namespace": "mcp-ns"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let agent: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(agent["name"], "mcp-eng");
+    let agent_id = agent["id"].as_str().unwrap();
+
+    // agent_lookup
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_lookup",
+                        "arguments": { "name": "mcp-eng", "namespace": "mcp-ns" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+
+    // agent_list
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_list",
+                        "arguments": { "namespace": "mcp-ns" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let agents: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(agents.len(), 1);
+
+    // agent_heartbeat
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_heartbeat",
+                        "arguments": { "id": agent_id, "status": "running" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+
+    // agent_deregister
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_deregister",
+                        "arguments": { "id": agent_id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let result: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(result["result"], "deleted");
+}
+
+#[tokio::test]
+async fn mcp_agent_tree_children_ancestors() {
+    let (state, _tmp) = test_state().await;
+
+    // Build a small hierarchy
+    let dir = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "mcp-dir".into(),
+            agent_type: nous_core::agents::AgentType::Director,
+            parent_id: None,
+            namespace: Some("mcp-tree".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let eng = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "mcp-eng".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            parent_id: Some(dir.id.clone()),
+            namespace: Some("mcp-tree".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // agent_tree
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_tree",
+                        "arguments": { "namespace": "mcp-tree" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let tree: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0]["name"], "mcp-dir");
+    assert_eq!(tree[0]["children"].as_array().unwrap().len(), 1);
+
+    // agent_list_children
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_list_children",
+                        "arguments": { "id": dir.id, "namespace": "mcp-tree" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let children: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["name"], "mcp-eng");
+
+    // agent_list_ancestors
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_list_ancestors",
+                        "arguments": { "id": eng.id, "namespace": "mcp-tree" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let ancestors: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(ancestors.len(), 1);
+    assert_eq!(ancestors[0]["name"], "mcp-dir");
+}
+
+#[tokio::test]
+async fn mcp_artifact_register_list_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "mcp-art-owner".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // artifact_register
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "artifact_register",
+                        "arguments": {
+                            "agent_id": agent.id,
+                            "type": "branch",
+                            "name": "feat/mcp-test",
+                            "path": "/repo"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let artifact: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(artifact["name"], "feat/mcp-test");
+    let art_id = artifact["id"].as_str().unwrap();
+
+    // artifact_list
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "artifact_list",
+                        "arguments": { "agent_id": agent.id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let artifacts: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(artifacts.len(), 1);
+
+    // artifact_deregister
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "artifact_deregister",
+                        "arguments": { "id": art_id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+}

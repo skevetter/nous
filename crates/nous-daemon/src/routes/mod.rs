@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod health;
 pub mod mcp;
 pub mod messages;

@@ -11,6 +11,7 @@ use nous_core::messages::{
 };
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
+use nous_core::agents;
 use nous_core::tasks;
 use nous_core::worktrees;
 
@@ -351,6 +352,170 @@ pub async fn list_tools() -> impl IntoResponse {
                 "required": ["id"]
             }),
         },
+        ToolSchema {
+            name: "agent_register",
+            description: "Register a new agent in the org hierarchy",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Agent name (unique within namespace)" },
+                    "type": { "type": "string", "description": "Agent type: engineer, manager, director, senior-manager" },
+                    "parent_id": { "type": "string", "description": "Parent agent ID" },
+                    "namespace": { "type": "string", "description": "Namespace (defaults to 'default')" },
+                    "room": { "type": "string", "description": "Room name for this agent" },
+                    "metadata": { "type": "string", "description": "JSON metadata string" },
+                    "status": { "type": "string", "description": "Initial status" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_deregister",
+            description: "Deregister an agent (remove from registry)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "cascade": { "type": "boolean", "description": "Cascade delete children" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_lookup",
+            description: "Look up an agent by name",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Agent name" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                },
+                "required": ["name"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_list",
+            description: "List agents with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "type": { "type": "string", "description": "Filter by agent type" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_list_children",
+            description: "List direct children of an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Parent agent ID" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_list_ancestors",
+            description: "List ancestors of an agent (root to parent)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_tree",
+            description: "Get the agent tree (hierarchy)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "root_id": { "type": "string", "description": "Root agent ID (omit for full tree)" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_heartbeat",
+            description: "Send a heartbeat for an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "status": { "type": "string", "description": "New status: running, idle, blocked, done" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_search",
+            description: "Search agents by name/metadata using FTS5",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "namespace": { "type": "string", "description": "Namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_stale",
+            description: "List stale agents (past heartbeat threshold)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "threshold": { "type": "integer", "description": "Threshold in seconds (default 900)" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "artifact_register",
+            description: "Register a new artifact owned by an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Owning agent ID" },
+                    "type": { "type": "string", "description": "Artifact type: worktree, room, schedule, branch" },
+                    "name": { "type": "string", "description": "Artifact name" },
+                    "path": { "type": "string", "description": "Optional path" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                },
+                "required": ["agent_id", "type", "name"]
+            }),
+        },
+        ToolSchema {
+            name: "artifact_deregister",
+            description: "Deregister (delete) an artifact",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Artifact ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "artifact_list",
+            description: "List artifacts with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Filter by owning agent ID" },
+                    "type": { "type": "string", "description": "Filter by artifact type" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
     ];
 
     Json(serde_json::json!({ "tools": tools }))
@@ -684,6 +849,160 @@ async fn dispatch(
             let id = require_str(args, "id")?;
             worktrees::delete(&state.pool, id).await?;
             Ok(serde_json::json!({"deleted": true}))
+        }
+        "agent_register" => {
+            let name = require_str(args, "name")?.to_string();
+            let agent_type_str = require_str(args, "type")?;
+            let agent_type: agents::AgentType = agent_type_str.parse()?;
+            let parent_id = args.get("parent_id").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let room = args.get("room").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<agents::AgentStatus>())
+                .transpose()?;
+            let agent = agents::register_agent(
+                &state.pool,
+                agents::RegisterAgentRequest {
+                    name,
+                    agent_type,
+                    parent_id,
+                    namespace,
+                    room,
+                    metadata,
+                    status,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(agent).unwrap())
+        }
+        "agent_deregister" => {
+            let id = require_str(args, "id")?;
+            let cascade = args.get("cascade").and_then(|v| v.as_bool()).unwrap_or(false);
+            let result = agents::deregister_agent(&state.pool, id, cascade).await?;
+            Ok(serde_json::json!({"result": result}))
+        }
+        "agent_lookup" => {
+            let name = require_str(args, "name")?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let agent = agents::lookup_agent(&state.pool, name, namespace).await?;
+            Ok(serde_json::to_value(agent).unwrap())
+        }
+        "agent_list" => {
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<agents::AgentStatus>())
+                .transpose()?;
+            let agent_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<agents::AgentType>())
+                .transpose()?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let list = agents::list_agents(
+                &state.pool,
+                &agents::ListAgentsFilter {
+                    namespace,
+                    status,
+                    agent_type,
+                    limit,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(list).unwrap())
+        }
+        "agent_list_children" => {
+            let id = require_str(args, "id")?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let children = agents::list_children(&state.pool, id, namespace).await?;
+            Ok(serde_json::to_value(children).unwrap())
+        }
+        "agent_list_ancestors" => {
+            let id = require_str(args, "id")?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let ancestors = agents::list_ancestors(&state.pool, id, namespace).await?;
+            Ok(serde_json::to_value(ancestors).unwrap())
+        }
+        "agent_tree" => {
+            let root_id = args.get("root_id").and_then(|v| v.as_str());
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let tree = agents::get_tree(&state.pool, root_id, namespace).await?;
+            Ok(serde_json::to_value(tree).unwrap())
+        }
+        "agent_heartbeat" => {
+            let id = require_str(args, "id")?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<agents::AgentStatus>())
+                .transpose()?;
+            agents::heartbeat(&state.pool, id, status).await?;
+            Ok(serde_json::json!({"ok": true}))
+        }
+        "agent_search" => {
+            let query = require_str(args, "query")?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = agents::search_agents(&state.pool, query, namespace, limit).await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "agent_stale" => {
+            let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(900);
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
+            Ok(serde_json::to_value(stale).unwrap())
+        }
+        "artifact_register" => {
+            let agent_id = require_str(args, "agent_id")?.to_string();
+            let artifact_type_str = require_str(args, "type")?;
+            let artifact_type: agents::ArtifactType = artifact_type_str.parse()?;
+            let name = require_str(args, "name")?.to_string();
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let artifact = agents::register_artifact(
+                &state.pool,
+                agents::RegisterArtifactRequest {
+                    agent_id,
+                    artifact_type,
+                    name,
+                    path,
+                    namespace,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(artifact).unwrap())
+        }
+        "artifact_deregister" => {
+            let id = require_str(args, "id")?;
+            agents::deregister_artifact(&state.pool, id).await?;
+            Ok(serde_json::json!({"ok": true}))
+        }
+        "artifact_list" => {
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let artifact_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<agents::ArtifactType>())
+                .transpose()?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let artifacts = agents::list_artifacts(
+                &state.pool,
+                &agents::ListArtifactsFilter {
+                    agent_id,
+                    artifact_type,
+                    namespace,
+                    limit,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(artifacts).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"
