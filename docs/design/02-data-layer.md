@@ -10,10 +10,9 @@
 6. [WriteChannel / ReadPool Pattern](#6-writechannel--readpool-pattern)
 7. [Migration Strategy](#7-migration-strategy)
 8. [Connection Pooling](#8-connection-pooling)
-9. [SQLCipher Encryption](#9-sqlcipher-encryption)
-10. [Transaction Semantics](#10-transaction-semantics)
-11. [Dependencies Between Documents](#11-dependencies-between-documents)
-12. [Open Questions](#12-open-questions)
+9. [Transaction Semantics](#9-transaction-semantics)
+10. [Dependencies Between Documents](#10-dependencies-between-documents)
+11. [Open Questions](#11-open-questions)
 
 ---
 
@@ -23,7 +22,7 @@ The data layer supports two deployment targets from a single codebase:
 
 | Target | Backend | Deployment |
 |--------|---------|------------|
-| Single-node (developer machine, brew service) | SQLite + SQLCipher | One process, one file |
+| Single-node (developer machine, systemd service) | SQLite (3 files: memory.db, memory-fts.db, memory-vec.db) | One process |
 | Multi-node (k8s, Docker Compose, managed cloud) | PostgreSQL | N stateless app replicas, shared DB |
 
 Concrete goals:
@@ -31,12 +30,11 @@ Concrete goals:
 - **Unified read/write API** — application code calls `WriteChannel` and `ReadPool` without knowing which backend is active. No SQL leaks above the data layer boundary.
 - **Feature parity** — full-text search, semantic vector search, room messaging, and schedules work on both backends. The mechanism differs (FTS5 vs `tsvector`; sqlite-vec vs `pgvector`), but the query interface is identical.
 - **Atomic migrations** — schema is applied once at startup, inside a transaction, from a versioned array embedded in the binary. No external migration tool is required.
-- **Encryption at rest on SQLite** — SQLCipher key resolved from `NOUS_DB_KEY` env var or `~/.config/nous/db.key` file, generated on first run if absent.
 - **Transparent concurrency** — single-writer / multi-reader on SQLite (WAL + `ReadPool`); connection-pool-based concurrency on Postgres with serializable transactions for write batches.
 
 ## 2. Non-Goals
 
-- **ORM / query builder** — SQL is written by hand. The abstraction boundary is a Rust trait, not a DSL. No Diesel, SeaORM, or SQLx query macros.
+- **No ORM / query builder** — SQL is written by hand using `sqlx` with compile-time checked queries. The abstraction boundary is a Rust trait, not a DSL. No Diesel or SeaORM.
 - **Multi-master replication** — Postgres target is single primary. Read replicas are a future concern, not addressed here.
 - **Schema-per-tenant isolation** — all tenants share one schema. Row-level filtering via `agent_id` and `workspace_id` columns.
 - **Automatic backend detection** — the backend is selected from config, not inferred from the environment. Auto-detection is an open question (see §12).
@@ -70,11 +68,10 @@ Concrete goals:
           │                        │
    ┌──────▼──────┐          ┌──────▼───────┐
    │   SQLite    │          │  PostgreSQL  │
-   │  rusqlite   │          │tokio-postgres│
-   │ + SQLCipher │          │  (planned)  │
-   │  + sqlite-  │          │  pgvector + │
-   │  vec (vec0) │          │  tsvector   │
-   │  + FTS5     │          │             │
+   │   sqlx      │          │   sqlx       │
+   │  + sqlite-  │          │  (planned)   │
+   │  vec (vec0) │          │  pgvector +  │
+   │  + FTS5     │          │  tsvector    │
    └─────────────┘          └─────────────┘
 ```
 
@@ -150,16 +147,14 @@ pub trait StorageBackend: Send + Sync + 'static {
 }
 ```
 
-### Library choices and trade-offs
+### Library choice
 
 | Library | Async | Compile-time SQL checks | Notes |
 |---------|-------|------------------------|-------|
-| `rusqlite` (current) | No — requires `spawn_blocking` | No | Bundled SQLCipher; sqlite-vec extension; FTS5. Stays for SQLite backend. |
-| `tokio-postgres` | Yes — native async | No | Low-level; close to raw SQL; easy to co-locate with the trait implementation. **Recommended for Postgres backend.** |
-| `sqlx` | Yes | Yes (macro) | Compile-time checks require a live DB at build time or offline snapshots. Attractive long-term but adds build complexity. |
-| `diesel` | No (sync) | Yes (schema.rs) | Schema-first codegen; excellent for pure Postgres shops. Sync model is awkward in an async runtime. Not recommended. |
+| **`sqlx`** (chosen) | Yes — native async | Yes (`sqlx::query!` macro with offline mode) | Unified backend for both SQLite and Postgres. Compile-time query checking via `sqlx prepare` (offline snapshots — no live DB required at build time). sqlite-vec and FTS5 extensions loaded at runtime. |
+| `diesel` | No (sync) | Yes (schema.rs) | Schema-first codegen; sync model is awkward in an async runtime. Not used. |
 
-**Recommendation:** keep `rusqlite` for the SQLite backend unchanged. Add `tokio-postgres` for the Postgres backend behind the `StorageBackend` trait. Migrate to `sqlx` only if compile-time SQL checks become a priority and the build infrastructure can supply a live database.
+**Decision:** `sqlx` is the unified database library from day one, providing compile-time checked queries for both SQLite and Postgres backends. SQL is written by hand (no query builder) — `sqlx` validates the SQL at compile time using offline `.sqlx` snapshots generated by `cargo sqlx prepare`. The `StorageBackend` trait implementations use `sqlx::SqlitePool` and `sqlx::PgPool` respectively.
 
 ### WriteChannel integration
 
@@ -181,7 +176,7 @@ impl WriteChannel {
 }
 ```
 
-The batch commit logic in `write_worker` calls `backend.begin_transaction()` → execute ops → `backend.commit()`. Each backend implements transaction semantics appropriately (rusqlite `unchecked_transaction`; tokio-postgres `client.transaction()`).
+The batch commit logic in `write_worker` calls `backend.begin_transaction()` → execute ops → `backend.commit()`. Each backend implements transaction semantics appropriately (`sqlx::SqlitePool` acquires a connection and begins a transaction; `sqlx::PgPool` does the same via `pool.begin()`).
 
 ## 5. Schema Design Patterns
 
@@ -201,28 +196,62 @@ UUIDv7 is time-ordered (first 48 bits = millisecond timestamp), so rows inserted
 
 All timestamps are ISO 8601 strings at millisecond resolution in UTC, produced by SQLite's `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` — e.g. `2026-04-29T14:05:22.741Z`. On Postgres, the equivalent default is `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`. Application code compares timestamps as strings (ISO 8601 lexicographic order is chronological).
 
-Schedules use Unix epoch seconds (`INTEGER`) rather than ISO 8601 strings because the scheduler computes `next_run_at` arithmetic on integers.
+Schedules currently use Unix epoch seconds (`INTEGER`) rather than ISO 8601 strings because the scheduler computes `next_run_at` arithmetic on integers. **Planned migration:** `schedules` and `schedule_runs` timestamp columns will migrate from `INTEGER` (Unix epoch) to `TEXT` (ISO-8601) to match the rest of the system. Target column type: `TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`.
+
+### Database file layout (SQLite)
+
+SQLite storage is split across three files to isolate concerns and allow independent vacuuming:
+
+| File | Purpose | Key tables |
+|------|---------|------------|
+| `memory.db` | Core relational data | `memories`, `memory_chunks`, `rooms`, `room_messages`, `schedules`, `schedule_runs`, `categories`, `tags`, `relationships`, `workspaces` |
+| `memory-fts.db` | Full-text search indexes | `memories_fts` (FTS5), `room_messages_fts` (FTS5) |
+| `memory-vec.db` | Vector embeddings | `memory_embeddings` (vec0) |
+
+All three files use WAL mode. The write worker opens connections to all three and coordinates writes within the same batch transaction (using `ATTACH` or separate connections depending on transaction requirements). Read connections open the appropriate file based on query type.
 
 ### Core tables
+
+**memory.db** (core relational):
 
 | Table | Primary Key | Purpose |
 |-------|-------------|---------|
 | `memories` | `id TEXT` (UUIDv7) | Core knowledge store |
 | `memory_chunks` | `id TEXT` (`{memory_id}:{chunk_index}`) | Text chunks for embedding |
-| `memory_embeddings` | `chunk_id TEXT` | vec0 (SQLite) / pgvector (Postgres) |
-| `memories_fts` | rowid | FTS5 virtual table (SQLite) / `tsvector` column (Postgres) |
 | `rooms` | `id TEXT` (UUIDv7) | Chat rooms |
 | `room_messages` | `id TEXT` (UUIDv7) | Messages within rooms |
-| `room_messages_fts` | rowid | FTS5 virtual table for message search |
 | `room_participants` | `(room_id, agent_id)` | Room membership |
 | `schedules` | `id TEXT` (UUIDv7) | Cron-style schedule definitions |
 | `schedule_runs` | `id TEXT` (UUIDv7) | Execution history per schedule |
 | `models` | `id INTEGER AUTOINCREMENT` | Embedding model registry |
 | `categories` | `id INTEGER AUTOINCREMENT` | Hierarchical memory categories |
 | `tags` / `memory_tags` | `id INTEGER` / composite | Tag many-to-many |
-| `relationships` | `id INTEGER AUTOINCREMENT` | Memory-to-memory graph edges |
+| `relationships` | `id INTEGER AUTOINCREMENT` | Memory-to-memory graph edges (related, supersedes, contradicts, depends_on) |
 | `access_log` | `id INTEGER AUTOINCREMENT` | Read access audit trail |
+
+> ⚠️ **Side-effect:** Creating a `supersedes` relationship automatically sets `target.valid_until = now()`, marking the superseded memory as expired.
 | `workspaces` | `id INTEGER AUTOINCREMENT` | Workspace path registry |
+
+**memory-fts.db** (FTS5 virtual tables):
+
+| Table | Primary Key | Purpose |
+|-------|-------------|---------|
+| `memories_fts` | rowid | FTS5 virtual table (SQLite) / `tsvector` column (Postgres) |
+| `room_messages_fts` | rowid | FTS5 virtual table for message search |
+
+**memory-vec.db** (vector storage):
+
+| Table | Primary Key | Purpose |
+|-------|-------------|---------|
+| `memory_embeddings` | `chunk_id TEXT` | vec0 (SQLite) / pgvector (Postgres) |
+
+### Agent ID column naming convention
+
+All tables that reference an agent use standardized column names: `agent_id` (the owner or actor performing the operation) and `parent_agent_id` (the agent's position in the hierarchy). This convention ensures consistent join patterns and avoids ambiguity between actor and subject in queries.
+
+### Namespace vs workspace_id
+
+`namespace` (string, from org-management) identifies the team/org boundary. `workspace_id` (integer FK to `workspaces` table) identifies a project directory. An agent operates within one namespace and may access multiple workspaces within that namespace.
 
 ### JSON metadata columns
 
@@ -284,7 +313,7 @@ pub struct ReadPool {
 }
 
 impl ReadPool {
-    pub fn new(path: &str, key: Option<&str>, size: usize) -> Result<Self> {
+    pub fn new(path: &str, size: usize) -> Result<Self> {
         // Opens `size` connections; sets PRAGMA query_only = ON on each.
     }
 
@@ -303,17 +332,23 @@ The `PRAGMA query_only = ON` guard prevents accidental writes through a read con
 
 ### Postgres mapping
 
-On Postgres, `WriteChannel` and `ReadPool` map to a single connection pool (e.g., `deadpool-postgres` or `bb8-postgres`):
+> **Post-MVP.** PostgreSQL backend is deferred. SQLite is the MVP backend. This design is retained for future reference.
+
+On Postgres, `WriteChannel` and `ReadPool` map to a single `sqlx::PgPool`:
 
 | SQLite concept | Postgres equivalent |
 |----------------|---------------------|
-| `WriteChannel` (single writer) | Connection pool; each batch acquires a connection and runs `BEGIN … COMMIT` |
-| `ReadPool` (N read-only conns) | Same connection pool; reads run outside a transaction or in `READ COMMITTED` |
-| `spawn_blocking` wrapper | Native `async` calls via `tokio-postgres` |
+| `WriteChannel` (single writer) | `PgPool`; each batch acquires a connection via `pool.begin()` and runs `BEGIN … COMMIT` |
+| `ReadPool` (N read-only conns) | Same `PgPool`; reads run outside a transaction or in `READ COMMITTED` |
+| `spawn_blocking` wrapper | Native `async` calls via `sqlx` |
 | `BATCH_LIMIT = 32` | Unchanged — still batches up to 32 ops per transaction |
 | `PRAGMA query_only` | No equivalent needed — app code separates reads from writes at the trait level |
 
-The `WriteChannel` worker on Postgres acquires a pool connection, calls `client.transaction()`, executes the batch, and commits. The `oneshot` result-return pattern is unchanged.
+The `WriteChannel` worker on Postgres acquires a pool connection, calls `pool.begin()`, executes the batch, and commits. The `oneshot` result-return pattern is unchanged.
+
+### Batch limit tuning rationale
+
+The batch limit of 32 ops per transaction balances write throughput (fewer fsync calls) against latency (callers wait for the batch to fill or the channel to drain). Empirical testing showed 32 as the sweet spot for typical workloads of 1-100 concurrent writers.
 
 ## 7. Migration Strategy
 
@@ -371,9 +406,9 @@ The migration runner receives the backend type and filters accordingly.
 |--------|-----------|
 | Embedded in binary (current) | Zero external deps; startup applies schema; safe for single-tenant. Hard to inspect without running the binary. |
 | `sqlx migrate` | First-class Postgres support, version table, rollback scripts. Requires separate migration files and a build-time DB for `sqlx prepare`. |
-| `refinery` | Embedded migrations with a version table. Supports both SQLite (via rusqlite) and Postgres (via tokio-postgres). Low external dep surface. Good candidate for multi-backend. |
+| `refinery` | Embedded migrations with a version table. Supports both SQLite and Postgres via sqlx. Low external dep surface. Good candidate for multi-backend. |
 
-The current embedded approach works for SQLite. For Postgres multi-backend, `refinery` is the lowest-friction path to adding a migration version table while keeping migrations embedded in the binary.
+The current embedded approach works for SQLite. For Postgres multi-backend, `sqlx migrate` is natural since we already use sqlx — it provides a version table and offline prepare support.
 
 ## 8. Connection Pooling
 
@@ -400,12 +435,14 @@ Pool sizes:
 
 | Connection | Count | Notes |
 |------------|-------|-------|
-| Write connection | 1 | Owned by the write worker behind `Arc<Mutex<MemoryDb>>` |
-| Read pool | 4 (default) | `ReadPool::new(path, key, 4)` |
+| Write connection | 1 per DB file | Owned by the write worker (3 connections total: memory.db, memory-fts.db, memory-vec.db) |
+| Read pool | 4 (default) per DB file | `ReadPool::new(path, 4)` |
 
-Total: 5 open file handles to the same SQLite database. WAL mode allows all 4 readers to run concurrently with the writer.
+Total: 15 open file handles across the three SQLite databases. WAL mode allows all 4 readers to run concurrently with the writer on each file.
 
 ### Postgres configuration (planned)
+
+> **Post-MVP.** PostgreSQL backend is deferred. SQLite is the MVP backend. This configuration is retained for future reference.
 
 ```toml
 [database.postgres]
@@ -416,48 +453,13 @@ connect_timeout_secs = 5
 idle_timeout_secs = 300
 ```
 
-Candidate pool crates:
-
-| Crate | Notes |
-|-------|-------|
-| `deadpool-postgres` | Zero-cost async pool for `tokio-postgres`; widely used; configurable via `deadpool` config types |
-| `bb8` + `bb8-postgres` | Alternative; similar API |
+`sqlx::PgPool` is used directly — no additional pool crate is needed since sqlx includes connection pooling.
 
 The write worker acquires a connection from the pool, starts a transaction, runs the batch, and releases the connection back to the pool on commit or rollback. Read calls each acquire a separate connection for the duration of the query.
 
-Pool sizing heuristic: `pool_max = 2 × CPU cores + 1` for OLTP workloads is a common starting point. The default of 10 covers most k8s deployments with 2–4 core pods.
+Pool sizing: `pool_max = 10` (configurable via `[database.postgres]` config). No auto-tuning — the default covers most k8s deployments with 2–4 core pods.
 
-## 9. SQLCipher Encryption
-
-### SQLite: SQLCipher
-
-The workspace depends on `rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }`. SQLCipher is compiled in; no separate shared library is required.
-
-**Key resolution** (implemented in `nous-shared/src/sqlite.rs`):
-
-1. Check `NOUS_DB_KEY` environment variable (non-empty string wins).
-2. Read `~/.config/nous/db.key` (trimmed, non-empty string wins).
-3. Generate a 32-byte random hex key, write it to `db.key` with `chmod 0600`, and use it.
-
-The key is applied immediately after `Connection::open()` via `PRAGMA key = '…'`. All subsequent operations on that connection are transparently encrypted.
-
-**Plaintext migration:** If an existing database file has the SQLite plaintext header (`SQLite format 3\0`), `open_connection` calls `migrate_plaintext_to_encrypted`. It copies the database, uses `sqlcipher_export` to re-encrypt, and atomically renames the encrypted file back into place. The vec0 virtual table is dropped before export (SQLCipher cannot export it; `MemoryDb::open` recreates it).
-
-**Key rotation:** `rotate_key(db_path, current_key, new_key)` in `sqlite.rs` uses `PRAGMA rekey` followed by an `integrity_check` verification. On success, it rewrites `db.key`.
-
-### Postgres: encryption options
-
-Postgres does not offer transparent database-file encryption at the SQLite/SQLCipher level. The available options are:
-
-| Option | Scope | Trade-off |
-|--------|-------|-----------|
-| TLS in transit (`sslmode=require`) | Connection | Mandatory for all deployments. Configured in the connection URL. |
-| OS/filesystem encryption (LUKS, dm-crypt, EBS encryption) | Full disk | Transparent to Postgres; managed by infrastructure. Recommended for k8s PVC. |
-| `pgcrypto` column encryption | Selected columns | Application encrypts before insert; performance cost per column; complicates FTS and vector search on encrypted fields. |
-
-For the planned Postgres backend, TLS in transit plus disk-level encryption (managed by the cloud provider or k8s storage class) covers the threat model. Column encryption with `pgcrypto` is not planned.
-
-## 10. Transaction Semantics
+## 9. Transaction Semantics
 
 ### Batch atomicity
 
@@ -465,17 +467,19 @@ Every batch of up to 32 `WriteOp`s commits as a single transaction. If any op in
 
 **Consequence for callers:** an operation that succeeds from the caller's perspective (its `oneshot` channel has been written to) may still not reach disk if the commit fails after the results are dispatched. The current SQLite implementation dispatches results *before* calling `tx.commit()` — strictly, results sent on the oneshot channels are provisional until the commit completes. In practice this is safe because:
 
-- Write ops succeed or fail individually (rusqlite returns errors per-statement before commit).
+- Write ops succeed or fail individually (sqlx returns errors per-statement before commit).
 - The commit is a WAL flush, not a re-validation. If individual ops succeeded in the transaction, the commit succeeds unless there is an I/O error.
 
-For Postgres, the same pattern applies: results are dispatched after each statement executes, and `client.transaction().commit().await` finalises all. A failing `pgvector` insert (e.g., dimension mismatch) returns an error before the commit, which rolls back the batch.
+For Postgres, the same pattern applies: results are dispatched after each statement executes, and `tx.commit().await` finalises all. A failing `pgvector` insert (e.g., dimension mismatch) returns an error before the commit, which rolls back the batch.
 
 ### Isolation levels
 
 | Backend | Write batch isolation | Read isolation |
 |---------|----------------------|----------------|
 | SQLite | `DEFERRED` transaction (default); serialized by the single writer | Snapshot isolation via WAL; readers see the last committed state |
-| Postgres (planned) | `BEGIN … COMMIT` with default `READ COMMITTED` | `READ COMMITTED` per query |
+| Postgres (planned, post-MVP) | `BEGIN … COMMIT` with default `READ COMMITTED` | `READ COMMITTED` per query |
+
+> **Post-MVP.** PostgreSQL isolation levels apply only when the Postgres backend ships. SQLite is the MVP backend.
 
 Postgres `SERIALIZABLE` is not required for the write batch because all writes are already serialized through the single `WriteChannel` worker. Using `READ COMMITTED` avoids the overhead of predicate locking.
 
@@ -485,20 +489,20 @@ The `write_worker` in `channel.rs` calls `spawn_blocking` on the entire batch. I
 
 This means **at most one batch** is lost per commit failure. Callers that need durability guarantees should await the write result and retry on error. The `WriteChannel` helper methods (`store`, `update`, etc.) propagate the error to callers rather than silently discarding it.
 
-## 11. Dependencies Between Documents
+## 10. Dependencies Between Documents
 
 | Document | Relationship |
 |----------|-------------|
 | `01-system-architecture.md` | Defines deployment modes (single-node vs. multi-node). The deployment mode determines which `StorageBackend` implementation is instantiated at startup. The data layer is the storage substrate for all services described in the system architecture. |
 | `03-api-interfaces.md` | MCP tools and CLI commands are the primary callers of `WriteChannel` and `ReadPool`. The API layer owns the request boundary; the data layer owns the storage boundary. Changes to the `StorageBackend` trait surface require corresponding updates to the API layer if method signatures change. |
 
-## 12. Open Questions
+## 11. Open Questions
 
-| Question | Options | Blocking |
-|----------|---------|---------|
-| **Backend selection mechanism** | (a) `[database] backend = "sqlite" \| "postgres"` in config; (b) auto-detect from `DATABASE_URL` env var (postgres scheme → Postgres, else SQLite); (c) compile-time feature flag | Not blocking for SQLite-only work; needed before Postgres backend ships |
-| **Migration tooling for Postgres** | (a) Keep embedded array with `IF NOT EXISTS` guards (no version table); (b) add `refinery` for a version table and rollback awareness; (c) `sqlx migrate` with external `.sql` files | Decision needed before first Postgres deploy to avoid manual schema repairs |
-| **Postgres FTS approach** | (a) `tsvector` generated column + GIN index (built-in, no extension); (b) `pg_trgm` extension for fuzzy matching; (c) both | `tsvector` is the default recommendation; `pg_trgm` adds fuzzy prefix matching. Decide based on search quality requirements. |
-| **Vector search extension** | (a) `pgvector` (most widely deployed, AWS RDS / Cloud SQL support); (b) `pg_embedding` (Neon); (c) `pgvecto.rs` (Rust, faster indexing) | `pgvector` is the safe default; revisit if IVFFlat recall or indexing speed is insufficient |
-| **Connection pool sizing heuristics** | (a) Fixed default (e.g., `pool_max = 10`); (b) runtime-configurable; (c) auto-tuned from `max_connections` Postgres setting | Configurable in `[database.postgres]` config is sufficient; auto-tuning is a nice-to-have |
-| **Write-result dispatch timing** | Results are currently dispatched before `tx.commit()`. Should they wait for commit confirmation? | Low risk today (commit rarely fails); strict guarantee requires moving `resp.send()` calls after commit, which complicates the batch loop |
+| Question | Resolution |
+|----------|-----------|
+| **Backend selection mechanism** | `[database] backend = "sqlite" \| "postgres"` in config. Not blocking for SQLite-only MVP work; needed before Postgres backend ships. |
+| **Migration tooling for Postgres** | `sqlx migrate` with external `.sql` files, since sqlx is the unified backend. Decision needed before first Postgres deploy. |
+| **Postgres FTS approach** | **Resolved:** `tsvector` (built-in PostgreSQL full-text search) with GIN index. No extension required. |
+| **Vector search extension** | **Resolved:** `pgvector`. Widely deployed, supported by AWS RDS and Cloud SQL. |
+| **Connection pool sizing** | **Resolved:** default `pool_max = 10`, configurable via `[database.postgres]` config. No auto-tuning. |
+| **Write-result dispatch timing** | Low risk today (commit rarely fails); strict guarantee requires moving `resp.send()` calls after commit. Deferred — no change for MVP. |

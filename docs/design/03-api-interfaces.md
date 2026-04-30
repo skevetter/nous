@@ -13,6 +13,7 @@
 9. [ID Generation](#9-id-generation)
 10. [Dependencies Between Documents](#10-dependencies-between-documents)
 11. [Open Questions](#11-open-questions)
+12. [Cross-Reference Index](#12-cross-reference-index)
 
 ---
 
@@ -84,8 +85,10 @@ Three interface layers expose nous to different consumers:
                        ▼
        ┌───────────────────────────────────┐
        │           Data Layer              │
-       │  SQLite + sqlite-vec              │
+       │  SQLite + sqlite-vec + FTS5       │
        │  ~/.cache/nous/memory.db          │
+       │  ~/.cache/nous/memory-fts.db      │
+       │  ~/.cache/nous/memory-vec.db      │
        │  ~/.cache/nous/otlp.db            │
        └───────────────────────────────────┘
 ```
@@ -119,7 +122,7 @@ impl NousServer {
            description = "Search memories using FTS, semantic, or hybrid search")]
     async fn memory_search(&self, params: Parameters<MemorySearchParams>) -> CallToolResult {
         handle_search(params.0, &self.db_path, self.config.embedding.dimensions,
-                      &self.embedding, self.db_key.as_deref()).await
+                      &self.embedding).await
     }
     // ... 30+ further tools
 }
@@ -282,7 +285,8 @@ nous
 ├── room          create | list | get | post | read | search | delete
 ├── schedule      list | get | create | delete | pause | resume
 ├── daemon        start | stop | restart | status
-├── admin         status | re-embed | re-classify | rotate-key | import | export
+├── doctor        (top-level — system health check)
+├── admin         status | re-embed | re-classify | import | export
 ├── query         sql | schema | workspaces | tags | trace
 └── serve         (top-level — starts the MCP server)
 ```
@@ -353,6 +357,38 @@ nous serve
 
 **`nous model list`** hides models whose names contain `placeholder`, `mock`, or `test` by default. `--all` shows all registered models.
 
+### `nous doctor` — System Health Check
+
+`nous doctor` validates the local installation and reports issues. It runs without a daemon connection and is suitable for debugging setup problems.
+
+**Checks performed:**
+
+| Check | Pass condition | Fail output |
+|-------|---------------|-------------|
+| DB connectivity | Can open all 3 SQLite files (memory.db, memory-fts.db, memory-vec.db) | `FAIL: cannot open <path>: <error>` |
+| Config validity | TOML parses, required fields present | `FAIL: config parse error: <detail>` |
+| Port availability | MCP port 8377 not in use | `WARN: port 8377 in use by PID <pid>` |
+| Storage permissions | Read/write access to data directories | `FAIL: no write access to <path>` |
+| Version compatibility | Binary version matches schema version | `WARN: schema version mismatch (binary: X, db: Y)` |
+
+**Example output:**
+
+```
+$ nous doctor
+✓ Config valid                 ~/.config/nous/config.toml
+✓ memory.db                    ~/.cache/nous/memory.db (WAL mode, 2.4 MB)
+✓ memory-fts.db                ~/.cache/nous/memory-fts.db (WAL mode, 512 KB)
+✓ memory-vec.db                ~/.cache/nous/memory-vec.db (WAL mode, 1.8 MB)
+✓ otlp.db                     ~/.cache/nous/otlp.db (WAL mode, 128 KB)
+✓ Port 8377                    available
+✓ Storage permissions          read/write OK
+✓ Schema version               v34 (matches binary)
+
+All checks passed.
+```
+
+On failure, exit code is 1 and failing checks are listed first.
+
 ## 6. Internal Service APIs
 
 ### Daemon Architecture
@@ -382,22 +418,25 @@ A second daemon start is rejected immediately: `Daemon::new` checks whether the 
 
 `daemon_router` (`crates/nous-cli/src/daemon_api.rs`) mounts an axum `Router` with these routes:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/status` | Returns `{ pid, uptime_secs, version }` |
-| `POST` | `/shutdown` | Sends `true` on the shutdown watch channel; returns `{ ok: true }` |
-| `POST` | `/rooms` | Create a room by name |
-| `GET` | `/rooms` | List rooms (`?archived=true&limit=N`) |
-| `GET` | `/rooms/{id}` | Get a room by UUID or name |
-| `POST` | `/rooms/{id}/messages` | Post a message to a room |
-| `GET` | `/rooms/{id}/messages` | Read messages (`?limit=N&since=<ts>&before=<ts>`) |
-| `POST` | `/memories/search` | Search memories (same params as MCP `memory_search`) |
-| `POST` | `/memories/store` | Store a memory (same params as MCP `memory_store`) |
-| `GET` | `/categories` | List all categories |
-| `POST` | `/export` | Export all memories as JSON |
-| `POST` | `/import` | Import memories from JSON body |
+| Method | Path | Purpose | Response codes |
+|--------|------|---------|----------------|
+| `GET` | `/health` | DB connectivity check via `SELECT 1`. Returns `{status: "healthy", db_ok: bool, uptime_secs: u64}` | 200 OK, 503 Service Unavailable |
+| `GET` | `/status` | Returns `{ pid, uptime_secs, version }` | 200 OK |
+| `POST` | `/shutdown` | Sends `true` on the shutdown watch channel; returns `{ ok: true }` | 200 OK |
+| `POST` | `/rooms` | Create a room by name | 201 Created, 409 Conflict |
+| `GET` | `/rooms` | List rooms (`?archived=true&limit=N`) | 200 OK |
+| `GET` | `/rooms/{id}` | Get a room by UUID or name | 200 OK, 404 Not Found |
+| `POST` | `/rooms/{id}/messages` | Post a message to a room | 201 Created, 404 Not Found |
+| `GET` | `/rooms/{id}/messages` | Read messages (`?limit=N&since=<ts>&before=<ts>`) | 200 OK, 404 Not Found |
+| `POST` | `/memories/search` | Search memories (same params as MCP `memory_search`) | 200 OK, 400 Bad Request |
+| `POST` | `/memories/store` | Store a memory (same params as MCP `memory_store`) | 201 Created, 400 Bad Request |
+| `GET` | `/categories` | List all categories | 200 OK |
+| `POST` | `/export` | Export all memories as JSON | 200 OK |
+| `POST` | `/import` | Import memories from JSON body | 200 OK, 400 Bad Request |
 
 These routes exist to let the CLI manage data in a running daemon without spawning a separate MCP session. They are not intended as a general-purpose API.
+
+**Schedule errors table:** Deferred. Schedule execution errors are logged in `schedule_runs.error` column. A separate `schedule_errors` table for detailed error history will be added when the scheduling system matures.
 
 ### DaemonClient
 
@@ -426,7 +465,7 @@ The current single-node model has no worker registry. Future multi-node deployme
 2. **Heartbeat** — workers ping the coordinator every N seconds; the coordinator marks them unhealthy after 3 missed heartbeats.
 3. **Task assignment** — the coordinator assigns incoming tool calls to available workers based on capability and load.
 
-The preferred path for this is a lightweight protocol over the existing Unix socket or a gRPC channel (see [Open Questions](#11-open-questions)). The current daemon API structure — axum `Router` over `UnixListener` — is extensible: adding coordinator routes requires only new `route()` registrations in `daemon_router`.
+Workers will forward write operations as JSON POST requests to the coordinator's existing Axum HTTP/JSON daemon API (see §11 Q1 — resolved). The current daemon API structure — axum `Router` over `UnixListener` — is extensible: adding coordinator routes requires only new `route()` registrations in `daemon_router`.
 
 ## 7. Event Bus
 
@@ -498,15 +537,15 @@ tokio::spawn(async move {
 
 ### Multi-Node Considerations
 
-`tokio::sync::broadcast` is in-process only. For multi-node deployments, one of three approaches replaces or wraps it:
+`tokio::sync::broadcast` is in-process only. For multi-node deployments, Postgres `LISTEN/NOTIFY` will be used when the Postgres backend ships. No additional infrastructure (NATS, Redis) is required.
 
-| Option | Tradeoffs |
-|--------|-----------|
-| **NATS** | Lightweight, purpose-built pub/sub, easy subject-based filtering, requires an additional process |
-| **Redis pub/sub** | Already common in Rust stacks, at-most-once delivery (no persistence), fire-and-forget semantics match the use case |
-| **Postgres LISTEN/NOTIFY** | No new infrastructure if Postgres is already present, delivery limited to 8 KB payload per notification |
+| Option | Decision |
+|--------|----------|
+| **Postgres LISTEN/NOTIFY** | **Chosen.** No new infrastructure if Postgres is already present. Delivery limited to 8 KB payload per notification — sufficient for event envelopes with IDs. |
+| ~~NATS~~ | Rejected — requires an additional process, violates zero-external-deps goal. |
+| ~~Redis pub/sub~~ | Rejected — same infrastructure concern as NATS. |
 
-The `EventBus` abstraction above can be backed by any of these by changing the `publish` and `subscribe` implementations. The event enum stays the same; only the transport changes. For the current SQLite-only deployment, the in-process broadcast channel is sufficient.
+The `EventBus` abstraction above can be backed by `LISTEN/NOTIFY` by changing the `publish` and `subscribe` implementations. The event enum stays the same; only the transport changes. For the current SQLite-only deployment, the in-process broadcast channel is sufficient.
 
 ## 8. Error Handling Strategy
 
@@ -517,10 +556,9 @@ The `EventBus` abstraction above can be backed by any of these by changing the `
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum NousError {
-    #[error("sqlite error: {0}")]      Sqlite(#[from] rusqlite::Error),
+    #[error("sqlite error: {0}")]      Sqlite(#[from] sqlx::Error),
     #[error("io error: {0}")]          Io(#[from] std::io::Error),
     #[error("config error: {0}")]      Config(String),
-    #[error("encryption error: {0}")] Encryption(String),
     #[error("internal error: {0}")]   Internal(String),
     #[error("embedding error: {0}")] Embedding(String),
     #[error("validation error: {0}")] Validation(String),
@@ -554,6 +592,24 @@ When `--format json` is active, error output is still written to stderr as plain
 **Daemon API** — `call_tool_result_to_response` (`daemon_api.rs:458`) maps `CallToolResult` to HTTP status codes: `is_error = true` → `400 Bad Request`; otherwise `200 OK`. Axum's unprocessable-entity handling (`422`) covers malformed request bodies before handlers are reached.
 
 **Internal Result types** — All internal functions return `nous_shared::Result<T>` (aliased `std::result::Result<T, NousError>`). The `?` operator propagates errors up to the interface boundary where they are translated to the appropriate surface representation.
+
+### HTTP Status Code Mapping
+
+| NousError variant | HTTP Status | Code |
+|-------------------|-------------|------|
+| `NotFound` | Not Found | 404 |
+| `Validation` / `InvalidInput` | Bad Request | 400 |
+| `Conflict` | Conflict | 409 |
+| `Sqlite` / `Io` / `Internal` / `Embedding` | Internal Server Error | 500 |
+| `Config` | Internal Server Error | 500 |
+
+### Retryable Errors
+
+Only `SQLITE_BUSY` is retried (3 attempts, 100ms backoff between each). All other errors are terminal and propagated immediately to the caller.
+
+### anyhow Migration
+
+`nous-otlp` will migrate from `anyhow` to `NousError` for consistency across the codebase. This is planned but not blocking MVP.
 
 ## 9. ID Generation
 
@@ -612,10 +668,25 @@ IDs are generated once at the API boundary (MCP tool handler or daemon API handl
 
 ## 11. Open Questions
 
-1. **gRPC vs REST for multi-node worker coordination.** The current Unix socket API is HTTP/1.1 (axum + hyper). For multi-node, gRPC (tonic) provides typed service definitions and streaming, but adds `prost` build complexity. A lightweight REST extension to the existing axum router requires no new dependencies. Decision depends on whether streaming (e.g., live task assignment) is needed.
+| # | Question | Resolution |
+|---|----------|-----------|
+| 1 | **Worker coordination protocol.** | **Resolved:** reuse the existing Axum HTTP/JSON daemon API. Workers forward `WriteOp` variants as JSON POST requests to the coordinator. No gRPC or custom IPC protocol. |
+| 2 | **Event bus technology for multi-node.** | **Resolved:** Postgres `LISTEN/NOTIFY` when the Postgres backend ships. No NATS or Redis. See §7. |
+| 3 | **MCP tool versioning strategy.** | **Resolved:** additive-only evolution. Tool parameters are only added, never removed or type-changed. No breaking changes post-launch. Per-tool versioning is unnecessary given this constraint. |
+| 4 | **MCP error codes.** | **Resolved:** deferred. Standard `is_error` boolean is sufficient for MVP. Structured MCP error codes will be added when client-side handling requires them. |
+| 5 | **CLI plugin system for extensions.** | Open. The `#[tool_router]` macro is compile-time. The simpler alternative is a subprocess-based plugin model: the MCP server proxies tool calls to a child process that speaks MCP on stdio. |
 
-2. **Event bus technology for multi-node.** NATS, Redis pub/sub, and Postgres `LISTEN/NOTIFY` are the candidates. The choice is tied to what infrastructure operators are willing to run alongside `nous`. If the goal is zero external dependencies, the in-process broadcast channel is the only option — which means cross-node notifications are not supported until operators opt into an external broker.
+## 12. Cross-Reference Index
 
-3. **MCP tool versioning strategy.** rmcp currently registers all tools under a single server version (`nous-cli 0.1.0`). If tool signatures need to change in a breaking way, there is no per-tool version negotiation in the protocol. Options: (a) maintain backward-compatible parameter additions only (additive evolution), (b) add a `tool_version` field to the `#[tool]` attribute if rmcp supports it, (c) expose two tool sets under different MCP server names.
-
-4. **CLI plugin system for extensions.** The `#[tool_router]` macro is compile-time. Third parties cannot add MCP tools without forking the crate. A dynamic plugin loader (e.g., loading `.so` files that register tools at startup) would enable extensions without forks, but introduces linking complexity and security surface. The simpler alternative is a subprocess-based plugin model: the MCP server proxies tool calls to a child process that speaks MCP on stdio.
+| Topic | Primary doc | Related sections |
+|-------|-------------|-----------------|
+| WriteChannel / ReadPool | 02-data-layer.md §6 | 01-system-architecture.md §7 (Service Topology) |
+| StorageBackend trait | 02-data-layer.md §4 | This doc §6 (Internal Service APIs) |
+| Deployment modes | 01-system-architecture.md §6 | This doc §6 (Daemon Architecture) |
+| SQLite schema & tables | 02-data-layer.md §5 | This doc §4 (MCP Tool Catalog) |
+| Error handling | This doc §8 | 02-data-layer.md §9 (Transaction Semantics) |
+| Event bus | This doc §7 | 01-system-architecture.md §5 (Horizontal Scaling) |
+| Configuration | 01-system-architecture.md §8 | 02-data-layer.md §8 (Connection Pooling) |
+| Health checks | This doc §6 (`GET /health`) | 01-system-architecture.md §9 |
+| `nous doctor` | This doc §5.5 | 01-system-architecture.md §8 (Config) |
+| Multi-node coordination | 01-system-architecture.md §5 | This doc §11 Q1 |

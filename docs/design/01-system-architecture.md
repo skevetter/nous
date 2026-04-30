@@ -70,8 +70,11 @@
 │                                                                 │
 │  ┌───────────────────────┐  ┌────────────────────────────┐     │
 │  │  SQLite (memory.db)   │  │  SQLite (otlp.db)          │     │
-│  │  WAL mode, encrypted  │  │  OTLP spans                │     │
-│  └───────────────────────┘  └────────────────────────────┘     │
+│  │  WAL mode             │  │  OTLP spans                │     │
+│  │                       │  └────────────────────────────┘     │
+│  │  SQLite (memory-fts.db)  SQLite (memory-vec.db)        │     │
+│  │  FTS5 tables             vec0 tables                   │     │
+│  └───────────────────────┘                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -117,6 +120,8 @@ The daemon API and the MCP server share the same `NousServer` instance — the s
 
 ## 5. Horizontal Scaling
 
+> **Post-MVP.** The coordinator/worker multi-node topology described in this section is deferred. MVP is single-node only. This section documents the target architecture for reference.
+
 The current codebase is a single-node design. The horizontal scaling model described here is the target architecture.
 
 ### Coordinator + Worker pattern
@@ -159,7 +164,40 @@ The current codebase is a single-node design. The horizontal scaling model descr
 
 ## 6. Deployment Modes
 
-### 6a. Homebrew service (macOS)
+### 6a. systemd (Linux) — Primary
+
+Linux with systemd is the primary deployment target. A single binary installed from a `.deb`/`.rpm` package or direct download.
+
+```ini
+# /etc/systemd/system/nous.service
+[Unit]
+Description=Nous memory daemon
+After=network.target
+
+[Service]
+Type=simple
+User=nous
+ExecStart=/usr/local/bin/nous daemon start
+Restart=on-failure
+RestartSec=5s
+Environment=NOUS_MEMORY_DB=/var/lib/nous/memory.db
+Environment=NOUS_OTLP_DB=/var/lib/nous/otlp.db
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl enable --now nous
+systemctl status nous
+journalctl -u nous -f
+```
+
+The daemon socket lands at `/home/nous/.cache/nous/daemon.sock` (or override with `NOUS_DAEMON_SOCKET`). If the socket needs to be world-accessible, mount a `tmpfs` at a shared path and set `NOUS_DAEMON_SOCKET=/run/nous/daemon.sock`, adjusting the unit's `RuntimeDirectory=nous`.
+
+---
+
+### 6b. Homebrew service (macOS) — Secondary/Future
 
 A single binary installed by `brew install nous`. `brew services start nous` installs a launchd plist that keeps the daemon alive across reboots.
 
@@ -188,50 +226,20 @@ A single binary installed by `brew install nous`. `brew services start nous` ins
 </plist>
 ```
 
-Config lives at `~/.config/nous/config.toml` (XDG base dir). The database at `~/.cache/nous/memory.db` is a single user-owned file. No additional ports are opened.
-
----
-
-### 6b. systemd (Linux)
-
-```ini
-# /etc/systemd/system/nous.service
-[Unit]
-Description=Nous memory daemon
-After=network.target
-
-[Service]
-Type=simple
-User=nous
-ExecStart=/usr/local/bin/nous daemon start
-Restart=on-failure
-RestartSec=5s
-Environment=NOUS_MEMORY_DB=/var/lib/nous/memory.db
-Environment=NOUS_OTLP_DB=/var/lib/nous/otlp.db
-Environment=NOUS_DB_KEY_FILE=/etc/nous/db.key
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-systemctl enable --now nous
-systemctl status nous
-journalctl -u nous -f
-```
-
-The daemon socket lands at `/home/nous/.cache/nous/daemon.sock` (or override with `NOUS_DAEMON_SOCKET`). If the socket needs to be world-accessible, mount a `tmpfs` at a shared path and set `NOUS_DAEMON_SOCKET=/run/nous/daemon.sock`, adjusting the unit's `RuntimeDirectory=nous`.
+Config lives at `~/.config/nous/config.toml` (XDG base dir). The databases at `~/.cache/nous/` (memory.db, memory-fts.db, memory-vec.db, otlp.db) are user-owned files. No additional ports are opened.
 
 ---
 
 ### 6c. Docker / Kubernetes (multi-node)
+
+The Docker image runs `nous serve` directly. No systemd inside the container.
 
 ```dockerfile
 FROM debian:bookworm-slim
 COPY nous /usr/local/bin/nous
 RUN useradd -m nous
 USER nous
-ENTRYPOINT ["nous", "daemon", "start"]
+ENTRYPOINT ["nous", "serve", "--transport", "http", "--port", "8377"]
 ```
 
 ```yaml
@@ -252,21 +260,13 @@ spec:
           value: /data/memory.db
         - name: NOUS_OTLP_DB
           value: /data/otlp.db
-        - name: NOUS_DB_KEY_FILE
-          value: /secrets/db.key
         volumeMounts:
         - name: data
           mountPath: /data
-        - name: secrets
-          mountPath: /secrets
-          readOnly: true
       volumes:
       - name: data
         persistentVolumeClaim:
           claimName: nous-data
-      - name: secrets
-        secret:
-          secretName: nous-db-key
 ```
 
 In multi-node deployments, the coordinator owns the write path and runs the scheduler. Worker pods mount the same PVC (or point to a shared Postgres backend — see §12). The daemon socket inside each pod is not accessible from outside; expose the MCP HTTP port (`mcp_port = 8377`) through a `Service` instead.
@@ -330,7 +330,9 @@ The config file lives at `~/.config/nous/config.toml` (XDG). If absent, `Config:
 
 ```toml
 [memory]
-db_path = "~/.cache/nous/memory.db"
+db_path     = "~/.cache/nous/memory.db"
+fts_db_path = "~/.cache/nous/memory-fts.db"
+vec_db_path = "~/.cache/nous/memory-vec.db"
 
 [embedding]
 model   = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
@@ -345,9 +347,6 @@ port    = 4318
 
 [classification]
 confidence_threshold = 0.3
-
-[encryption]
-db_key_file = "~/.config/nous/db.key"
 
 [rooms]
 max_rooms              = 1000
@@ -377,7 +376,6 @@ Environment variables override the file and take effect at startup. Empty string
 |---|---|---|
 | `NOUS_MEMORY_DB` | `memory.db_path` | string (path) |
 | `NOUS_OTLP_DB` | `otlp.db_path` | string (path) |
-| `NOUS_DB_KEY_FILE` | `encryption.db_key_file` | string (path) |
 | `NOUS_ROOMS_MAX` | `rooms.max_rooms` | integer |
 | `NOUS_ROOMS_MAX_MESSAGES` | `rooms.max_messages_per_room` | integer |
 | `NOUS_DAEMON_SOCKET` | `daemon.socket_path` | string (path) |
@@ -391,6 +389,10 @@ environment variable  >  config.toml  >  compiled defaults
 ```
 
 The CLI flags `--config` and `--db` override the config-file path and database path respectively, taking precedence over all other sources for those fields.
+
+### XDG Directory Handling
+
+Nous creates XDG directories (`$XDG_CONFIG_HOME/nous`, `$XDG_CACHE_HOME/nous`) if missing on first run. Falls back to `~/.nous` only if XDG environment variables are explicitly unset AND the platform is not Linux. On Linux, the XDG Base Directory Specification defaults apply even without the environment variables (`~/.config/nous`, `~/.cache/nous`).
 
 ## 9. Health Checks
 
@@ -476,7 +478,7 @@ On startup, the write worker checks for any `schedule_runs` rows with `status = 
 
 | Document | Relationship to this document |
 |---|---|
-| `02-data-layer.md` | Covers the SQLite schema, WAL configuration, encryption key derivation, vector index (`sqlite-vec`), and migration strategy. This document assumes the data layer exists and references `WriteChannel` / `ReadPool` as the access abstraction. |
+| `02-data-layer.md` | Covers the SQLite schema, WAL configuration, vector index (`sqlite-vec`), and migration strategy. This document assumes the data layer exists and references `WriteChannel` / `ReadPool` as the access abstraction. |
 | `03-api-interfaces.md` | Covers the MCP tool definitions (`memory_store`, `memory_search`, etc.), parameter schemas, and the `rmcp` transport layer (stdio vs HTTP). This document treats the MCP server as a black box that calls `NousServer` methods. |
 
 **Naming conventions (cross-document):**
@@ -486,10 +488,10 @@ On startup, the write worker checks for any `schedule_runs` rows with `status = 
 
 ## 12. Open Questions
 
-| # | Question | Options | Impact |
-|---|---|---|---|
-| 1 | **Worker → coordinator write IPC mechanism.** How do workers forward `WriteOp` variants to the coordinator? | (a) Unix socket + custom framing; (b) gRPC; (c) reuse the daemon API HTTP/JSON path | Determines whether workers need a Rust-native IPC crate or can reuse the existing axum server |
-| 2 | **Coordinator HA strategy.** If the coordinator crashes, scheduled tasks stop firing until it restarts. | (a) Accept single-coordinator limitation (YAGNI); (b) standby coordinator with PID-file-based leader election; (c) external lock (etcd/Postgres advisory lock) | Significant complexity increase for (b)/(c); need CEO alignment on availability SLA |
-| 3 | **Storage backend for multi-node.** SQLite + shared PVC works for single-AZ k8s. Cross-AZ or multi-write requires a different backend. | (a) SQLite + single coordinator write path (current); (b) Postgres backend via `sqlx`; (c) Turso/libsql remote replica | Postgres backend needs data layer redesign (see `02-data-layer.md`) |
-| 4 | **macOS launchd vs Linux systemd as primary packaging target.** Brew formula and launchd plist are straightforward; systemd requires a separate packaging pass. | (a) macOS-first (launchd); (b) Linux-first (systemd/deb/rpm); (c) both with separate CI jobs | Affects CI pipeline and release artifact shape |
-| 5 | **Storage health in `/status`.** The liveness probe currently returns without touching the database. A failed `ReadPool` connection would go undetected. | (a) Add a `SELECT 1` to the liveness check; (b) add a separate `/health/storage` endpoint; (c) leave as-is | Low-cost to add; worth confirming desired behaviour |
+| # | Question | Resolution |
+|---|---|---|
+| 1 | **Worker → coordinator write IPC mechanism.** | **Resolved:** reuse the existing Axum HTTP/JSON daemon API. Workers forward `WriteOp` variants as JSON POST requests to the coordinator. No gRPC or custom IPC protocol. |
+| 2 | **Coordinator HA strategy.** If the coordinator crashes, scheduled tasks stop firing until it restarts. | Accept single-coordinator limitation (YAGNI). Revisit only if availability SLA requires it. |
+| 3 | **Storage backend for multi-node.** SQLite + shared PVC works for single-AZ k8s. Cross-AZ or multi-write requires a different backend. | Postgres backend via `sqlx` (deferred post-MVP). See `02-data-layer.md`. |
+| 4 | **Primary packaging target.** | **Resolved:** Linux-first (systemd/deb/rpm). macOS launchd is secondary/future. |
+| 5 | **Storage health in `/status`.** The liveness probe currently returns without touching the database. A failed `ReadPool` connection would go undetected. | **Resolved:** Add `GET /health` endpoint with `SELECT 1` DB check. See `03-api-interfaces.md`. |
