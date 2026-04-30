@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod commands;
+
 #[derive(Parser)]
 #[command(name = "nous", about = "The nous platform CLI")]
 struct Cli {
@@ -23,7 +25,7 @@ async fn main() {
 
     match cli.command {
         Commands::Doctor => {
-            println!("doctor command not yet implemented");
+            commands::doctor::run().await;
         }
     }
 }

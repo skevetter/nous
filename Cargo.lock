@@ -991,6 +991,7 @@ name = "nous-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dirs",
  "nous-core",
  "tokio",
  "tracing",
