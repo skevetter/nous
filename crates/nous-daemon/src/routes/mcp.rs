@@ -481,6 +481,128 @@ pub async fn list_tools() -> impl IntoResponse {
             }),
         },
         ToolSchema {
+            name: "agent_inspect",
+            description: "Inspect an agent: full details with current version and template info",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_versions",
+            description: "List version history for an agent (newest first)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "limit": { "type": "integer", "description": "Max results (default 20)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_record_version",
+            description: "Record a new version for an agent (skill hashes + config hash). Clears upgrade_available flag.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "skill_hash": { "type": "string", "description": "SHA-256 of concatenated skill file contents" },
+                    "config_hash": { "type": "string", "description": "SHA-256 of effective config" },
+                    "skills_json": { "type": "string", "description": "JSON array: [{name, path, hash}]" }
+                },
+                "required": ["agent_id", "skill_hash", "config_hash"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_rollback",
+            description: "Rollback an agent to a previous version (advisory — agent must restart with old skills)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "version_id": { "type": "string", "description": "Target version ID to rollback to" }
+                },
+                "required": ["agent_id", "version_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_notify_upgrade",
+            description: "Set upgrade_available flag for an agent (advisory notification)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_outdated",
+            description: "List agents with upgrade_available flag set",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_create",
+            description: "Create an immutable agent template (blueprint for spawning agents)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Template name (unique)" },
+                    "type": { "type": "string", "description": "Template type (e.g. engineer, reviewer, monitor)" },
+                    "default_config": { "type": "string", "description": "Default config JSON" },
+                    "skill_refs": { "type": "string", "description": "JSON array of skill file paths or names" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_list",
+            description: "List agent templates",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "description": "Filter by template type" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_get",
+            description: "Get an agent template by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Template ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_instantiate",
+            description: "Create a new agent from a template with optional config overrides",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "template_id": { "type": "string", "description": "Template ID" },
+                    "name": { "type": "string", "description": "Agent name override" },
+                    "namespace": { "type": "string", "description": "Namespace" },
+                    "parent_id": { "type": "string", "description": "Parent agent ID" },
+                    "config_overrides": { "type": "string", "description": "Config overrides JSON (merged with template defaults)" }
+                },
+                "required": ["template_id"]
+            }),
+        },
+        ToolSchema {
             name: "artifact_register",
             description: "Register a new artifact owned by an agent",
             input_schema: serde_json::json!({
@@ -1253,6 +1375,98 @@ async fn dispatch(
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
             Ok(serde_json::to_value(stale).unwrap())
+        }
+        "agent_inspect" => {
+            let id = require_str(args, "id")?;
+            let inspection = agents::inspect_agent(&state.pool, id).await?;
+            Ok(serde_json::to_value(inspection).unwrap())
+        }
+        "agent_versions" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let versions = agents::list_versions(&state.pool, agent_id, limit).await?;
+            Ok(serde_json::to_value(versions).unwrap())
+        }
+        "agent_record_version" => {
+            let agent_id = require_str(args, "agent_id")?.to_string();
+            let skill_hash = require_str(args, "skill_hash")?.to_string();
+            let config_hash = require_str(args, "config_hash")?.to_string();
+            let skills_json = args.get("skills_json").and_then(|v| v.as_str()).map(String::from);
+            let version = agents::record_version(
+                &state.pool,
+                agents::RecordVersionRequest {
+                    agent_id,
+                    skill_hash,
+                    config_hash,
+                    skills_json,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(version).unwrap())
+        }
+        "agent_rollback" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let version_id = require_str(args, "version_id")?;
+            let version = agents::rollback_agent(&state.pool, agent_id, version_id).await?;
+            Ok(serde_json::to_value(version).unwrap())
+        }
+        "agent_notify_upgrade" => {
+            let id = require_str(args, "id")?;
+            agents::set_upgrade_available(&state.pool, id, true).await?;
+            Ok(serde_json::json!({"notified": true}))
+        }
+        "agent_outdated" => {
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let outdated = agents::list_outdated_agents(&state.pool, namespace, limit).await?;
+            Ok(serde_json::to_value(outdated).unwrap())
+        }
+        "agent_template_create" => {
+            let name = require_str(args, "name")?.to_string();
+            let template_type = require_str(args, "type")?.to_string();
+            let default_config = args.get("default_config").and_then(|v| v.as_str()).map(String::from);
+            let skill_refs = args.get("skill_refs").and_then(|v| v.as_str()).map(String::from);
+            let template = agents::create_template(
+                &state.pool,
+                agents::CreateTemplateRequest {
+                    name,
+                    template_type,
+                    default_config,
+                    skill_refs,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(template).unwrap())
+        }
+        "agent_template_list" => {
+            let template_type = args.get("type").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let templates = agents::list_templates(&state.pool, template_type, limit).await?;
+            Ok(serde_json::to_value(templates).unwrap())
+        }
+        "agent_template_get" => {
+            let id = require_str(args, "id")?;
+            let template = agents::get_template_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(template).unwrap())
+        }
+        "agent_instantiate" => {
+            let template_id = require_str(args, "template_id")?.to_string();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let parent_id = args.get("parent_id").and_then(|v| v.as_str()).map(String::from);
+            let config_overrides = args.get("config_overrides").and_then(|v| v.as_str()).map(String::from);
+            let agent = agents::instantiate_from_template(
+                &state.pool,
+                agents::InstantiateRequest {
+                    template_id,
+                    name,
+                    namespace,
+                    parent_id,
+                    config_overrides,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(agent).unwrap())
         }
         "artifact_register" => {
             let agent_id = require_str(args, "agent_id")?.to_string();
