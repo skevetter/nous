@@ -8,14 +8,32 @@ use nous_daemon::state::AppState;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub async fn run() {
-    if let Err(e) = execute().await {
+pub async fn run(tools_filter: Option<String>) {
+    if let Err(e) = execute(tools_filter).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-async fn execute() -> Result<(), Box<dyn std::error::Error>> {
+fn prefix_to_tool_prefix(prefix: &str) -> &str {
+    match prefix.trim() {
+        "chat" => "room_",
+        "task" => "task_",
+        "memory" => "memory_",
+        "agent" => "agent_",
+        "artifact" => "artifact_",
+        "worktree" => "worktree_",
+        "schedule" => "schedule_",
+        "inventory" => "inventory_",
+        other => other,
+    }
+}
+
+fn build_prefixes(filter: &str) -> Vec<&str> {
+    filter.split(',').map(prefix_to_tool_prefix).collect()
+}
+
+async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
     config.ensure_dirs()?;
 
@@ -26,6 +44,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         pool: pools.fts.clone(),
         registry: Arc::new(NotificationRegistry::new()),
     };
+
+    let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
@@ -87,6 +107,12 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 let schemas = get_tool_schemas();
                 let tools: Vec<Value> = schemas
                     .iter()
+                    .filter(|t| {
+                        match &prefixes {
+                            None => true,
+                            Some(pfs) => pfs.iter().any(|p| t.name.starts_with(p)),
+                        }
+                    })
                     .map(|t| {
                         serde_json::json!({
                             "name": t.name,

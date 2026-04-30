@@ -1664,3 +1664,328 @@ async fn mcp_artifact_register_list_deregister() {
     let resp: Value = json_body(response).await;
     assert!(resp.get("is_error").is_none());
 }
+
+// --- Tests for zero-coverage MCP tools (R4 eval) ---
+
+#[tokio::test]
+async fn mcp_room_unarchive() {
+    let (state, _tmp) = test_state().await;
+
+    // Create room
+    let room = nous_core::rooms::create_room(&state.pool, "unarch-room", None, None)
+        .await
+        .unwrap();
+
+    // Archive it (soft delete)
+    nous_core::rooms::delete_room(&state.pool, &room.id, false)
+        .await
+        .unwrap();
+
+    // Verify it is archived
+    let archived = nous_core::rooms::get_room(&state.pool, &room.id)
+        .await
+        .unwrap();
+    assert!(archived.archived);
+
+    // Unarchive via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "room_unarchive",
+                        "arguments": { "id": room.id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let unarchived: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(unarchived["archived"], false);
+}
+
+#[tokio::test]
+async fn mcp_room_mentions() {
+    let (state, _tmp) = test_state().await;
+
+    let room = nous_core::rooms::create_room(&state.pool, "mentions-room", None, None)
+        .await
+        .unwrap();
+
+    // Post messages — some mention @agent-x, some don't
+    nous_core::messages::post_message(
+        &state.pool,
+        nous_core::messages::PostMessageRequest {
+            room_id: room.id.clone(),
+            sender_id: "sender-1".into(),
+            content: "Hey @agent-x please review this".into(),
+            reply_to: None,
+            metadata: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    nous_core::messages::post_message(
+        &state.pool,
+        nous_core::messages::PostMessageRequest {
+            room_id: room.id.clone(),
+            sender_id: "sender-2".into(),
+            content: "Unrelated message".into(),
+            reply_to: None,
+            metadata: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    nous_core::messages::post_message(
+        &state.pool,
+        nous_core::messages::PostMessageRequest {
+            room_id: room.id.clone(),
+            sender_id: "sender-1".into(),
+            content: "@agent-x second mention".into(),
+            reply_to: None,
+            metadata: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Call room_mentions via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "room_mentions",
+                        "arguments": { "room_id": room.id, "agent_id": "agent-x" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let mentions: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(mentions.len(), 2);
+    assert!(mentions[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("@agent-x"));
+    assert!(mentions[1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("@agent-x"));
+}
+
+#[tokio::test]
+async fn mcp_room_inspect() {
+    let (state, _tmp) = test_state().await;
+
+    let room = nous_core::rooms::create_room(&state.pool, "inspect-room", None, None)
+        .await
+        .unwrap();
+
+    // Post some messages
+    for i in 0..3 {
+        nous_core::messages::post_message(
+            &state.pool,
+            nous_core::messages::PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-1".into(),
+                content: format!("Message {i}"),
+                reply_to: None,
+                metadata: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    // Call room_inspect via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "room_inspect",
+                        "arguments": { "id": room.id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let stats: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(stats["message_count"], 3);
+    assert!(stats["last_message_at"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn mcp_agent_bulk_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    // Register 3 agents
+    let mut ids = Vec::new();
+    for name in ["bulk-a1", "bulk-a2", "bulk-a3"] {
+        let agent = nous_core::agents::register_agent(
+            &state.pool,
+            nous_core::agents::RegisterAgentRequest {
+                name: name.into(),
+                agent_type: nous_core::agents::AgentType::Engineer,
+                parent_id: None,
+                namespace: Some("bulk-ns".into()),
+                room: None,
+                metadata: None,
+                status: None,
+            },
+        )
+        .await
+        .unwrap();
+        ids.push(agent.id);
+    }
+
+    // Bulk deregister first 2
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_bulk_deregister",
+                        "arguments": { "ids": [ids[0], ids[1]] }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let results: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(results[&ids[0]], "deleted");
+    assert_eq!(results[&ids[1]], "deleted");
+
+    // Verify only 1 remains
+    let remaining = nous_core::agents::list_agents(
+        &state.pool,
+        &nous_core::agents::ListAgentsFilter {
+            namespace: Some("bulk-ns".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, ids[2]);
+}
+
+#[tokio::test]
+async fn mcp_artifact_update() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "art-upd-owner".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Register artifact
+    let artifact = nous_core::agents::register_artifact(
+        &state.pool,
+        nous_core::agents::RegisterArtifactRequest {
+            agent_id: agent.id.clone(),
+            artifact_type: nous_core::agents::ArtifactType::Branch,
+            name: "feat/old-name".into(),
+            path: Some("/old/path".into()),
+            namespace: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Update via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "artifact_update",
+                        "arguments": {
+                            "id": artifact.id,
+                            "name": "feat/new-name",
+                            "path": "/new/path"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let updated: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(updated["name"], "feat/new-name");
+    assert_eq!(updated["path"], "/new/path");
+
+    // Verify persistence
+    let fetched = nous_core::agents::get_artifact_by_id(&state.pool, &artifact.id)
+        .await
+        .unwrap();
+    assert_eq!(fetched.name, "feat/new-name");
+    assert_eq!(fetched.path.as_deref(), Some("/new/path"));
+}

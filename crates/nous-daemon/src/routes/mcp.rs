@@ -1086,6 +1086,66 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
+            name: "memory_session_start",
+            description: "Start a new memory session (creates a session record for grouping memories)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "project": { "type": "string", "description": "Project name" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "memory_session_end",
+            description: "End an active memory session (sets ended_at)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID to end" }
+                },
+                "required": ["session_id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_session_summary",
+            description: "Save a summary to a session record and create a session_summary memory",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID" },
+                    "summary": { "type": "string", "description": "Session summary text" },
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "workspace_id": { "type": "string", "description": "Workspace ID" }
+                },
+                "required": ["session_id", "summary"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_save_prompt",
+            description: "Save a user prompt as a memory linked to the active session",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "The user prompt text" },
+                    "session_id": { "type": "string", "description": "Active session ID to link to" },
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "workspace_id": { "type": "string", "description": "Workspace ID" }
+                },
+                "required": ["prompt"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_current_project",
+            description: "Detect the current project from a directory by looking for Cargo.toml, package.json, go.mod, etc.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cwd": { "type": "string", "description": "Directory path to detect project from (defaults to '.')" }
+                }
+            }),
+        },
+        ToolSchema {
             name: "room_unarchive",
             description: "Re-activate an archived room",
             input_schema: serde_json::json!({
@@ -2236,6 +2296,40 @@ pub async fn dispatch(
             let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|f| f as f32);
             let results = memory::search_similar(&state.pool, &embedding, limit, workspace_id, threshold).await?;
             Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_session_start" => {
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str());
+            let project = args.get("project").and_then(|v| v.as_str());
+            let session = memory::session_start(&state.pool, agent_id, project).await?;
+            Ok(serde_json::to_value(session).unwrap())
+        }
+        "memory_session_end" => {
+            let session_id = require_str(args, "session_id")?;
+            let session = memory::session_end(&state.pool, session_id).await?;
+            Ok(serde_json::to_value(session).unwrap())
+        }
+        "memory_session_summary" => {
+            let session_id = require_str(args, "session_id")?;
+            let summary = require_str(args, "summary")?;
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str());
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
+            let session = memory::session_summary(&state.pool, session_id, summary, agent_id, workspace_id).await?;
+            Ok(serde_json::to_value(session).unwrap())
+        }
+        "memory_save_prompt" => {
+            let prompt = require_str(args, "prompt")?;
+            let session_id = args.get("session_id").and_then(|v| v.as_str());
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str());
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
+            let mem = memory::save_prompt(&state.pool, session_id, agent_id, workspace_id, prompt).await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_current_project" => {
+            let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
+            match memory::detect_current_project(cwd) {
+                Some(project) => Ok(serde_json::to_value(project).unwrap()),
+                None => Ok(serde_json::json!({"detected": false, "message": "no project marker found"})),
+            }
         }
         "room_unarchive" => {
             let id = require_str(args, "id")?;
