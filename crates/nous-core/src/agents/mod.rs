@@ -203,7 +203,7 @@ pub struct Agent {
 
 impl Agent {
     fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        let upgrade_flag: i32 = row.try_get("upgrade_available").unwrap_or(0);
+        let upgrade_flag: i32 = row.try_get("upgrade_available")?;
         Ok(Self {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
@@ -214,9 +214,9 @@ impl Agent {
             room: row.try_get("room")?,
             last_seen_at: row.try_get("last_seen_at")?,
             metadata_json: row.try_get("metadata_json")?,
-            current_version_id: row.try_get("current_version_id").unwrap_or(None),
+            current_version_id: row.try_get("current_version_id")?,
             upgrade_available: upgrade_flag != 0,
-            template_id: row.try_get("template_id").unwrap_or(None),
+            template_id: row.try_get("template_id")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -1174,10 +1174,7 @@ pub async fn instantiate_from_template(
 ) -> Result<Agent, NousError> {
     let template = get_template_by_id(pool, &req.template_id).await?;
 
-    let agent_type: AgentType = template
-        .template_type
-        .parse()
-        .unwrap_or(AgentType::Engineer);
+    let agent_type: AgentType = template.template_type.parse()?;
     let name = req
         .name
         .unwrap_or_else(|| format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8]));
