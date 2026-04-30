@@ -22,6 +22,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
     };
 

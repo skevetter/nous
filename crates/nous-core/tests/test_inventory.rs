@@ -525,7 +525,9 @@ async fn test_update_deleted_item_fails() {
     .unwrap();
 
     inventory::archive_item(pool, &item.id).await.unwrap();
-    inventory::deregister_item(pool, &item.id, false).await.unwrap();
+    inventory::deregister_item(pool, &item.id, false)
+        .await
+        .unwrap();
 
     let result = inventory::update_item(
         pool,
@@ -624,7 +626,9 @@ async fn test_deregister_soft() {
     .await
     .unwrap();
 
-    inventory::deregister_item(pool, &item.id, false).await.unwrap();
+    inventory::deregister_item(pool, &item.id, false)
+        .await
+        .unwrap();
 
     let fetched = inventory::get_item_by_id(pool, &item.id).await.unwrap();
     assert_eq!(fetched.status, "deleted");
@@ -652,7 +656,9 @@ async fn test_deregister_hard() {
     .await
     .unwrap();
 
-    inventory::deregister_item(pool, &item.id, true).await.unwrap();
+    inventory::deregister_item(pool, &item.id, true)
+        .await
+        .unwrap();
 
     let result = inventory::get_item_by_id(pool, &item.id).await;
     assert!(result.is_err());
@@ -1066,11 +1072,15 @@ async fn test_full_lifecycle() {
     assert_eq!(archived.status, "archived");
     assert!(archived.archived_at.is_some());
 
-    inventory::deregister_item(pool, &item.id, false).await.unwrap();
+    inventory::deregister_item(pool, &item.id, false)
+        .await
+        .unwrap();
     let deleted = inventory::get_item_by_id(pool, &item.id).await.unwrap();
     assert_eq!(deleted.status, "deleted");
 
-    inventory::deregister_item(pool, &item.id, true).await.unwrap();
+    inventory::deregister_item(pool, &item.id, true)
+        .await
+        .unwrap();
     let result = inventory::get_item_by_id(pool, &item.id).await;
     assert!(result.is_err());
 

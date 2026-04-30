@@ -132,7 +132,13 @@ pub async fn create_task(
 
     let effective_room_id = if create_room {
         let room_name = format!("task-{id}");
-        let room = rooms::create_room(pool, &room_name, Some(&format!("Discussion for task: {title}")), None).await?;
+        let room = rooms::create_room(
+            pool,
+            &room_name,
+            Some(&format!("Discussion for task: {title}")),
+            None,
+        )
+        .await?;
         Some(room.id)
     } else {
         room_id.map(String::from)
@@ -444,15 +450,13 @@ pub async fn link_tasks(
 
     let id = Uuid::now_v7().to_string();
 
-    sqlx::query(
-        "INSERT INTO task_links (id, source_id, target_id, link_type) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(source_id)
-    .bind(target_id)
-    .bind(link_type)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO task_links (id, source_id, target_id, link_type) VALUES (?, ?, ?, ?)")
+        .bind(&id)
+        .bind(source_id)
+        .bind(target_id)
+        .bind(link_type)
+        .execute(pool)
+        .await?;
 
     let event_id = Uuid::now_v7().to_string();
     sqlx::query(
@@ -561,9 +565,8 @@ pub async fn add_note(
     let row = row.ok_or_else(|| NousError::NotFound(format!("task '{task_id}' not found")))?;
     let room_id: Option<String> = row.try_get("room_id").map_err(NousError::Sqlite)?;
 
-    let room_id = room_id.ok_or_else(|| {
-        NousError::NoLinkedRoom(format!("task '{task_id}' has no linked room"))
-    })?;
+    let room_id = room_id
+        .ok_or_else(|| NousError::NoLinkedRoom(format!("task '{task_id}' has no linked room")))?;
 
     let metadata = serde_json::json!({
         "topics": [format!("task:{task_id}")]
@@ -603,13 +606,12 @@ pub async fn task_history(
 ) -> Result<Vec<TaskEvent>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
 
-    let rows = sqlx::query(
-        "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(task_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT ?")
+            .bind(task_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
 
     rows.iter()
         .map(TaskEvent::from_row)
@@ -691,7 +693,9 @@ pub async fn add_dependency(
 
     // Check for circular dependencies
     if would_create_cycle(pool, task_id, depends_on_task_id).await? {
-        return Err(NousError::Conflict("would create circular dependency".into()));
+        return Err(NousError::Conflict(
+            "would create circular dependency".into(),
+        ));
     }
 
     let id = Uuid::now_v7().to_string();
@@ -780,14 +784,15 @@ async fn would_create_cycle(
         if !visited.insert(current.clone()) {
             continue;
         }
-        let rows = sqlx::query(
-            "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?"
-        )
-        .bind(&current)
-        .fetch_all(pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?")
+                .bind(&current)
+                .fetch_all(pool)
+                .await?;
         for row in rows {
-            let dep: String = row.try_get("depends_on_task_id").map_err(NousError::Sqlite)?;
+            let dep: String = row
+                .try_get("depends_on_task_id")
+                .map_err(NousError::Sqlite)?;
             queue.push_back(dep);
         }
     }
@@ -840,10 +845,14 @@ pub async fn create_template(
     checklist: Option<&[String]>,
 ) -> Result<TaskTemplate, NousError> {
     if name.trim().is_empty() {
-        return Err(NousError::Validation("template name cannot be empty".into()));
+        return Err(NousError::Validation(
+            "template name cannot be empty".into(),
+        ));
     }
     if title_pattern.trim().is_empty() {
-        return Err(NousError::Validation("title_pattern cannot be empty".into()));
+        return Err(NousError::Validation(
+            "title_pattern cannot be empty".into(),
+        ));
     }
 
     let id = Uuid::now_v7().to_string();
@@ -884,7 +893,10 @@ pub async fn get_template(pool: &SqlitePool, id: &str) -> Result<TaskTemplate, N
     TaskTemplate::from_row(&row).map_err(NousError::Sqlite)
 }
 
-pub async fn list_templates(pool: &SqlitePool, limit: Option<u32>) -> Result<Vec<TaskTemplate>, NousError> {
+pub async fn list_templates(
+    pool: &SqlitePool,
+    limit: Option<u32>,
+) -> Result<Vec<TaskTemplate>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
     let rows = sqlx::query("SELECT * FROM task_templates ORDER BY created_at DESC LIMIT ?")
         .bind(limit)
@@ -950,10 +962,7 @@ pub struct BatchError {
     pub error: String,
 }
 
-pub async fn batch_close(
-    pool: &SqlitePool,
-    task_ids: &[String],
-) -> Result<BatchResult, NousError> {
+pub async fn batch_close(pool: &SqlitePool, task_ids: &[String]) -> Result<BatchResult, NousError> {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 

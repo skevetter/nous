@@ -17,6 +17,7 @@ async fn test_state() -> (AppState, TempDir) {
     pools.run_migrations().await.unwrap();
     let state = AppState {
         pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
     };
     (state, tmp)
@@ -95,10 +96,8 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let messages: Vec<Value> = serde_json::from_slice(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let messages: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(
         messages[0]["content"],
@@ -117,10 +116,8 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let results: Vec<Value> = serde_json::from_slice(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let results: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0]["content"]
         .as_str()
@@ -550,7 +547,10 @@ async fn mcp_full_flow_via_tool_dispatch() {
     let messages: Vec<Value> =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["content"], "MCP dispatched message about refactoring");
+    assert_eq!(
+        messages[0]["content"],
+        "MCP dispatched message about refactoring"
+    );
 
     // Search via MCP
     let response = app(state.clone())
@@ -599,7 +599,10 @@ async fn mcp_full_flow_via_tool_dispatch() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let resp: Value = json_body(response).await;
-    assert!(resp.get("is_error").is_none(), "room_delete error: {resp:?}");
+    assert!(
+        resp.get("is_error").is_none(),
+        "room_delete error: {resp:?}"
+    );
 
     // Verify room is now archived via room_get
     let response = app(state.clone())
@@ -653,7 +656,15 @@ async fn e2e_worktree_lifecycle() {
 
     // Create a real task so FK constraint is satisfied
     let task = nous_core::tasks::create_task(
-        &state.pool, "WT test task", None, None, None, None, None, false, None,
+        &state.pool,
+        "WT test task",
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
     )
     .await
     .unwrap();
@@ -1847,8 +1858,7 @@ async fn mcp_room_inspect() {
     assert_eq!(response.status(), StatusCode::OK);
     let resp: Value = json_body(response).await;
     assert!(resp.get("is_error").is_none());
-    let stats: Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let stats: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(stats["message_count"], 3);
     assert!(stats["last_message_at"].as_str().is_some());
 }

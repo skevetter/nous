@@ -177,12 +177,11 @@ pub async fn inspect_room(pool: &SqlitePool, id: &str) -> Result<RoomStats, Nous
             .fetch_one(pool)
             .await?;
 
-    let last_message_at: Option<String> = sqlx::query_scalar(
-        "SELECT MAX(created_at) FROM room_messages WHERE room_id = ?",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await?;
+    let last_message_at: Option<String> =
+        sqlx::query_scalar("SELECT MAX(created_at) FROM room_messages WHERE room_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
 
     let subscriber_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM room_subscriptions WHERE room_id = ?")

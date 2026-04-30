@@ -191,9 +191,11 @@ impl CronExpr {
     pub fn next_run(&self, after: i64) -> Option<i64> {
         let dt = chrono::DateTime::from_timestamp(after, 0)?;
         let mut current = dt.naive_utc() + chrono::Duration::minutes(1);
-        current = current
-            .date()
-            .and_time(NaiveTime::from_hms_opt(current.hour(), current.minute(), 0)?);
+        current = current.date().and_time(NaiveTime::from_hms_opt(
+            current.hour(),
+            current.minute(),
+            0,
+        )?);
 
         let limit = after + 4 * 366 * 86400;
 
@@ -220,9 +222,11 @@ impl CronExpr {
 
             if !self.minutes.contains(&current.minute()) {
                 if let Some(next_min) = self.minutes.range((current.minute() + 1)..).next() {
-                    current = current
-                        .date()
-                        .and_time(NaiveTime::from_hms_opt(current.hour(), *next_min, 0)?);
+                    current = current.date().and_time(NaiveTime::from_hms_opt(
+                        current.hour(),
+                        *next_min,
+                        0,
+                    )?);
                 } else {
                     current = Self::next_hour(current)?;
                 }

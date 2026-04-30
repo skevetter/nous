@@ -25,6 +25,7 @@ async fn main() {
 
     let state = AppState {
         pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
     };
 

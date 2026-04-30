@@ -199,9 +199,8 @@ pub async fn register_item(
             .bind(agent_id)
             .fetch_optional(pool)
             .await?;
-        let row = row.ok_or_else(|| {
-            NousError::NotFound(format!("owner agent '{agent_id}' not found"))
-        })?;
+        let row =
+            row.ok_or_else(|| NousError::NotFound(format!("owner agent '{agent_id}' not found")))?;
         let agent_ns: String = row.try_get("namespace").map_err(NousError::Sqlite)?;
         if agent_ns != namespace {
             return Err(NousError::Validation(
@@ -221,9 +220,8 @@ pub async fn register_item(
     .unwrap_or_else(|_| "[]".to_string());
 
     if let Some(ref metadata) = req.metadata {
-        serde_json::from_str::<serde_json::Value>(metadata).map_err(|e| {
-            NousError::Validation(format!("metadata must be valid JSON: {e}"))
-        })?;
+        serde_json::from_str::<serde_json::Value>(metadata)
+            .map_err(|e| NousError::Validation(format!("metadata must be valid JSON: {e}")))?;
     }
 
     sqlx::query(
@@ -340,18 +338,16 @@ pub async fn update_item(
     }
 
     if let Some(ref metadata) = req.metadata {
-        serde_json::from_str::<serde_json::Value>(metadata).map_err(|e| {
-            NousError::Validation(format!("metadata must be valid JSON: {e}"))
-        })?;
+        serde_json::from_str::<serde_json::Value>(metadata)
+            .map_err(|e| NousError::Validation(format!("metadata must be valid JSON: {e}")))?;
         sets.push("metadata = ?".to_string());
         binds.push(metadata.clone());
     }
 
     if let Some(ref tags) = req.tags {
-        let tags_json = serde_json::to_string(
-            &tags.iter().map(|t| t.to_lowercase()).collect::<Vec<_>>(),
-        )
-        .unwrap_or_else(|_| "[]".to_string());
+        let tags_json =
+            serde_json::to_string(&tags.iter().map(|t| t.to_lowercase()).collect::<Vec<_>>())
+                .unwrap_or_else(|_| "[]".to_string());
         sets.push("tags = ?".to_string());
         binds.push(tags_json);
     }
@@ -405,9 +401,7 @@ pub async fn deregister_item(pool: &SqlitePool, id: &str, hard: bool) -> Result<
             .await?;
     } else {
         if existing.status == "deleted" {
-            return Err(NousError::Validation(
-                "item is already deleted".into(),
-            ));
+            return Err(NousError::Validation("item is already deleted".into()));
         }
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
@@ -441,9 +435,7 @@ pub async fn search_by_tags(
     let mut binds: Vec<String> = Vec::new();
 
     for tag in &req.tags {
-        conditions.push(
-            "EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)".to_string(),
-        );
+        conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)".to_string());
         binds.push(tag.to_lowercase());
     }
 
@@ -486,9 +478,7 @@ pub async fn search_fts(
     limit: Option<u32>,
 ) -> Result<Vec<InventoryItem>, NousError> {
     if query_str.trim().is_empty() {
-        return Err(NousError::Validation(
-            "search query cannot be empty".into(),
-        ));
+        return Err(NousError::Validation("search query cannot be empty".into()));
     }
 
     let limit = limit.unwrap_or(20).min(100);
@@ -534,9 +524,7 @@ pub async fn transfer_ownership(
             .bind(target)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| {
-                NousError::NotFound(format!("target agent '{target}' not found"))
-            })?;
+            .ok_or_else(|| NousError::NotFound(format!("target agent '{target}' not found")))?;
 
         sqlx::query(
             "UPDATE inventory SET owner_agent_id = ? \

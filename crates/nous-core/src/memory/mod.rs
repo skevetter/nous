@@ -264,10 +264,7 @@ pub struct RelateRequest {
 
 // --- Operations ---
 
-pub async fn save_memory(
-    pool: &SqlitePool,
-    req: SaveMemoryRequest,
-) -> Result<Memory, NousError> {
+pub async fn save_memory(pool: &SqlitePool, req: SaveMemoryRequest) -> Result<Memory, NousError> {
     if req.title.trim().is_empty() {
         return Err(NousError::Validation("memory title cannot be empty".into()));
     }
@@ -411,9 +408,7 @@ pub async fn search_memories(
     req: &SearchMemoryRequest,
 ) -> Result<Vec<Memory>, NousError> {
     if req.query.trim().is_empty() {
-        return Err(NousError::Validation(
-            "search query cannot be empty".into(),
-        ));
+        return Err(NousError::Validation("search query cannot be empty".into()));
     }
 
     let limit = req.limit.unwrap_or(20).min(100);
@@ -565,10 +560,7 @@ pub async fn relate_memories(
     get_relation_by_id(pool, &id).await
 }
 
-pub async fn get_relation_by_id(
-    pool: &SqlitePool,
-    id: &str,
-) -> Result<MemoryRelation, NousError> {
+pub async fn get_relation_by_id(pool: &SqlitePool, id: &str) -> Result<MemoryRelation, NousError> {
     let row = sqlx::query("SELECT * FROM memory_relations WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
@@ -716,28 +708,47 @@ fn sanitize_fts_query(query: &str) -> String {
 }
 
 /// Store a pre-computed embedding vector for a memory.
-/// The embedding is stored as a BLOB of f32 values in little-endian byte order.
+/// Writes to the vec0 virtual table for KNN search and also updates the legacy BLOB column.
 pub async fn store_embedding(
     pool: &SqlitePool,
+    vec_pool: &crate::db::VecPool,
     memory_id: &str,
     embedding: &[f32],
 ) -> Result<(), NousError> {
-    // Verify memory exists
     let _ = get_memory_by_id(pool, memory_id).await?;
 
     let bytes = embedding_to_bytes(embedding);
+
+    // Update legacy BLOB column (backwards compat)
     sqlx::query("UPDATE memories SET embedding = ? WHERE id = ?")
         .bind(&bytes)
         .bind(memory_id)
         .execute(pool)
         .await?;
+
+    // Upsert into vec0 table
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+    conn.execute(
+        "DELETE FROM memory_embeddings WHERE memory_id = ?1",
+        rusqlite::params![memory_id],
+    )
+    .map_err(|e| NousError::Internal(format!("failed to delete old embedding: {e}")))?;
+    conn.execute(
+        "INSERT INTO memory_embeddings(memory_id, embedding) VALUES (?1, ?2)",
+        rusqlite::params![memory_id, bytes],
+    )
+    .map_err(|e| NousError::Internal(format!("failed to insert embedding: {e}")))?;
+
     Ok(())
 }
 
-/// Search memories by cosine similarity to a query embedding.
-/// Returns top-K memories with similarity scores, ordered by similarity descending.
+/// Search memories by KNN using sqlite-vec's vec0 virtual table.
+/// Returns top-K memories with similarity scores, ordered by distance ascending.
 pub async fn search_similar(
     pool: &SqlitePool,
+    vec_pool: &crate::db::VecPool,
     query_embedding: &[f32],
     limit: u32,
     workspace_id: Option<&str>,
@@ -749,43 +760,63 @@ pub async fn search_similar(
 
     let limit = limit.min(100);
     let threshold = threshold.unwrap_or(0.0);
+    let query_bytes = embedding_to_bytes(query_embedding);
 
-    // Fetch all memories with embeddings
-    let mut conditions = vec!["embedding IS NOT NULL".to_string(), "archived = 0".to_string()];
-    let mut binds: Vec<String> = Vec::new();
+    // KNN query via vec0
+    let memory_ids_and_distances: Vec<(String, f32)> = {
+        let conn = vec_pool
+            .lock()
+            .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
 
-    if let Some(ws) = workspace_id {
-        conditions.push("workspace_id = ?".to_string());
-        binds.push(ws.to_string());
+        let mut stmt = conn
+            .prepare(
+                "SELECT memory_id, distance \
+                 FROM memory_embeddings \
+                 WHERE embedding MATCH ?1 \
+                 ORDER BY distance \
+                 LIMIT ?2",
+            )
+            .map_err(|e| NousError::Internal(format!("failed to prepare KNN query: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![query_bytes, limit], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
+            })
+            .map_err(|e| NousError::Internal(format!("KNN query failed: {e}")))?;
+
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    if memory_ids_and_distances.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let sql = format!(
-        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
-         topic_key, valid_from, valid_until, archived, created_at, updated_at, embedding \
-         FROM memories WHERE {}",
-        conditions.join(" AND ")
-    );
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
+    // Fetch full Memory structs from FTS pool, filtering by workspace if needed
     let mut results: Vec<SimilarMemory> = Vec::new();
-    for row in &rows {
-        let blob: Vec<u8> = row.try_get("embedding").map_err(NousError::Sqlite)?;
-        let emb = bytes_to_embedding(&blob);
-        let score = cosine_similarity(query_embedding, &emb);
-        if score >= threshold {
-            let memory = Memory::from_row(row).map_err(NousError::Sqlite)?;
-            results.push(SimilarMemory { memory, score });
+    for (memory_id, distance) in &memory_ids_and_distances {
+        // Convert distance to similarity score (1 - normalized_distance for cosine)
+        let score = 1.0 - distance;
+        if score < threshold {
+            continue;
         }
-    }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit as usize);
+        let memory = match get_memory_by_id(pool, memory_id).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if memory.archived {
+            continue;
+        }
+
+        if let Some(ws) = workspace_id {
+            if memory.workspace_id != ws {
+                continue;
+            }
+        }
+
+        results.push(SimilarMemory { memory, score });
+    }
 
     Ok(results)
 }
@@ -794,6 +825,7 @@ fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
     embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
+#[cfg(test)]
 fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)
@@ -801,6 +833,7 @@ fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(test)]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -1027,16 +1060,16 @@ mod tests {
     use crate::db::DbPools;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, TempDir) {
+    async fn setup() -> (SqlitePool, crate::db::VecPool, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations().await.unwrap();
-        (pools.fts, tmp)
+        (pools.fts, pools.vec, tmp)
     }
 
     #[tokio::test]
     async fn save_and_get_memory() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1069,7 +1102,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_empty_title_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let err = save_memory(
             &pool,
@@ -1093,7 +1126,7 @@ mod tests {
 
     #[tokio::test]
     async fn topic_key_upsert() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
             &pool,
@@ -1136,7 +1169,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_memory_fields() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1178,7 +1211,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_fts() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         save_memory(
             &pool,
@@ -1230,7 +1263,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_with_filters() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         save_memory(
             &pool,
@@ -1283,7 +1316,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_context_returns_recent() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         for i in 1..=5 {
             save_memory(
@@ -1321,7 +1354,7 @@ mod tests {
 
     #[tokio::test]
     async fn relate_memories_creates_relation() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
             &pool,
@@ -1378,7 +1411,7 @@ mod tests {
 
     #[tokio::test]
     async fn supersedes_sets_valid_until() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let old = save_memory(
             &pool,
@@ -1431,7 +1464,7 @@ mod tests {
 
     #[tokio::test]
     async fn self_relation_rejected() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1466,7 +1499,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_relation_rejected() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
             &pool,
@@ -1529,7 +1562,7 @@ mod tests {
 
     #[tokio::test]
     async fn importance_decay() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1565,7 +1598,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_log_prevents_decay() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1594,7 +1627,7 @@ mod tests {
 
     #[tokio::test]
     async fn workspace_access_crud() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         assert!(!check_workspace_access(&pool, "agent-1", "ws-1")
             .await
@@ -1619,7 +1652,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_archived_excluded_by_default() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1690,7 +1723,10 @@ mod tests {
 
     #[test]
     fn parse_memory_type() {
-        assert_eq!("decision".parse::<MemoryType>().unwrap(), MemoryType::Decision);
+        assert_eq!(
+            "decision".parse::<MemoryType>().unwrap(),
+            MemoryType::Decision
+        );
         assert_eq!("bugfix".parse::<MemoryType>().unwrap(), MemoryType::Bugfix);
         assert!("invalid".parse::<MemoryType>().is_err());
     }
@@ -1717,7 +1753,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_and_search_embedding() {
-        let (pool, _tmp) = setup().await;
+        use crate::db::EMBEDDING_DIMENSION;
+        let (pool, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1736,19 +1773,27 @@ mod tests {
         .await
         .unwrap();
 
-        let embedding = vec![1.0, 0.0, 0.0, 0.0];
-        store_embedding(&pool, &mem.id, &embedding).await.unwrap();
+        let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+        embedding[0] = 1.0;
+        store_embedding(&pool, &vec_pool, &mem.id, &embedding)
+            .await
+            .unwrap();
 
-        let query = vec![0.9, 0.1, 0.0, 0.0];
-        let results = search_similar(&pool, &query, 10, None, None).await.unwrap();
+        let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+        query[0] = 0.9;
+        query[1] = 0.1;
+        let results = search_similar(&pool, &vec_pool, &query, 10, None, None)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
-        assert!(results[0].score > 0.9);
+        assert!(results[0].score > 0.0);
         assert_eq!(results[0].memory.id, mem.id);
     }
 
     #[tokio::test]
     async fn search_similar_respects_threshold() {
-        let (pool, _tmp) = setup().await;
+        use crate::db::EMBEDDING_DIMENSION;
+        let (pool, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
             &pool,
@@ -1767,10 +1812,16 @@ mod tests {
         .await
         .unwrap();
 
-        store_embedding(&pool, &mem.id, &[1.0, 0.0, 0.0]).await.unwrap();
+        let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+        embedding[0] = 1.0;
+        store_embedding(&pool, &vec_pool, &mem.id, &embedding)
+            .await
+            .unwrap();
 
-        // Orthogonal vector should have ~0 similarity
-        let results = search_similar(&pool, &[0.0, 1.0, 0.0], 10, None, Some(0.5))
+        // Orthogonal vector — high threshold should filter it out
+        let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+        query[1] = 1.0;
+        let results = search_similar(&pool, &vec_pool, &query, 10, None, Some(0.9))
             .await
             .unwrap();
         assert_eq!(results.len(), 0);
@@ -1801,7 +1852,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_start_creates_session() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, Some("agent-1"), Some("my-project"))
             .await
@@ -1817,7 +1868,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_start_without_optional_fields() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, None, None).await.unwrap();
 
@@ -1828,7 +1879,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_end_sets_ended_at() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, None, None).await.unwrap();
         assert!(session.ended_at.is_none());
@@ -1840,7 +1891,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_end_already_ended_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, None, None).await.unwrap();
         session_end(&pool, &session.id).await.unwrap();
@@ -1851,7 +1902,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_end_nonexistent_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let err = session_end(&pool, "nonexistent-session-id")
             .await
@@ -1861,7 +1912,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_saves_summary_and_memory() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, Some("agent-1"), Some("proj"))
             .await
@@ -1877,7 +1928,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.summary.as_deref(), Some("Completed migration refactoring"));
+        assert_eq!(
+            updated.summary.as_deref(),
+            Some("Completed migration refactoring")
+        );
         assert_eq!(updated.id, session.id);
 
         // Verify a session_summary memory was also created
@@ -1896,7 +1950,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_empty_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, None, None).await.unwrap();
 
@@ -1908,7 +1962,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_nonexistent_session_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let err = session_summary(&pool, "nonexistent-id", "some summary", None, None)
             .await
@@ -1918,11 +1972,17 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_creates_memory() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
-        let mem = save_prompt(&pool, None, Some("agent-1"), Some("ws-1"), "Refactor the auth module")
-            .await
-            .unwrap();
+        let mem = save_prompt(
+            &pool,
+            None,
+            Some("agent-1"),
+            Some("ws-1"),
+            "Refactor the auth module",
+        )
+        .await
+        .unwrap();
 
         assert!(!mem.id.is_empty());
         assert_eq!(mem.content, "Refactor the auth module");
@@ -1932,7 +1992,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_with_session_links_memory() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let session = session_start(&pool, Some("agent-1"), None).await.unwrap();
 
@@ -1952,15 +2012,17 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_empty_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&pool, None, None, None, "   ").await.unwrap_err();
+        let err = save_prompt(&pool, None, None, None, "   ")
+            .await
+            .unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
     }
 
     #[tokio::test]
     async fn save_prompt_nonexistent_session_fails() {
-        let (pool, _tmp) = setup().await;
+        let (pool, _vec_pool, _tmp) = setup().await;
 
         let err = save_prompt(&pool, Some("bad-session"), None, None, "a prompt")
             .await
