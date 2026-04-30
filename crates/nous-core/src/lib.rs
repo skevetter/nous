@@ -6,3 +6,4 @@ pub mod messages;
 pub mod notifications;
 pub mod rooms;
 pub mod tasks;
+pub mod worktrees;
