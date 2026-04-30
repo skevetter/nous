@@ -12,6 +12,7 @@ use nous_core::messages::{
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::agents;
+use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
 
@@ -516,6 +517,102 @@ pub async fn list_tools() -> impl IntoResponse {
                 }
             }),
         },
+        ToolSchema {
+            name: "schedule_create",
+            description: "Create a new schedule",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Schedule name" },
+                    "cron_expr": { "type": "string", "description": "Cron expression (5-field or @hourly/@daily/@weekly/@monthly/@yearly)" },
+                    "trigger_at": { "type": "integer", "description": "One-shot trigger timestamp (overrides cron_expr)" },
+                    "timezone": { "type": "string", "description": "Timezone (default: UTC)" },
+                    "action_type": { "type": "string", "description": "Action type: mcp_tool, shell, http" },
+                    "action_payload": { "type": "string", "description": "JSON action payload" },
+                    "desired_outcome": { "type": "string", "description": "Expected output substring or /regex/" },
+                    "max_retries": { "type": "integer", "description": "Max retry attempts (default: 3)" },
+                    "timeout_secs": { "type": "integer", "description": "Per-run timeout in seconds" },
+                    "max_runs": { "type": "integer", "description": "Max run history (default: 100, use 1 for one-shot)" }
+                },
+                "required": ["name", "cron_expr", "action_type", "action_payload"]
+            }),
+        },
+        ToolSchema {
+            name: "schedule_get",
+            description: "Get a schedule by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "schedule_list",
+            description: "List schedules with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "Filter by enabled state" },
+                    "action_type": { "type": "string", "description": "Filter by action type" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "schedule_update",
+            description: "Update a schedule",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule ID" },
+                    "name": { "type": "string", "description": "New name" },
+                    "cron_expr": { "type": "string", "description": "New cron expression" },
+                    "trigger_at": { "type": ["integer", "null"], "description": "One-shot trigger timestamp (null to clear)" },
+                    "enabled": { "type": "boolean", "description": "Enable/disable" },
+                    "action_type": { "type": "string", "description": "New action type" },
+                    "action_payload": { "type": "string", "description": "New action payload" },
+                    "desired_outcome": { "type": ["string", "null"], "description": "Expected output (null to clear)" },
+                    "max_retries": { "type": "integer", "description": "New max retries" },
+                    "timeout_secs": { "type": "integer", "description": "New timeout" },
+                    "max_runs": { "type": "integer", "description": "New max runs" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "schedule_delete",
+            description: "Delete a schedule",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Schedule ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "schedule_runs_list",
+            description: "List runs for a schedule",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "schedule_id": { "type": "string", "description": "Schedule ID" },
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["schedule_id"]
+            }),
+        },
+        ToolSchema {
+            name: "schedule_health",
+            description: "Get schedule health overview",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
     ];
 
     Json(serde_json::json!({ "tools": tools }))
@@ -1003,6 +1100,104 @@ async fn dispatch(
             )
             .await?;
             Ok(serde_json::to_value(artifacts).unwrap())
+        }
+        "schedule_create" => {
+            let clock = schedules::SystemClock;
+            let name = require_str(args, "name")?;
+            let cron_expr = require_str(args, "cron_expr")?;
+            let action_type = require_str(args, "action_type")?;
+            let action_payload = require_str(args, "action_payload")?;
+            let trigger_at = args.get("trigger_at").and_then(|v| v.as_i64());
+            let timezone = args.get("timezone").and_then(|v| v.as_str());
+            let desired_outcome = args.get("desired_outcome").and_then(|v| v.as_str());
+            let max_retries = args.get("max_retries").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let max_runs = args.get("max_runs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let schedule = schedules::create_schedule(
+                &state.pool,
+                name,
+                cron_expr,
+                trigger_at,
+                timezone,
+                action_type,
+                action_payload,
+                desired_outcome,
+                max_retries,
+                timeout_secs,
+                None,
+                max_runs,
+                &clock,
+            )
+            .await?;
+            Ok(serde_json::to_value(schedule).unwrap())
+        }
+        "schedule_get" => {
+            let id = require_str(args, "id")?;
+            let schedule = schedules::get_schedule(&state.pool, id).await?;
+            Ok(serde_json::to_value(schedule).unwrap())
+        }
+        "schedule_list" => {
+            let enabled = args.get("enabled").and_then(|v| v.as_bool());
+            let action_type = args.get("action_type").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let list = schedules::list_schedules(&state.pool, enabled, action_type, limit).await?;
+            Ok(serde_json::to_value(list).unwrap())
+        }
+        "schedule_update" => {
+            let clock = schedules::SystemClock;
+            let id = require_str(args, "id")?;
+            let name = args.get("name").and_then(|v| v.as_str());
+            let cron_expr = args.get("cron_expr").and_then(|v| v.as_str());
+            let trigger_at = if args.get("trigger_at").is_some() {
+                let val = args["trigger_at"].as_i64();
+                Some(val)
+            } else {
+                None
+            };
+            let enabled = args.get("enabled").and_then(|v| v.as_bool());
+            let action_type = args.get("action_type").and_then(|v| v.as_str());
+            let action_payload = args.get("action_payload").and_then(|v| v.as_str());
+            let desired_outcome = if args.get("desired_outcome").is_some() {
+                Some(args["desired_outcome"].as_str())
+            } else {
+                None
+            };
+            let max_retries = args.get("max_retries").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let max_runs = args.get("max_runs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let schedule = schedules::update_schedule(
+                &state.pool,
+                id,
+                name,
+                cron_expr,
+                trigger_at,
+                enabled,
+                action_type,
+                action_payload,
+                desired_outcome,
+                max_retries,
+                timeout_secs.map(Some),
+                max_runs,
+                &clock,
+            )
+            .await?;
+            Ok(serde_json::to_value(schedule).unwrap())
+        }
+        "schedule_delete" => {
+            let id = require_str(args, "id")?;
+            schedules::delete_schedule(&state.pool, id).await?;
+            Ok(serde_json::json!({"deleted": true}))
+        }
+        "schedule_runs_list" => {
+            let schedule_id = require_str(args, "schedule_id")?;
+            let status = args.get("status").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let runs = schedules::list_runs(&state.pool, schedule_id, status, limit).await?;
+            Ok(serde_json::to_value(runs).unwrap())
+        }
+        "schedule_health" => {
+            let health = schedules::schedule_health(&state.pool).await?;
+            Ok(health)
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

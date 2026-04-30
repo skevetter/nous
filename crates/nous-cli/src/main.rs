@@ -5,6 +5,7 @@ mod commands;
 use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
+use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
 
@@ -39,6 +40,11 @@ enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
+    /// Schedule management operations
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCommands,
+    },
     /// Git worktree operations
     Worktree {
         #[command(subcommand)]
@@ -71,6 +77,9 @@ async fn main() {
         }
         Commands::Task { command } => {
             commands::task::run(command).await;
+        }
+        Commands::Schedule { command } => {
+            commands::schedule::run(command).await;
         }
         Commands::Worktree { command } => {
             commands::worktree::run(command).await;
