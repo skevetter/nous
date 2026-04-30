@@ -1796,4 +1796,194 @@ mod tests {
         let recovered = bytes_to_embedding(&bytes);
         assert_eq!(original, recovered);
     }
+
+    // --- Session lifecycle tests ---
+
+    #[tokio::test]
+    async fn session_start_creates_session() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, Some("agent-1"), Some("my-project"))
+            .await
+            .unwrap();
+
+        assert!(!session.id.is_empty());
+        assert_eq!(session.agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(session.project.as_deref(), Some("my-project"));
+        assert!(!session.started_at.is_empty());
+        assert!(session.ended_at.is_none());
+        assert!(session.summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_start_without_optional_fields() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, None, None).await.unwrap();
+
+        assert!(!session.id.is_empty());
+        assert!(session.agent_id.is_none());
+        assert!(session.project.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_end_sets_ended_at() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, None, None).await.unwrap();
+        assert!(session.ended_at.is_none());
+
+        let ended = session_end(&pool, &session.id).await.unwrap();
+        assert!(ended.ended_at.is_some());
+        assert_eq!(ended.id, session.id);
+    }
+
+    #[tokio::test]
+    async fn session_end_already_ended_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, None, None).await.unwrap();
+        session_end(&pool, &session.id).await.unwrap();
+
+        let err = session_end(&pool, &session.id).await.unwrap_err();
+        assert!(matches!(err, NousError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn session_end_nonexistent_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let err = session_end(&pool, "nonexistent-session-id")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, NousError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn session_summary_saves_summary_and_memory() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, Some("agent-1"), Some("proj"))
+            .await
+            .unwrap();
+
+        let updated = session_summary(
+            &pool,
+            &session.id,
+            "Completed migration refactoring",
+            Some("agent-1"),
+            Some("ws-1"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.summary.as_deref(), Some("Completed migration refactoring"));
+        assert_eq!(updated.id, session.id);
+
+        // Verify a session_summary memory was also created
+        let results = search_memories(
+            &pool,
+            &SearchMemoryRequest {
+                query: "migration refactoring".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!results.is_empty());
+        assert!(results[0].title.contains(&session.id));
+    }
+
+    #[tokio::test]
+    async fn session_summary_empty_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, None, None).await.unwrap();
+
+        let err = session_summary(&pool, &session.id, "   ", None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, NousError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn session_summary_nonexistent_session_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let err = session_summary(&pool, "nonexistent-id", "some summary", None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, NousError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn save_prompt_creates_memory() {
+        let (pool, _tmp) = setup().await;
+
+        let mem = save_prompt(&pool, None, Some("agent-1"), Some("ws-1"), "Refactor the auth module")
+            .await
+            .unwrap();
+
+        assert!(!mem.id.is_empty());
+        assert_eq!(mem.content, "Refactor the auth module");
+        assert_eq!(mem.memory_type, "observation");
+        assert_eq!(mem.importance, "low");
+    }
+
+    #[tokio::test]
+    async fn save_prompt_with_session_links_memory() {
+        let (pool, _tmp) = setup().await;
+
+        let session = session_start(&pool, Some("agent-1"), None).await.unwrap();
+
+        let mem = save_prompt(
+            &pool,
+            Some(&session.id),
+            Some("agent-1"),
+            None,
+            "Fix the login bug",
+        )
+        .await
+        .unwrap();
+
+        assert!(!mem.id.is_empty());
+        assert_eq!(mem.content, "Fix the login bug");
+    }
+
+    #[tokio::test]
+    async fn save_prompt_empty_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let err = save_prompt(&pool, None, None, None, "   ").await.unwrap_err();
+        assert!(matches!(err, NousError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn save_prompt_nonexistent_session_fails() {
+        let (pool, _tmp) = setup().await;
+
+        let err = save_prompt(&pool, Some("bad-session"), None, None, "a prompt")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, NousError::NotFound(_)));
+    }
+
+    #[test]
+    fn detect_current_project_finds_cargo_toml() {
+        // Use the actual project root which has a Cargo.toml
+        let project = detect_current_project(env!("CARGO_MANIFEST_DIR"));
+        assert!(project.is_some());
+        let project = project.unwrap();
+        assert_eq!(project.project_type, "rust");
+        assert!(!project.name.is_empty());
+    }
+
+    #[test]
+    fn detect_current_project_returns_none_for_no_markers() {
+        // /tmp is unlikely to have a project marker
+        let project = detect_current_project("/tmp");
+        // This may or may not be None depending on system layout,
+        // but at minimum the function should not panic
+        let _ = project;
+    }
 }

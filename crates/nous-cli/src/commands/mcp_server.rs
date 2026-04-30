@@ -138,6 +138,23 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
 
+                // Enforce --tools filter: reject calls to tools not in the allowed set
+                if let Some(ref pfs) = prefixes {
+                    if !pfs.iter().any(|p| tool_name.starts_with(p)) {
+                        let out = serde_json::to_string(&serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32601,
+                                "message": format!("tool not available: {tool_name}")
+                            }
+                        }))? + "\n";
+                        stdout.write_all(out.as_bytes()).await?;
+                        stdout.flush().await?;
+                        continue;
+                    }
+                }
+
                 match dispatch(&state, tool_name, &arguments).await {
                     Ok(result) => {
                         serde_json::json!({
@@ -185,4 +202,107 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
 
     pools.close().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nous_daemon::routes::mcp::get_tool_schemas;
+
+    #[test]
+    fn prefix_mapping_known_categories() {
+        assert_eq!(prefix_to_tool_prefix("chat"), "room_");
+        assert_eq!(prefix_to_tool_prefix("task"), "task_");
+        assert_eq!(prefix_to_tool_prefix("memory"), "memory_");
+        assert_eq!(prefix_to_tool_prefix("agent"), "agent_");
+        assert_eq!(prefix_to_tool_prefix("artifact"), "artifact_");
+        assert_eq!(prefix_to_tool_prefix("worktree"), "worktree_");
+        assert_eq!(prefix_to_tool_prefix("schedule"), "schedule_");
+        assert_eq!(prefix_to_tool_prefix("inventory"), "inventory_");
+    }
+
+    #[test]
+    fn prefix_mapping_unknown_passthrough() {
+        assert_eq!(prefix_to_tool_prefix("custom_"), "custom_");
+        assert_eq!(prefix_to_tool_prefix("foo"), "foo");
+    }
+
+    #[test]
+    fn build_prefixes_single() {
+        let prefixes = build_prefixes("chat");
+        assert_eq!(prefixes, vec!["room_"]);
+    }
+
+    #[test]
+    fn build_prefixes_multiple() {
+        let prefixes = build_prefixes("chat,task");
+        assert_eq!(prefixes, vec!["room_", "task_"]);
+    }
+
+    #[test]
+    fn tools_list_filter_with_chat_task_returns_only_matching() {
+        let schemas = get_tool_schemas();
+        let prefixes = build_prefixes("chat,task");
+
+        let filtered: Vec<_> = schemas
+            .iter()
+            .filter(|t| prefixes.iter().any(|p| t.name.starts_with(p)))
+            .collect();
+
+        assert!(!filtered.is_empty());
+        for tool in &filtered {
+            assert!(
+                tool.name.starts_with("room_") || tool.name.starts_with("task_"),
+                "unexpected tool in filtered set: {}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn tools_list_no_filter_returns_all() {
+        let schemas = get_tool_schemas();
+        // Without filter, all tools should be present
+        assert!(schemas.len() >= 50, "expected many tools, got {}", schemas.len());
+
+        // Verify multiple categories are present
+        let has_room = schemas.iter().any(|t| t.name.starts_with("room_"));
+        let has_task = schemas.iter().any(|t| t.name.starts_with("task_"));
+        let has_memory = schemas.iter().any(|t| t.name.starts_with("memory_"));
+        let has_agent = schemas.iter().any(|t| t.name.starts_with("agent_"));
+        assert!(has_room, "missing room_ tools");
+        assert!(has_task, "missing task_ tools");
+        assert!(has_memory, "missing memory_ tools");
+        assert!(has_agent, "missing agent_ tools");
+    }
+
+    #[test]
+    fn tools_call_filter_rejects_non_matching_tool() {
+        // Simulate the filter check that happens in the tools/call handler
+        let prefixes = build_prefixes("chat,task");
+        let tool_name = "memory_save";
+
+        let allowed = prefixes.iter().any(|p| tool_name.starts_with(p));
+        assert!(!allowed, "memory_save should be rejected when filter is chat,task");
+    }
+
+    #[test]
+    fn tools_call_filter_allows_matching_tool() {
+        let prefixes = build_prefixes("chat,task");
+
+        assert!(prefixes.iter().any(|p| "room_create".starts_with(p)));
+        assert!(prefixes.iter().any(|p| "task_create".starts_with(p)));
+    }
+
+    #[test]
+    fn tools_call_no_filter_allows_everything() {
+        let prefixes: Option<Vec<&str>> = None;
+        let tool_name = "memory_save";
+
+        let allowed = match &prefixes {
+            None => true,
+            Some(pfs) => pfs.iter().any(|p| tool_name.starts_with(p)),
+        };
+        assert!(allowed, "with no filter, all tools should be allowed");
+    }
 }
