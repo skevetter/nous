@@ -25,6 +25,19 @@ async fn test_state() -> (AppState, TempDir) {
     (state, tmp)
 }
 
+async fn test_state_no_embedder() -> (AppState, TempDir) {
+    let tmp = TempDir::new().unwrap();
+    let pools = DbPools::connect(tmp.path()).await.unwrap();
+    pools.run_migrations("porter unicode61").await.unwrap();
+    let state = AppState {
+        pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
+        registry: Arc::new(NotificationRegistry::new()),
+        embedder: None,
+    };
+    (state, tmp)
+}
+
 async fn json_body(response: axum::http::Response<Body>) -> Value {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&body).unwrap()
@@ -2000,4 +2013,68 @@ async fn mcp_artifact_update() {
         .unwrap();
     assert_eq!(fetched.name, "feat/new-name");
     assert_eq!(fetched.path.as_deref(), Some("/new/path"));
+}
+
+#[tokio::test]
+async fn memory_search_hybrid_falls_back_to_fts5_when_no_embedder() {
+    let (state, _tmp) = test_state_no_embedder().await;
+
+    // Save a memory via MCP so FTS5 has something to find
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "memory_save",
+                        "arguments": {
+                            "title": "Hybrid fallback test memory",
+                            "content": "This memory tests that hybrid search gracefully degrades to FTS5",
+                            "type": "fact"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Now search via hybrid — embedder is None so should fall back to FTS5
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "memory_search_hybrid",
+                        "arguments": { "query": "hybrid fallback" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    // MCP response wraps in content blocks
+    let text = resp["content"][0]["text"].as_str().unwrap();
+    let body: Value = serde_json::from_str(text).unwrap();
+
+    // Should have results (FTS5 found our memory)
+    let results = body["results"].as_array().unwrap();
+    assert!(!results.is_empty(), "FTS5 fallback should return results");
+
+    // Should include the warning
+    assert_eq!(
+        body["_warning"].as_str().unwrap(),
+        "embedding unavailable, fell back to FTS5-only search"
+    );
 }

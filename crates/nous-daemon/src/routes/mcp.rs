@@ -2638,20 +2638,6 @@ pub async fn dispatch(
         }
         "memory_search_hybrid" => {
             let query = require_str(args, "query")?;
-            let embedder = state.embedder.as_ref().ok_or_else(|| {
-                nous_core::error::NousError::Internal(
-                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
-                )
-            })?;
-            let query_embedding =
-                embedder
-                    .embed(&[query])?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        nous_core::error::NousError::Internal("embedder returned no results".into())
-                    })?;
-
             let limit = args
                 .get("limit")
                 .and_then(|v| v.as_u64())
@@ -2672,32 +2658,72 @@ pub async fn dispatch(
                     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
                 });
 
+            let query_embedding = state
+                .embedder
+                .as_ref()
+                .and_then(|embedder| embedder.embed(&[query]).ok())
+                .and_then(|mut vecs| vecs.pop());
+
             let start = std::time::Instant::now();
-            let results = memory::search_hybrid_filtered(
-                &state.pool,
-                &state.vec_pool,
-                query,
-                &query_embedding,
-                limit,
-                workspace_id.as_deref(),
-                agent_id.as_deref(),
-                memory_type,
-            )
-            .await?;
-            let latency_ms = start.elapsed().as_millis() as i64;
-            let _ = memory::analytics::record_search_event(
-                &state.pool,
-                &memory::analytics::SearchEvent {
-                    query_text: query.to_string(),
-                    search_type: "hybrid".to_string(),
-                    result_count: results.len() as i64,
-                    latency_ms,
-                    workspace_id,
-                    agent_id,
-                },
-            )
-            .await;
-            Ok(serde_json::to_value(results).unwrap())
+
+            if let Some(embedding) = query_embedding {
+                let results = memory::search_hybrid_filtered(
+                    &state.pool,
+                    &state.vec_pool,
+                    query,
+                    &embedding,
+                    limit,
+                    workspace_id.as_deref(),
+                    agent_id.as_deref(),
+                    memory_type,
+                )
+                .await?;
+                let latency_ms = start.elapsed().as_millis() as i64;
+                let _ = memory::analytics::record_search_event(
+                    &state.pool,
+                    &memory::analytics::SearchEvent {
+                        query_text: query.to_string(),
+                        search_type: "hybrid".to_string(),
+                        result_count: results.len() as i64,
+                        latency_ms,
+                        workspace_id,
+                        agent_id,
+                    },
+                )
+                .await;
+                Ok(serde_json::to_value(results).unwrap())
+            } else {
+                let fts_results = memory::search_memories(
+                    &state.pool,
+                    &memory::SearchMemoryRequest {
+                        query: query.to_string(),
+                        workspace_id: workspace_id.clone(),
+                        agent_id: agent_id.clone(),
+                        memory_type,
+                        importance: None,
+                        include_archived: false,
+                        limit: Some(limit as u32),
+                    },
+                )
+                .await?;
+                let latency_ms = start.elapsed().as_millis() as i64;
+                let _ = memory::analytics::record_search_event(
+                    &state.pool,
+                    &memory::analytics::SearchEvent {
+                        query_text: query.to_string(),
+                        search_type: "fts5_fallback".to_string(),
+                        result_count: fts_results.len() as i64,
+                        latency_ms,
+                        workspace_id,
+                        agent_id,
+                    },
+                )
+                .await;
+                Ok(serde_json::json!({
+                    "results": fts_results,
+                    "_warning": "embedding unavailable, fell back to FTS5-only search"
+                }))
+            }
         }
         "memory_store_with_embedding" => {
             let memory_id = require_str(args, "memory_id")?;
