@@ -17,6 +17,12 @@ pub enum NousError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] sqlx::Error),
 
+    #[error("cyclic link detected: {0}")]
+    CyclicLink(String),
+
+    #[error("no linked room: {0}")]
+    NoLinkedRoom(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

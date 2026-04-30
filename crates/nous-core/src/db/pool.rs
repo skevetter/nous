@@ -61,6 +61,64 @@ const MIGRATIONS: &[Migration] = &[
               PRIMARY KEY (room_id, agent_id)\
               );",
     },
+    Migration {
+        version: "006",
+        name: "tasks",
+        sql: "CREATE TABLE IF NOT EXISTS tasks (\
+              id TEXT PRIMARY KEY, \
+              title TEXT NOT NULL, \
+              description TEXT, \
+              status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','done','closed')), \
+              priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('critical','high','medium','low')), \
+              assignee_id TEXT, \
+              labels TEXT, \
+              room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              closed_at TEXT\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status); \
+              CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id); \
+              CREATE INDEX IF NOT EXISTS idx_tasks_room ON tasks(room_id); \
+              CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);",
+    },
+    Migration {
+        version: "007",
+        name: "task_links",
+        sql: "CREATE TABLE IF NOT EXISTS task_links (\
+              id TEXT PRIMARY KEY, \
+              source_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, \
+              target_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, \
+              link_type TEXT NOT NULL CHECK(link_type IN ('blocked_by','parent','related_to')), \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              UNIQUE(source_id, target_id, link_type)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_task_links_source ON task_links(source_id); \
+              CREATE INDEX IF NOT EXISTS idx_task_links_target ON task_links(target_id);",
+    },
+    Migration {
+        version: "008",
+        name: "task_events",
+        sql: "CREATE TABLE IF NOT EXISTS task_events (\
+              id TEXT PRIMARY KEY, \
+              task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, \
+              event_type TEXT NOT NULL CHECK(event_type IN ('created','status_changed','assigned','priority_changed','linked','unlinked','note_added')), \
+              old_value TEXT, \
+              new_value TEXT, \
+              actor_id TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);",
+    },
+    Migration {
+        version: "009",
+        name: "tasks_fts",
+        sql: "CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS tasks_fts_insert AFTER INSERT ON tasks BEGIN INSERT INTO tasks_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || COALESCE(NEW.description, '')); END; \
+              CREATE TRIGGER IF NOT EXISTS tasks_fts_delete AFTER DELETE ON tasks BEGIN INSERT INTO tasks_fts(tasks_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.title || ' ' || COALESCE(OLD.description, '')); END; \
+              CREATE TRIGGER IF NOT EXISTS tasks_fts_update AFTER UPDATE ON tasks BEGIN INSERT INTO tasks_fts(tasks_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.title || ' ' || COALESCE(OLD.description, '')); INSERT INTO tasks_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || COALESCE(NEW.description, '')); END; \
+              CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN UPDATE tasks SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
+    },
 ];
 
 struct Migration {
