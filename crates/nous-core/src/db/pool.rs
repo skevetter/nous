@@ -119,6 +119,28 @@ const MIGRATIONS: &[Migration] = &[
               CREATE TRIGGER IF NOT EXISTS tasks_fts_update AFTER UPDATE ON tasks WHEN NEW.title != OLD.title OR IFNULL(NEW.description, '') != IFNULL(OLD.description, '') BEGIN DELETE FROM tasks_fts WHERE rowid = OLD.rowid; INSERT INTO tasks_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || COALESCE(NEW.description, '')); END; \
               CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE tasks SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
     },
+    Migration {
+        version: "010",
+        name: "worktrees",
+        sql: "CREATE TABLE IF NOT EXISTS worktrees (\
+              id TEXT PRIMARY KEY, \
+              slug TEXT NOT NULL, \
+              path TEXT NOT NULL, \
+              branch TEXT NOT NULL, \
+              repo_root TEXT NOT NULL, \
+              agent_id TEXT, \
+              task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL, \
+              status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale','archived','deleted')), \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              UNIQUE(slug, repo_root)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_worktrees_agent ON worktrees(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_worktrees_task ON worktrees(task_id); \
+              CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status); \
+              CREATE INDEX IF NOT EXISTS idx_worktrees_branch ON worktrees(branch); \
+              CREATE TRIGGER IF NOT EXISTS worktrees_au AFTER UPDATE ON worktrees WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE worktrees SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
+    },
 ];
 
 struct Migration {
