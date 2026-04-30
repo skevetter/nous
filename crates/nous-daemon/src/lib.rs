@@ -24,6 +24,22 @@ pub fn app(state: AppState) -> Router {
         .route("/tasks/{id}/note", post(routes::tasks::add_note))
         .route("/tasks/link", post(routes::tasks::link))
         .route("/tasks/unlink", post(routes::tasks::unlink))
+        .route(
+            "/worktrees",
+            post(routes::worktrees::create).get(routes::worktrees::list),
+        )
+        .route(
+            "/worktrees/{id}",
+            get(routes::worktrees::get).delete(routes::worktrees::delete),
+        )
+        .route(
+            "/worktrees/{id}/status",
+            axum::routing::patch(routes::worktrees::update_status),
+        )
+        .route(
+            "/worktrees/{id}/archive",
+            post(routes::worktrees::archive),
+        )
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
@@ -328,7 +344,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 24);
     }
 
     #[tokio::test]

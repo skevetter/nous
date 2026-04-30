@@ -6,6 +6,7 @@ use nous_core::notifications::NotificationRegistry;
 use nous_daemon::app;
 use nous_daemon::state::AppState;
 use serde_json::{json, Value};
+use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -625,4 +626,343 @@ async fn mcp_full_flow_via_tool_dispatch() {
     let room_after: Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(room_after["archived"], true);
+}
+
+fn init_temp_git_repo() -> TempDir {
+    let repo_dir = TempDir::new().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .current_dir(repo_dir.path())
+        .output()
+        .unwrap();
+    repo_dir
+}
+
+// --- Worktree HTTP route tests ---
+
+#[tokio::test]
+async fn e2e_worktree_lifecycle() {
+    let (state, _tmp) = test_state().await;
+    let repo_dir = init_temp_git_repo();
+    let repo_root = repo_dir.path().to_str().unwrap();
+
+    // Create a real task so FK constraint is satisfied
+    let task = nous_core::tasks::create_task(
+        &state.pool, "WT test task", None, None, None, None, None, false, None,
+    )
+    .await
+    .unwrap();
+
+    // 1. Create worktree
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/worktrees")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "branch": "feat/wt-test",
+                        "slug": "wt-test",
+                        "repo_root": repo_root,
+                        "agent_id": "agent-1",
+                        "task_id": task.id
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let wt: Value = json_body(response).await;
+    assert_eq!(status, StatusCode::CREATED, "body: {wt}");
+    assert_eq!(wt["branch"], "feat/wt-test");
+    assert_eq!(wt["slug"], "wt-test");
+    assert_eq!(wt["status"], "active");
+    assert_eq!(wt["agent_id"], "agent-1");
+    assert_eq!(wt["task_id"], task.id);
+    let wt_id = wt["id"].as_str().unwrap().to_string();
+
+    // 2. List worktrees
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/worktrees")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let wts: Vec<Value> =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(wts.len(), 1);
+    assert_eq!(wts[0]["slug"], "wt-test");
+
+    // 3. Get worktree by ID
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/worktrees/{wt_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let fetched: Value = json_body(response).await;
+    assert_eq!(fetched["id"], wt_id);
+    assert_eq!(fetched["branch"], "feat/wt-test");
+
+    // 4. Update status
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/worktrees/{wt_id}/status"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({ "status": "stale" })).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated: Value = json_body(response).await;
+    assert_eq!(updated["status"], "stale");
+
+    // 5. Archive
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/worktrees/{wt_id}/archive"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let archived: Value = json_body(response).await;
+    assert_eq!(archived["status"], "archived");
+
+    // 6. Get — verify archived
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/worktrees/{wt_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let after_archive: Value = json_body(response).await;
+    assert_eq!(after_archive["status"], "archived");
+
+    // 7. Delete
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/worktrees/{wt_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // 8. Get — verify deleted
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/worktrees/{wt_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let after_delete: Value = json_body(response).await;
+    assert_eq!(after_delete["status"], "deleted");
+}
+
+#[tokio::test]
+async fn error_create_worktree_empty_branch() {
+    let (state, _tmp) = test_state().await;
+    let repo_dir = init_temp_git_repo();
+    let repo_root = repo_dir.path().to_str().unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/worktrees")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "branch": "",
+                        "repo_root": repo_root
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = json_body(response).await;
+    assert!(body["error"].as_str().unwrap().contains("empty"));
+}
+
+#[tokio::test]
+async fn error_get_nonexistent_worktree() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri("/worktrees/nonexistent-wt-id")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Worktree MCP tool tests ---
+
+#[tokio::test]
+async fn mcp_worktree_lifecycle() {
+    let (state, _tmp) = test_state().await;
+    let repo_dir = init_temp_git_repo();
+    let repo_root = repo_dir.path().to_str().unwrap();
+
+    // worktree_create
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "worktree_create",
+                        "arguments": {
+                            "branch": "feat/mcp-wt",
+                            "slug": "mcp-wt",
+                            "repo_root": repo_root
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let wt: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(wt["branch"], "feat/mcp-wt");
+    assert_eq!(wt["slug"], "mcp-wt");
+    let wt_id = wt["id"].as_str().unwrap();
+
+    // worktree_list
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "worktree_list",
+                        "arguments": {}
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let wts: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(wts.len(), 1);
+
+    // worktree_get
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "worktree_get",
+                        "arguments": { "id": wt_id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let fetched: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(fetched["slug"], "mcp-wt");
+
+    // worktree_archive
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "worktree_archive",
+                        "arguments": { "id": wt_id }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let archived: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(archived["status"], "archived");
 }

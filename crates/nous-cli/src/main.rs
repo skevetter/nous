@@ -4,6 +4,7 @@ mod commands;
 
 use commands::chat::ChatCommands;
 use commands::task::TaskCommands;
+use commands::worktree::WorktreeCommands;
 
 #[derive(Parser)]
 #[command(name = "nous", about = "The nous platform CLI")]
@@ -26,6 +27,11 @@ enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
+    /// Git worktree operations
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommands,
+    },
     /// Start the HTTP daemon
     Serve,
 }
@@ -47,6 +53,9 @@ async fn main() {
         }
         Commands::Task { command } => {
             commands::task::run(command).await;
+        }
+        Commands::Worktree { command } => {
+            commands::worktree::run(command).await;
         }
         Commands::Serve => {
             commands::serve::run().await;
