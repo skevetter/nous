@@ -4,6 +4,7 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::NousError;
+use crate::notifications::{Notification, NotificationRegistry};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -67,6 +68,7 @@ pub struct SearchMessagesRequest {
 pub async fn post_message(
     pool: &SqlitePool,
     request: PostMessageRequest,
+    registry: Option<&NotificationRegistry>,
 ) -> Result<Message, NousError> {
     if request.content.trim().is_empty() {
         return Err(NousError::Validation(
@@ -108,7 +110,50 @@ pub async fn post_message(
         .fetch_one(pool)
         .await?;
 
-    Message::from_row(&row).map_err(NousError::Sqlite)
+    let message = Message::from_row(&row).map_err(NousError::Sqlite)?;
+
+    if let Some(registry) = registry {
+        let (topics, mentions) = extract_topics_mentions(&request.metadata);
+        registry
+            .notify(Notification {
+                room_id: message.room_id.clone(),
+                message_id: message.id.clone(),
+                sender_id: message.sender_id.clone(),
+                topics,
+                mentions,
+            })
+            .await;
+    }
+
+    Ok(message)
+}
+
+fn extract_topics_mentions(metadata: &Option<serde_json::Value>) -> (Vec<String>, Vec<String>) {
+    let Some(meta) = metadata else {
+        return (vec![], vec![]);
+    };
+
+    let topics = meta
+        .get("topics")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mentions = meta
+        .get("mentions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    (topics, mentions)
 }
 
 pub async fn read_messages(
@@ -241,6 +286,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -267,6 +313,7 @@ mod tests {
                     reply_to: None,
                     metadata: None,
                 },
+                None,
             )
             .await
             .unwrap();
@@ -304,6 +351,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -317,6 +365,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -330,6 +379,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -366,6 +416,7 @@ mod tests {
                     reply_to: None,
                     metadata: None,
                 },
+                None,
             )
             .await
             .unwrap();
@@ -402,6 +453,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -415,6 +467,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -428,6 +481,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await
         .unwrap();
@@ -460,6 +514,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await;
 
@@ -480,6 +535,7 @@ mod tests {
                 reply_to: None,
                 metadata: None,
             },
+            None,
         )
         .await;
 
