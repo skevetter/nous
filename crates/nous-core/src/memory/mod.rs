@@ -328,10 +328,14 @@ pub async fn save_memory(pool: &SqlitePool, req: SaveMemoryRequest) -> Result<Me
 }
 
 pub async fn get_memory_by_id(pool: &SqlitePool, id: &str) -> Result<Memory, NousError> {
-    let row = sqlx::query("SELECT * FROM memories WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
+         topic_key, valid_from, valid_until, archived, created_at, updated_at \
+         FROM memories WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
 
     let row = row.ok_or_else(|| NousError::NotFound(format!("memory '{id}' not found")))?;
     Memory::from_row(&row).map_err(NousError::Sqlite)
@@ -447,7 +451,9 @@ pub async fn search_memories(
     };
 
     let sql = format!(
-        "SELECT m.* FROM memories m \
+        "SELECT m.id, m.workspace_id, m.agent_id, m.title, m.content, m.memory_type, \
+         m.importance, m.topic_key, m.valid_from, m.valid_until, m.archived, \
+         m.created_at, m.updated_at FROM memories m \
          INNER JOIN memories_fts f ON f.rowid = m.rowid \
          WHERE memories_fts MATCH ?{} \
          ORDER BY rank \
@@ -497,7 +503,9 @@ pub async fn get_context(
     }
 
     let sql = format!(
-        "SELECT * FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?",
+        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
+         topic_key, valid_from, valid_until, archived, created_at, updated_at \
+         FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?",
         conditions.join(" AND ")
     );
     binds.push(limit.to_string());

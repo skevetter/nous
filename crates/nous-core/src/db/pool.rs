@@ -441,20 +441,32 @@ impl DbPools {
 }
 
 pub fn create_vec_pool(path: &Path) -> Result<VecPool, NousError> {
-    unsafe {
-        #[allow(clippy::missing_transmute_annotations)]
-        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-            sqlite_vec::sqlite3_vec_init as *const (),
-        )));
-    }
-
     let conn = Connection::open(path)
         .map_err(|e| NousError::Internal(format!("failed to open vec db: {e}")))?;
+
+    unsafe {
+        let db = conn.handle();
+        let rc = sqlite3_vec_init(db, std::ptr::null_mut(), std::ptr::null());
+        if rc != rusqlite::ffi::SQLITE_OK {
+            return Err(NousError::Internal(format!(
+                "failed to load sqlite-vec: rc={rc}"
+            )));
+        }
+    }
 
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
         .map_err(|e| NousError::Internal(format!("failed to set vec db pragmas: {e}")))?;
 
     Ok(Arc::new(Mutex::new(conn)))
+}
+
+#[link(name = "sqlite_vec0")]
+extern "C" {
+    fn sqlite3_vec_init(
+        db: *mut rusqlite::ffi::sqlite3,
+        pz_err_msg: *mut *mut std::ffi::c_char,
+        p_api: *const rusqlite::ffi::sqlite3_api_routines,
+    ) -> std::ffi::c_int;
 }
 
 const VEC_MIGRATIONS: &[Migration] = &[Migration {
