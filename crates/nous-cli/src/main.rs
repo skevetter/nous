@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 
+use commands::chat::ChatCommands;
+
 #[derive(Parser)]
 #[command(name = "nous", about = "The nous platform CLI")]
 struct Cli {
@@ -13,6 +15,11 @@ struct Cli {
 enum Commands {
     /// Run diagnostic checks
     Doctor,
+    /// Chat room operations
+    Chat {
+        #[command(subcommand)]
+        command: ChatCommands,
+    },
 }
 
 #[tokio::main]
@@ -26,6 +33,9 @@ async fn main() {
     match cli.command {
         Commands::Doctor => {
             commands::doctor::run().await;
+        }
+        Commands::Chat { command } => {
+            commands::chat::run(command).await;
         }
     }
 }
