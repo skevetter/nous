@@ -80,6 +80,24 @@ pub fn app(state: AppState) -> Router {
             "/artifacts/{id}",
             delete(routes::agents::deregister_artifact),
         )
+        .route(
+            "/schedules",
+            post(routes::schedules::create).get(routes::schedules::list),
+        )
+        .route(
+            "/schedules/health",
+            get(routes::schedules::health),
+        )
+        .route(
+            "/schedules/{id}",
+            get(routes::schedules::get)
+                .put(routes::schedules::update)
+                .delete(routes::schedules::delete),
+        )
+        .route(
+            "/schedules/{id}/runs",
+            get(routes::schedules::list_runs),
+        )
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
@@ -384,7 +402,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 37);
+        assert_eq!(tools.len(), 44);
     }
 
     #[tokio::test]

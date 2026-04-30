@@ -6,5 +6,6 @@ pub mod error;
 pub mod messages;
 pub mod notifications;
 pub mod rooms;
+pub mod schedules;
 pub mod tasks;
 pub mod worktrees;
