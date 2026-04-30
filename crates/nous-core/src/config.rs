@@ -4,11 +4,33 @@ use std::path::PathBuf;
 use crate::error::NousError;
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SearchConfig {
+    #[serde(default = "SearchConfig::default_tokenizer")]
+    pub tokenizer: String,
+}
+
+impl SearchConfig {
+    fn default_tokenizer() -> String {
+        "porter unicode61".to_string()
+    }
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            tokenizer: Self::default_tokenizer(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub data_dir: PathBuf,
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 impl Default for Config {
@@ -17,6 +39,7 @@ impl Default for Config {
             data_dir: default_data_dir(),
             host: "127.0.0.1".to_string(),
             port: 8377,
+            search: SearchConfig::default(),
         }
     }
 }
@@ -151,5 +174,30 @@ mod tests {
         let toml_str = "port = not_a_number";
         let result: Result<Config, _> = toml::from_str(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn search_config_default_tokenizer() {
+        let cfg = Config::default();
+        assert_eq!(cfg.search.tokenizer, "porter unicode61");
+    }
+
+    #[test]
+    fn search_config_custom_tokenizer() {
+        let toml_str = r#"
+            [search]
+            tokenizer = "trigram"
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.search.tokenizer, "trigram");
+    }
+
+    #[test]
+    fn search_config_missing_uses_default() {
+        let toml_str = r#"
+            port = 9000
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.search.tokenizer, "porter unicode61");
     }
 }

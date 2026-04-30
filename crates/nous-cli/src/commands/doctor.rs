@@ -91,7 +91,7 @@ async fn check_database(data_dir: &std::path::Path) -> bool {
 
     println!("[OK] Database connectivity (memory-fts.db, memory-vec.db)");
 
-    let migration_ok = match pools.run_migrations().await {
+    let migration_ok = match pools.run_migrations("porter unicode61").await {
         Ok(()) => {
             println!("[OK] Migrations up to date");
             true

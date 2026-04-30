@@ -20,7 +20,7 @@ async fn main() {
         .await
         .expect("failed to connect to database");
     pools
-        .run_migrations()
+        .run_migrations(&config.search.tokenizer)
         .await
         .expect("failed to run migrations");
 

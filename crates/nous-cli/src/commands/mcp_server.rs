@@ -39,7 +39,7 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
     config.ensure_dirs()?;
 
     let pools = DbPools::connect(&config.data_dir).await?;
-    pools.run_migrations().await?;
+    pools.run_migrations(&config.search.tokenizer).await?;
 
     let embedder: Arc<dyn nous_core::memory::Embedder> = Arc::new(OnnxEmbeddingModel::load(None)?);
 

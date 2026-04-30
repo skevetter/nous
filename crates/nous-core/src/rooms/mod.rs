@@ -206,7 +206,7 @@ mod tests {
     async fn setup() -> (SqlitePool, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations().await.unwrap();
+        pools.run_migrations("porter unicode61").await.unwrap();
         let pool = pools.fts.clone();
         (pool, tmp)
     }

@@ -103,7 +103,7 @@ async fn execute(cmd: ScheduleCommands) -> Result<(), Box<dyn std::error::Error>
     let config = Config::load()?;
     config.ensure_dirs()?;
     let pools = DbPools::connect(&config.data_dir).await?;
-    pools.run_migrations().await?;
+    pools.run_migrations(&config.search.tokenizer).await?;
     let pool = &pools.fts;
     let clock = SystemClock;
 
