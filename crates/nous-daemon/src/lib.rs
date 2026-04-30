@@ -363,4 +363,419 @@ mod tests {
         assert_eq!(room["name"], "mcp-test-room");
         assert_eq!(room["purpose"], "MCP test");
     }
+
+    // --- Task HTTP route tests ---
+
+    #[tokio::test]
+    async fn test_create_task_returns_201() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tasks")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "title": "Test task"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["title"], "Test task");
+        assert_eq!(json["status"], "open");
+        assert_eq!(json["priority"], "medium");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        nous_core::tasks::create_task(&state.pool, "Listed task", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tasks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["title"], "Listed task");
+    }
+
+    #[tokio::test]
+    async fn test_get_task_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        let task = nous_core::tasks::create_task(&state.pool, "Get me", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/tasks/{}", task.id))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["title"], "Get me");
+    }
+
+    #[tokio::test]
+    async fn test_get_task_not_found_returns_404() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tasks/nonexistent-id")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        let task = nous_core::tasks::create_task(&state.pool, "Update me", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/tasks/{}", task.id))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "status": "in_progress"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "in_progress");
+    }
+
+    #[tokio::test]
+    async fn test_close_task_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        let task = nous_core::tasks::create_task(&state.pool, "Close me", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/tasks/{}/close", task.id))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "closed");
+        assert!(json["closed_at"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_link_tasks_returns_201() {
+        let (state, _tmp) = test_state().await;
+
+        let t1 = nous_core::tasks::create_task(&state.pool, "Source", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+        let t2 = nous_core::tasks::create_task(&state.pool, "Target", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tasks/link")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "source_id": t1.id,
+                            "target_id": t2.id,
+                            "link_type": "related_to"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn test_link_cycle_returns_409() {
+        let (state, _tmp) = test_state().await;
+
+        let t1 = nous_core::tasks::create_task(&state.pool, "A", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+        let t2 = nous_core::tasks::create_task(&state.pool, "B", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "blocked_by", None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tasks/link")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "source_id": t2.id,
+                            "target_id": t1.id,
+                            "link_type": "blocked_by"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_unlink_tasks_returns_204() {
+        let (state, _tmp) = test_state().await;
+
+        let t1 = nous_core::tasks::create_task(&state.pool, "S", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+        let t2 = nous_core::tasks::create_task(&state.pool, "T", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "related_to", None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tasks/unlink")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "source_id": t1.id,
+                            "target_id": t2.id,
+                            "link_type": "related_to"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn test_list_links_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        let t1 = nous_core::tasks::create_task(&state.pool, "L1", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+        let t2 = nous_core::tasks::create_task(&state.pool, "L2", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "parent", None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/tasks/{}/links", t1.id))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["parent"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_note_returns_201() {
+        let (state, _tmp) = test_state().await;
+
+        let task = nous_core::tasks::create_task(&state.pool, "Note task", None, None, None, None, None, true, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/tasks/{}/note", task.id))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "sender_id": "agent-1",
+                            "content": "A note"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["content"], "A note");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_task_create_returns_success() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/call")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "name": "task_create",
+                            "arguments": { "title": "MCP created task", "priority": "high" }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("is_error").is_none());
+        let text = json["content"][0]["text"].as_str().unwrap();
+        let task: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(task["title"], "MCP created task");
+        assert_eq!(task["priority"], "high");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_task_list_returns_success() {
+        let (state, _tmp) = test_state().await;
+
+        nous_core::tasks::create_task(&state.pool, "MCP listed", None, None, None, None, None, false, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/call")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "name": "task_list",
+                            "arguments": {}
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("is_error").is_none());
+        let text = json["content"][0]["text"].as_str().unwrap();
+        let tasks: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["title"], "MCP listed");
+    }
 }
