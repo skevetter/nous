@@ -214,7 +214,7 @@ pub async fn list_tasks(
 
     if let Some(l) = label {
         conditions.push("je.value = ?".to_string());
-        binds.push(format!("\"{l}\""));
+        binds.push(l.to_string());
     }
 
     if !conditions.is_empty() {
@@ -417,7 +417,7 @@ pub async fn link_tasks(
         while let Some(current) = stack.pop() {
             if current == source_id {
                 return Err(NousError::CyclicLink(format!(
-                    "linking {source_id} -> {target_id} with type '{link_type}' would create a cycle"
+                    "linking {source_id} -> {target_id} would create a cycle"
                 )));
             }
             if visited.contains(&current) {
@@ -626,21 +626,14 @@ pub async fn search_tasks(
 
     let limit = limit.unwrap_or(20).min(100);
 
-    let sanitized: String = query
-        .split_whitespace()
-        .map(|word| format!("\"{}\"", word.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(" ");
-
     let rows = sqlx::query(
         "SELECT t.* FROM tasks t \
          JOIN tasks_fts fts ON t.rowid = fts.rowid \
-         WHERE tasks_fts MATCH ? \
-         ORDER BY fts.rank \
-         LIMIT ?",
+         WHERE tasks_fts MATCH ?1 \
+         LIMIT ?2",
     )
-    .bind(&sanitized)
-    .bind(limit)
+    .bind(query)
+    .bind(limit as i64)
     .fetch_all(pool)
     .await?;
 
