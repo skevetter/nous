@@ -42,6 +42,7 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
 
     let state = AppState {
         pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
     };
 
@@ -80,10 +81,7 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
         };
 
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let method = request
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
 
         let response = match method {
             "initialize" => {
@@ -107,11 +105,9 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
                 let schemas = get_tool_schemas();
                 let tools: Vec<Value> = schemas
                     .iter()
-                    .filter(|t| {
-                        match &prefixes {
-                            None => true,
-                            Some(pfs) => pfs.iter().any(|p| t.name.starts_with(p)),
-                        }
+                    .filter(|t| match &prefixes {
+                        None => true,
+                        Some(pfs) => pfs.iter().any(|p| t.name.starts_with(p)),
                     })
                     .map(|t| {
                         serde_json::json!({
@@ -129,10 +125,7 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
             }
             "tools/call" => {
                 let params = request.get("params").cloned().unwrap_or(Value::Null);
-                let tool_name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = params
                     .get("arguments")
                     .cloned()
@@ -263,7 +256,11 @@ mod tests {
     fn tools_list_no_filter_returns_all() {
         let schemas = get_tool_schemas();
         // Without filter, all tools should be present
-        assert!(schemas.len() >= 50, "expected many tools, got {}", schemas.len());
+        assert!(
+            schemas.len() >= 50,
+            "expected many tools, got {}",
+            schemas.len()
+        );
 
         // Verify multiple categories are present
         let has_room = schemas.iter().any(|t| t.name.starts_with("room_"));
@@ -283,7 +280,10 @@ mod tests {
         let tool_name = "memory_save";
 
         let allowed = prefixes.iter().any(|p| tool_name.starts_with(p));
-        assert!(!allowed, "memory_save should be rejected when filter is chat,task");
+        assert!(
+            !allowed,
+            "memory_save should be rejected when filter is chat,task"
+        );
     }
 
     #[test]

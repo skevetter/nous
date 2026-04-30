@@ -279,8 +279,7 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
             println!("{{\"result\": \"{result}\"}}");
         }
         AgentCommands::Lookup { name, namespace } => {
-            let agent =
-                agents::lookup_agent(pool, &name, namespace.as_deref()).await?;
+            let agent = agents::lookup_agent(pool, &name, namespace.as_deref()).await?;
             println!("{}", serde_json::to_string_pretty(&agent)?);
         }
         AgentCommands::List {
@@ -311,8 +310,7 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&list)?);
         }
         AgentCommands::Tree { root, namespace } => {
-            let tree =
-                agents::get_tree(pool, root.as_deref(), namespace.as_deref()).await?;
+            let tree = agents::get_tree(pool, root.as_deref(), namespace.as_deref()).await?;
             println!("{}", serde_json::to_string_pretty(&tree)?);
         }
         AgentCommands::Heartbeat { id, status } => {
@@ -324,13 +322,11 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
             println!("{{\"ok\": true}}");
         }
         AgentCommands::Children { id, namespace } => {
-            let children =
-                agents::list_children(pool, &id, namespace.as_deref()).await?;
+            let children = agents::list_children(pool, &id, namespace.as_deref()).await?;
             println!("{}", serde_json::to_string_pretty(&children)?);
         }
         AgentCommands::Ancestors { id, namespace } => {
-            let ancestors =
-                agents::list_ancestors(pool, &id, namespace.as_deref()).await?;
+            let ancestors = agents::list_ancestors(pool, &id, namespace.as_deref()).await?;
             println!("{}", serde_json::to_string_pretty(&ancestors)?);
         }
         AgentCommands::Search {
@@ -339,17 +335,14 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
             limit,
         } => {
             let results =
-                agents::search_agents(pool, &query, namespace.as_deref(), Some(limit))
-                    .await?;
+                agents::search_agents(pool, &query, namespace.as_deref(), Some(limit)).await?;
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
         AgentCommands::Stale {
             threshold,
             namespace,
         } => {
-            let stale =
-                agents::list_stale_agents(pool, threshold, namespace.as_deref())
-                    .await?;
+            let stale = agents::list_stale_agents(pool, threshold, namespace.as_deref()).await?;
             println!("{}", serde_json::to_string_pretty(&stale)?);
         }
         AgentCommands::Inspect { id } => {

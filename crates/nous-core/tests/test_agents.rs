@@ -78,7 +78,10 @@ async fn test_register_agent_with_parent() {
     .await
     .unwrap();
 
-    assert_eq!(manager.parent_agent_id.as_deref(), Some(director.id.as_str()));
+    assert_eq!(
+        manager.parent_agent_id.as_deref(),
+        Some(director.id.as_str())
+    );
 
     pools.close().await;
 }
@@ -237,7 +240,9 @@ async fn test_deregister_agent_no_children() {
     .await
     .unwrap();
 
-    let result = agents::deregister_agent(pool, &agent.id, false).await.unwrap();
+    let result = agents::deregister_agent(pool, &agent.id, false)
+        .await
+        .unwrap();
     assert_eq!(result, "deleted");
 
     let lookup = agents::get_agent_by_id(pool, &agent.id).await;
@@ -323,7 +328,9 @@ async fn test_deregister_agent_cascade() {
     .await
     .unwrap();
 
-    let result = agents::deregister_agent(pool, &parent.id, true).await.unwrap();
+    let result = agents::deregister_agent(pool, &parent.id, true)
+        .await
+        .unwrap();
     assert_eq!(result, "cascaded");
 
     assert!(agents::get_agent_by_id(pool, &parent.id).await.is_err());
@@ -686,7 +693,9 @@ async fn test_deregister_artifact() {
     .await
     .unwrap();
 
-    agents::deregister_artifact(pool, &artifact.id).await.unwrap();
+    agents::deregister_artifact(pool, &artifact.id)
+        .await
+        .unwrap();
 
     let result = agents::get_artifact_by_id(pool, &artifact.id).await;
     assert!(result.is_err());
@@ -727,7 +736,9 @@ async fn test_artifacts_cascade_on_agent_delete() {
     .await
     .unwrap();
 
-    agents::deregister_agent(pool, &agent.id, false).await.unwrap();
+    agents::deregister_agent(pool, &agent.id, false)
+        .await
+        .unwrap();
 
     let result = agents::get_artifact_by_id(pool, &artifact.id).await;
     assert!(result.is_err());
@@ -841,7 +852,10 @@ async fn test_record_and_list_versions() {
     assert!(!v1.id.is_empty());
 
     let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
-    assert_eq!(refreshed.current_version_id.as_deref(), Some(v1.id.as_str()));
+    assert_eq!(
+        refreshed.current_version_id.as_deref(),
+        Some(v1.id.as_str())
+    );
     assert!(!refreshed.upgrade_available);
 
     let v2 = agents::record_version(
@@ -954,11 +968,16 @@ async fn test_rollback_agent() {
     .await
     .unwrap();
 
-    let rolled = agents::rollback_agent(pool, &agent.id, &v1.id).await.unwrap();
+    let rolled = agents::rollback_agent(pool, &agent.id, &v1.id)
+        .await
+        .unwrap();
     assert_eq!(rolled.skill_hash, "old-hash");
 
     let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
-    assert_eq!(refreshed.current_version_id.as_deref(), Some(v1.id.as_str()));
+    assert_eq!(
+        refreshed.current_version_id.as_deref(),
+        Some(v1.id.as_str())
+    );
 
     pools.close().await;
 }
@@ -1039,11 +1058,15 @@ async fn test_upgrade_available_flag() {
 
     assert!(!agent.upgrade_available);
 
-    agents::set_upgrade_available(pool, &agent.id, true).await.unwrap();
+    agents::set_upgrade_available(pool, &agent.id, true)
+        .await
+        .unwrap();
     let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
     assert!(refreshed.upgrade_available);
 
-    let outdated = agents::list_outdated_agents(pool, None, None).await.unwrap();
+    let outdated = agents::list_outdated_agents(pool, None, None)
+        .await
+        .unwrap();
     assert_eq!(outdated.len(), 1);
     assert_eq!(outdated[0].id, agent.id);
 
@@ -1062,7 +1085,9 @@ async fn test_upgrade_available_flag() {
     let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
     assert!(!refreshed.upgrade_available);
 
-    let outdated = agents::list_outdated_agents(pool, None, None).await.unwrap();
+    let outdated = agents::list_outdated_agents(pool, None, None)
+        .await
+        .unwrap();
     assert!(outdated.is_empty());
 
     pools.close().await;
@@ -1078,7 +1103,9 @@ async fn test_create_and_list_templates() {
         CreateTemplateRequest {
             name: "code-reviewer".into(),
             template_type: "engineer".into(),
-            default_config: Some(r#"{"provider":"claude/sonnet","mode":"bypassPermissions"}"#.into()),
+            default_config: Some(
+                r#"{"provider":"claude/sonnet","mode":"bypassPermissions"}"#.into(),
+            ),
             skill_refs: Some(r#"["org:code-reviewer","superpowers:debugging"]"#.into()),
         },
     )
@@ -1092,10 +1119,14 @@ async fn test_create_and_list_templates() {
     let all = agents::list_templates(pool, None, None).await.unwrap();
     assert_eq!(all.len(), 1);
 
-    let by_type = agents::list_templates(pool, Some("engineer"), None).await.unwrap();
+    let by_type = agents::list_templates(pool, Some("engineer"), None)
+        .await
+        .unwrap();
     assert_eq!(by_type.len(), 1);
 
-    let empty = agents::list_templates(pool, Some("nonexistent"), None).await.unwrap();
+    let empty = agents::list_templates(pool, Some("nonexistent"), None)
+        .await
+        .unwrap();
     assert!(empty.is_empty());
 
     pools.close().await;
@@ -1168,7 +1199,8 @@ async fn test_instantiate_from_template() {
     assert_eq!(agent.agent_type, "engineer");
     assert_eq!(agent.template_id.as_deref(), Some(template.id.as_str()));
 
-    let meta: serde_json::Value = serde_json::from_str(agent.metadata_json.as_deref().unwrap()).unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(agent.metadata_json.as_deref().unwrap()).unwrap();
     assert_eq!(meta["provider"], "claude/sonnet");
     assert_eq!(meta["retries"], 5);
     assert_eq!(meta["debug"], true);
@@ -1243,7 +1275,9 @@ async fn test_versions_cascade_on_agent_delete() {
     .await
     .unwrap();
 
-    agents::deregister_agent(pool, &agent.id, false).await.unwrap();
+    agents::deregister_agent(pool, &agent.id, false)
+        .await
+        .unwrap();
 
     let result = agents::get_version_by_id(pool, &v.id).await;
     assert!(result.is_err());

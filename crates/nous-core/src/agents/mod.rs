@@ -504,16 +504,17 @@ pub async fn heartbeat(
     id: &str,
     status: Option<AgentStatus>,
 ) -> Result<(), NousError> {
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
     let new_status = status.unwrap_or(AgentStatus::Active);
 
-    let result =
-        sqlx::query("UPDATE agents SET last_seen_at = ?, status = ? WHERE id = ?")
-            .bind(&now)
-            .bind(new_status.as_str())
-            .bind(id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("UPDATE agents SET last_seen_at = ?, status = ? WHERE id = ?")
+        .bind(&now)
+        .bind(new_status.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("agent '{id}' not found")));
@@ -801,7 +802,9 @@ pub async fn update_artifact(
 
     if let Some(name) = name {
         if name.trim().is_empty() {
-            return Err(NousError::Validation("artifact name cannot be empty".into()));
+            return Err(NousError::Validation(
+                "artifact name cannot be empty".into(),
+            ));
         }
         sets.push("name = ?".to_string());
         binds.push(name.trim().to_string());
@@ -1028,12 +1031,11 @@ pub async fn set_upgrade_available(
     available: bool,
 ) -> Result<(), NousError> {
     let flag = if available { 1 } else { 0 };
-    let result =
-        sqlx::query("UPDATE agents SET upgrade_available = ? WHERE id = ?")
-            .bind(flag)
-            .bind(agent_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("UPDATE agents SET upgrade_available = ? WHERE id = ?")
+        .bind(flag)
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("agent '{agent_id}' not found")));
@@ -1121,8 +1123,7 @@ pub async fn get_template_by_id(pool: &SqlitePool, id: &str) -> Result<AgentTemp
         .fetch_optional(pool)
         .await?;
 
-    let row =
-        row.ok_or_else(|| NousError::NotFound(format!("agent template '{id}' not found")))?;
+    let row = row.ok_or_else(|| NousError::NotFound(format!("agent template '{id}' not found")))?;
     AgentTemplate::from_row(&row).map_err(NousError::Sqlite)
 }
 
@@ -1147,12 +1148,10 @@ pub async fn list_templates(
             .collect::<Result<Vec<_>, _>>()
             .map_err(NousError::Sqlite)
     } else {
-        let rows = sqlx::query(
-            "SELECT * FROM agent_templates ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+        let rows = sqlx::query("SELECT * FROM agent_templates ORDER BY created_at DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
         rows.iter()
             .map(AgentTemplate::from_row)
             .collect::<Result<Vec<_>, _>>()
@@ -1175,10 +1174,13 @@ pub async fn instantiate_from_template(
 ) -> Result<Agent, NousError> {
     let template = get_template_by_id(pool, &req.template_id).await?;
 
-    let agent_type: AgentType = template.template_type.parse().unwrap_or(AgentType::Engineer);
-    let name = req.name.unwrap_or_else(|| {
-        format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8])
-    });
+    let agent_type: AgentType = template
+        .template_type
+        .parse()
+        .unwrap_or(AgentType::Engineer);
+    let name = req
+        .name
+        .unwrap_or_else(|| format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8]));
 
     let agent = register_agent(
         pool,
@@ -1188,7 +1190,10 @@ pub async fn instantiate_from_template(
             parent_id: req.parent_id,
             namespace: req.namespace,
             room: None,
-            metadata: Some(merge_config(&template.default_config, req.config_overrides.as_deref())),
+            metadata: Some(merge_config(
+                &template.default_config,
+                req.config_overrides.as_deref(),
+            )),
             status: Some(AgentStatus::Active),
         },
     )
@@ -1231,8 +1236,7 @@ pub async fn list_stale_agents(
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
     let ns = namespace.unwrap_or("default");
-    let cutoff = chrono::Utc::now()
-        - chrono::Duration::seconds(threshold_secs as i64);
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(threshold_secs as i64);
     let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
     let rows = sqlx::query(

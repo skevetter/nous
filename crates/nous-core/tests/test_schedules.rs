@@ -437,9 +437,19 @@ async fn record_run_updates_last_run_at() {
     .unwrap();
     assert!(s.last_run_at.is_none());
 
-    schedules::record_run(&pool, &s.id, 1_700_000_100, 1_700_000_105, "completed", None, None, None, 1)
-        .await
-        .unwrap();
+    schedules::record_run(
+        &pool,
+        &s.id,
+        1_700_000_100,
+        1_700_000_105,
+        "completed",
+        None,
+        None,
+        None,
+        1,
+    )
+    .await
+    .unwrap();
 
     let updated = schedules::get_schedule(&pool, &s.id).await.unwrap();
     assert_eq!(updated.last_run_at, Some(1_700_000_105));

@@ -270,8 +270,7 @@ async fn execute(cmd: MemoryCommands) -> Result<(), Box<dyn std::error::Error>> 
             high_days,
             moderate_days,
         } => {
-            let affected =
-                memory::run_importance_decay(pool, high_days, moderate_days).await?;
+            let affected = memory::run_importance_decay(pool, high_days, moderate_days).await?;
             println!("{{\"decayed\": {affected}}}");
         }
     }

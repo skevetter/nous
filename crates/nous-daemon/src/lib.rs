@@ -17,8 +17,14 @@ pub fn app(state: AppState) -> Router {
         .route("/rooms/{id}/messages", post(routes::messages::post))
         .route("/rooms/{id}/messages", get(routes::messages::read))
         .route("/search/messages", get(routes::search::search))
-        .route("/tasks", post(routes::tasks::create).get(routes::tasks::list))
-        .route("/tasks/{id}", get(routes::tasks::get).put(routes::tasks::update))
+        .route(
+            "/tasks",
+            post(routes::tasks::create).get(routes::tasks::list),
+        )
+        .route(
+            "/tasks/{id}",
+            get(routes::tasks::get).put(routes::tasks::update),
+        )
         .route("/tasks/{id}/close", post(routes::tasks::close))
         .route("/tasks/{id}/links", get(routes::tasks::list_links))
         .route("/tasks/{id}/note", post(routes::tasks::add_note))
@@ -36,78 +42,36 @@ pub fn app(state: AppState) -> Router {
             "/worktrees/{id}/status",
             axum::routing::patch(routes::worktrees::update_status),
         )
-        .route(
-            "/worktrees/{id}/archive",
-            post(routes::worktrees::archive),
-        )
+        .route("/worktrees/{id}/archive", post(routes::worktrees::archive))
         .route(
             "/agents",
             post(routes::agents::register).get(routes::agents::list),
         )
-        .route(
-            "/agents/tree",
-            get(routes::agents::tree),
-        )
-        .route(
-            "/agents/search",
-            get(routes::agents::search),
-        )
-        .route(
-            "/agents/stale",
-            get(routes::agents::stale),
-        )
+        .route("/agents/tree", get(routes::agents::tree))
+        .route("/agents/search", get(routes::agents::search))
+        .route("/agents/stale", get(routes::agents::stale))
         .route(
             "/agents/{id}",
             get(routes::agents::get).delete(routes::agents::deregister),
         )
-        .route(
-            "/agents/{id}/heartbeat",
-            post(routes::agents::heartbeat),
-        )
-        .route(
-            "/agents/{id}/children",
-            get(routes::agents::children),
-        )
-        .route(
-            "/agents/{id}/ancestors",
-            get(routes::agents::ancestors),
-        )
-        .route(
-            "/agents/{id}/inspect",
-            get(routes::agents::inspect),
-        )
-        .route(
-            "/agents/{id}/versions",
-            get(routes::agents::list_versions),
-        )
-        .route(
-            "/agents/{id}/rollback",
-            post(routes::agents::rollback),
-        )
+        .route("/agents/{id}/heartbeat", post(routes::agents::heartbeat))
+        .route("/agents/{id}/children", get(routes::agents::children))
+        .route("/agents/{id}/ancestors", get(routes::agents::ancestors))
+        .route("/agents/{id}/inspect", get(routes::agents::inspect))
+        .route("/agents/{id}/versions", get(routes::agents::list_versions))
+        .route("/agents/{id}/rollback", post(routes::agents::rollback))
         .route(
             "/agents/{id}/notify-upgrade",
             post(routes::agents::notify_upgrade),
         )
-        .route(
-            "/agents/versions",
-            post(routes::agents::record_version),
-        )
-        .route(
-            "/agents/outdated",
-            get(routes::agents::list_outdated),
-        )
+        .route("/agents/versions", post(routes::agents::record_version))
+        .route("/agents/outdated", get(routes::agents::list_outdated))
         .route(
             "/templates",
             post(routes::agents::create_template).get(routes::agents::list_templates),
         )
-        .route(
-            "/templates/{id}",
-            get(routes::agents::get_template),
-        )
-        .route(
-            "/templates/instantiate",
-            post(routes::agents::instantiate),
-        )
+        .route("/templates/{id}", get(routes::agents::get_template))
+        .route("/templates/instantiate", post(routes::agents::instantiate))
         .route(
             "/artifacts",
             post(routes::agents::register_artifact).get(routes::agents::list_artifacts),
@@ -120,14 +84,8 @@ pub fn app(state: AppState) -> Router {
             "/memories",
             post(routes::memory::save).get(routes::memory::context),
         )
-        .route(
-            "/memories/search",
-            get(routes::memory::search),
-        )
-        .route(
-            "/memories/relate",
-            post(routes::memory::relate),
-        )
+        .route("/memories/search", get(routes::memory::search))
+        .route("/memories/relate", post(routes::memory::relate))
         .route(
             "/memories/{id}",
             get(routes::memory::get).put(routes::memory::update),
@@ -140,38 +98,26 @@ pub fn app(state: AppState) -> Router {
             "/inventory",
             post(routes::inventory::register).get(routes::inventory::list),
         )
-        .route(
-            "/inventory/search",
-            get(routes::inventory::search),
-        )
+        .route("/inventory/search", get(routes::inventory::search))
         .route(
             "/inventory/{id}",
             get(routes::inventory::get)
                 .put(routes::inventory::update)
                 .delete(routes::inventory::deregister),
         )
-        .route(
-            "/inventory/{id}/archive",
-            post(routes::inventory::archive),
-        )
+        .route("/inventory/{id}/archive", post(routes::inventory::archive))
         .route(
             "/schedules",
             post(routes::schedules::create).get(routes::schedules::list),
         )
-        .route(
-            "/schedules/health",
-            get(routes::schedules::health),
-        )
+        .route("/schedules/health", get(routes::schedules::health))
         .route(
             "/schedules/{id}",
             get(routes::schedules::get)
                 .put(routes::schedules::update)
                 .delete(routes::schedules::delete),
         )
-        .route(
-            "/schedules/{id}/runs",
-            get(routes::schedules::list_runs),
-        )
+        .route("/schedules/{id}/runs", get(routes::schedules::list_runs))
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
@@ -195,6 +141,7 @@ mod tests {
         pools.run_migrations().await.unwrap();
         let state = AppState {
             pool: pools.fts.clone(),
+            vec_pool: pools.vec.clone(),
             registry: Arc::new(NotificationRegistry::new()),
         };
         (state, tmp)
@@ -548,9 +495,19 @@ mod tests {
     async fn test_list_tasks_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        nous_core::tasks::create_task(&state.pool, "Listed task", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        nous_core::tasks::create_task(
+            &state.pool,
+            "Listed task",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -575,9 +532,19 @@ mod tests {
     async fn test_get_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(&state.pool, "Get me", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let task = nous_core::tasks::create_task(
+            &state.pool,
+            "Get me",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -619,9 +586,19 @@ mod tests {
     async fn test_update_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(&state.pool, "Update me", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let task = nous_core::tasks::create_task(
+            &state.pool,
+            "Update me",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -652,9 +629,19 @@ mod tests {
     async fn test_close_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(&state.pool, "Close me", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let task = nous_core::tasks::create_task(
+            &state.pool,
+            "Close me",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -680,12 +667,32 @@ mod tests {
     async fn test_link_tasks_returns_201() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(&state.pool, "Source", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
-        let t2 = nous_core::tasks::create_task(&state.pool, "Target", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let t1 = nous_core::tasks::create_task(
+            &state.pool,
+            "Source",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let t2 = nous_core::tasks::create_task(
+            &state.pool,
+            "Target",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -715,12 +722,32 @@ mod tests {
     async fn test_link_cycle_returns_409() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(&state.pool, "A", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
-        let t2 = nous_core::tasks::create_task(&state.pool, "B", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let t1 = nous_core::tasks::create_task(
+            &state.pool,
+            "A",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let t2 = nous_core::tasks::create_task(
+            &state.pool,
+            "B",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "blocked_by", None)
             .await
@@ -754,12 +781,32 @@ mod tests {
     async fn test_unlink_tasks_returns_204() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(&state.pool, "S", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
-        let t2 = nous_core::tasks::create_task(&state.pool, "T", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let t1 = nous_core::tasks::create_task(
+            &state.pool,
+            "S",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let t2 = nous_core::tasks::create_task(
+            &state.pool,
+            "T",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "related_to", None)
             .await
@@ -793,12 +840,32 @@ mod tests {
     async fn test_list_links_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(&state.pool, "L1", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
-        let t2 = nous_core::tasks::create_task(&state.pool, "L2", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        let t1 = nous_core::tasks::create_task(
+            &state.pool,
+            "L1",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let t2 = nous_core::tasks::create_task(
+            &state.pool,
+            "L2",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "parent", None)
             .await
@@ -826,9 +893,19 @@ mod tests {
     async fn test_add_note_returns_201() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(&state.pool, "Note task", None, None, None, None, None, true, None)
-            .await
-            .unwrap();
+        let task = nous_core::tasks::create_task(
+            &state.pool,
+            "Note task",
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -893,9 +970,19 @@ mod tests {
     async fn test_mcp_task_list_returns_success() {
         let (state, _tmp) = test_state().await;
 
-        nous_core::tasks::create_task(&state.pool, "MCP listed", None, None, None, None, None, false, None)
-            .await
-            .unwrap();
+        nous_core::tasks::create_task(
+            &state.pool,
+            "MCP listed",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
         let app = app(state);
 

@@ -102,7 +102,9 @@ pub async fn create_schedule(
     clock: &dyn Clock,
 ) -> Result<Schedule, NousError> {
     if name.trim().is_empty() {
-        return Err(NousError::Validation("schedule name cannot be empty".into()));
+        return Err(NousError::Validation(
+            "schedule name cannot be empty".into(),
+        ));
     }
 
     if cron_expr != "@once" {
@@ -262,9 +264,7 @@ pub async fn update_schedule(
     if let Some(at) = action_type {
         let valid_actions = ["mcp_tool", "shell", "http"];
         if !valid_actions.contains(&at) {
-            return Err(NousError::Validation(format!(
-                "invalid action_type: {at}"
-            )));
+            return Err(NousError::Validation(format!("invalid action_type: {at}")));
         }
         sets.push("action_type = ?".to_string());
         binds.push(at.to_string());
@@ -355,7 +355,8 @@ pub async fn list_runs(
         )
     } else {
         (
-            "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY started_at DESC LIMIT ?".to_string(),
+            "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY started_at DESC LIMIT ?"
+                .to_string(),
             vec![schedule_id.to_string(), limit.to_string()],
         )
     };
@@ -411,11 +412,10 @@ pub async fn record_run(
         .await?;
 
     // Purge runs exceeding max_runs
-    let max_runs: Option<i32> =
-        sqlx::query_scalar("SELECT max_runs FROM schedules WHERE id = ?")
-            .bind(schedule_id)
-            .fetch_optional(pool)
-            .await?;
+    let max_runs: Option<i32> = sqlx::query_scalar("SELECT max_runs FROM schedules WHERE id = ?")
+        .bind(schedule_id)
+        .fetch_optional(pool)
+        .await?;
 
     if let Some(max) = max_runs {
         sqlx::query(

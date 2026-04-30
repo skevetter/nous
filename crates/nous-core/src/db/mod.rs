@@ -1,3 +1,3 @@
 mod pool;
 
-pub use pool::DbPools;
+pub use pool::{create_vec_pool, DbPools, VecPool, EMBEDDING_DIMENSION};

@@ -525,9 +525,21 @@ async fn test_duplicate_slug_same_repo_fails() {
 
 #[tokio::test]
 async fn test_worktree_status_parse() {
-    assert_eq!("active".parse::<WorktreeStatus>().unwrap(), WorktreeStatus::Active);
-    assert_eq!("stale".parse::<WorktreeStatus>().unwrap(), WorktreeStatus::Stale);
-    assert_eq!("archived".parse::<WorktreeStatus>().unwrap(), WorktreeStatus::Archived);
-    assert_eq!("deleted".parse::<WorktreeStatus>().unwrap(), WorktreeStatus::Deleted);
+    assert_eq!(
+        "active".parse::<WorktreeStatus>().unwrap(),
+        WorktreeStatus::Active
+    );
+    assert_eq!(
+        "stale".parse::<WorktreeStatus>().unwrap(),
+        WorktreeStatus::Stale
+    );
+    assert_eq!(
+        "archived".parse::<WorktreeStatus>().unwrap(),
+        WorktreeStatus::Archived
+    );
+    assert_eq!(
+        "deleted".parse::<WorktreeStatus>().unwrap(),
+        WorktreeStatus::Deleted
+    );
     assert!("invalid".parse::<WorktreeStatus>().is_err());
 }

@@ -205,12 +205,9 @@ pub async fn stale(
     Query(params): Query<StaleQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let threshold = params.threshold.unwrap_or(900);
-    let agents = nous_core::agents::list_stale_agents(
-        &state.pool,
-        threshold,
-        params.namespace.as_deref(),
-    )
-    .await?;
+    let agents =
+        nous_core::agents::list_stale_agents(&state.pool, threshold, params.namespace.as_deref())
+            .await?;
     Ok(Json(agents))
 }
 

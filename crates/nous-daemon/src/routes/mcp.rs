@@ -5,15 +5,15 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use nous_core::agents;
+use nous_core::inventory;
+use nous_core::memory;
 use nous_core::messages::{
     post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
     SearchMessagesRequest,
 };
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
-use nous_core::agents;
-use nous_core::inventory;
-use nous_core::memory;
 use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
@@ -1419,10 +1419,21 @@ pub async fn dispatch(
             let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
             let label = args.get("label").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let result =
-                tasks::list_tasks(&state.pool, status, assignee_id, label, limit, offset, None, None)
-                    .await?;
+            let offset = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let result = tasks::list_tasks(
+                &state.pool,
+                status,
+                assignee_id,
+                label,
+                limit,
+                offset,
+                None,
+                None,
+            )
+            .await?;
             Ok(serde_json::to_value(result).unwrap())
         }
         "task_get" => {
@@ -1558,10 +1569,19 @@ pub async fn dispatch(
             let name = require_str(args, "name")?.to_string();
             let agent_type_str = require_str(args, "type")?;
             let agent_type: agents::AgentType = agent_type_str.parse()?;
-            let parent_id = args.get("parent_id").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let parent_id = args
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let room = args.get("room").and_then(|v| v.as_str()).map(String::from);
-            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let status = args
                 .get("status")
                 .and_then(|v| v.as_str())
@@ -1584,7 +1604,10 @@ pub async fn dispatch(
         }
         "agent_deregister" => {
             let id = require_str(args, "id")?;
-            let cascade = args.get("cascade").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cascade = args
+                .get("cascade")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let result = agents::deregister_agent(&state.pool, id, cascade).await?;
             Ok(serde_json::json!({"result": result}))
         }
@@ -1595,7 +1618,10 @@ pub async fn dispatch(
             Ok(serde_json::to_value(agent).unwrap())
         }
         "agent_list" => {
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let status = args
                 .get("status")
                 .and_then(|v| v.as_str())
@@ -1656,7 +1682,10 @@ pub async fn dispatch(
             Ok(serde_json::to_value(results).unwrap())
         }
         "agent_stale" => {
-            let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(900);
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(900);
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
             Ok(serde_json::to_value(stale).unwrap())
@@ -1676,7 +1705,10 @@ pub async fn dispatch(
             let agent_id = require_str(args, "agent_id")?.to_string();
             let skill_hash = require_str(args, "skill_hash")?.to_string();
             let config_hash = require_str(args, "config_hash")?.to_string();
-            let skills_json = args.get("skills_json").and_then(|v| v.as_str()).map(String::from);
+            let skills_json = args
+                .get("skills_json")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let version = agents::record_version(
                 &state.pool,
                 agents::RecordVersionRequest {
@@ -1709,8 +1741,14 @@ pub async fn dispatch(
         "agent_template_create" => {
             let name = require_str(args, "name")?.to_string();
             let template_type = require_str(args, "type")?.to_string();
-            let default_config = args.get("default_config").and_then(|v| v.as_str()).map(String::from);
-            let skill_refs = args.get("skill_refs").and_then(|v| v.as_str()).map(String::from);
+            let default_config = args
+                .get("default_config")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let skill_refs = args
+                .get("skill_refs")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let template = agents::create_template(
                 &state.pool,
                 agents::CreateTemplateRequest {
@@ -1737,9 +1775,18 @@ pub async fn dispatch(
         "agent_instantiate" => {
             let template_id = require_str(args, "template_id")?.to_string();
             let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
-            let parent_id = args.get("parent_id").and_then(|v| v.as_str()).map(String::from);
-            let config_overrides = args.get("config_overrides").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let parent_id = args
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let config_overrides = args
+                .get("config_overrides")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let agent = agents::instantiate_from_template(
                 &state.pool,
                 agents::InstantiateRequest {
@@ -1759,7 +1806,10 @@ pub async fn dispatch(
             let artifact_type: agents::ArtifactType = artifact_type_str.parse()?;
             let name = require_str(args, "name")?.to_string();
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let artifact = agents::register_artifact(
                 &state.pool,
                 agents::RegisterArtifactRequest {
@@ -1779,13 +1829,19 @@ pub async fn dispatch(
             Ok(serde_json::json!({"ok": true}))
         }
         "artifact_list" => {
-            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let artifact_type = args
                 .get("type")
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<agents::ArtifactType>())
                 .transpose()?;
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let artifacts = agents::list_artifacts(
                 &state.pool,
@@ -1809,9 +1865,18 @@ pub async fn dispatch(
             let trigger_at = args.get("trigger_at").and_then(|v| v.as_i64());
             let timezone = args.get("timezone").and_then(|v| v.as_str());
             let desired_outcome = args.get("desired_outcome").and_then(|v| v.as_str());
-            let max_retries = args.get("max_retries").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let max_runs = args.get("max_runs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let max_retries = args
+                .get("max_retries")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let timeout_secs = args
+                .get("timeout_secs")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let max_runs = args
+                .get("max_runs")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
             let schedule = schedules::create_schedule(
                 &state.pool,
                 name,
@@ -1861,9 +1926,18 @@ pub async fn dispatch(
             } else {
                 None
             };
-            let max_retries = args.get("max_retries").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let max_runs = args.get("max_runs").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let max_retries = args
+                .get("max_retries")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let timeout_secs = args
+                .get("timeout_secs")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let max_runs = args
+                .get("max_runs")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
             let schedule = schedules::update_schedule(
                 &state.pool,
                 id,
@@ -1902,12 +1976,23 @@ pub async fn dispatch(
             let name = require_str(args, "name")?.to_string();
             let type_str = require_str(args, "type")?;
             let artifact_type: inventory::InventoryType = type_str.parse()?;
-            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let owner_agent_id = args
+                .get("owner_agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
-            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let metadata = args
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             });
             let item = inventory::register_item(
                 &state.pool,
@@ -1935,8 +2020,14 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<inventory::InventoryStatus>())
                 .transpose()?;
-            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let owner_agent_id = args
+                .get("owner_agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let items = inventory::list_items(
@@ -1963,9 +2054,14 @@ pub async fn dispatch(
             let id = require_str(args, "id")?.to_string();
             let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             });
             let item = inventory::update_item(
                 &state.pool,
@@ -1984,7 +2080,11 @@ pub async fn dispatch(
             let tags: Vec<String> = args
                 .get("tags")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let artifact_type = args
                 .get("type")
@@ -1996,7 +2096,10 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<inventory::InventoryStatus>())
                 .transpose()?;
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let items = inventory::search_by_tags(
                 &state.pool,
@@ -2032,11 +2135,26 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<memory::Importance>())
                 .transpose()?;
-            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
-            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
-            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
-            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
-            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let workspace_id = args
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let topic_key = args
+                .get("topic_key")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let valid_from = args
+                .get("valid_from")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let valid_until = args
+                .get("valid_until")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let mem = memory::save_memory(
                 &state.pool,
                 memory::SaveMemoryRequest {
@@ -2056,8 +2174,14 @@ pub async fn dispatch(
         }
         "memory_search" => {
             let query = require_str(args, "query")?.to_string();
-            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
-            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let workspace_id = args
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let memory_type = args
                 .get("type")
                 .and_then(|v| v.as_str())
@@ -2068,7 +2192,10 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<memory::Importance>())
                 .transpose()?;
-            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
+            let include_archived = args
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let results = memory::search_memories(
                 &state.pool,
@@ -2093,15 +2220,27 @@ pub async fn dispatch(
         "memory_update" => {
             let id = require_str(args, "id")?.to_string();
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
-            let content = args.get("content").and_then(|v| v.as_str()).map(String::from);
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let importance = args
                 .get("importance")
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<memory::Importance>())
                 .transpose()?;
-            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
-            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
-            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let topic_key = args
+                .get("topic_key")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let valid_from = args
+                .get("valid_from")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let valid_until = args
+                .get("valid_until")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let archived = args.get("archived").and_then(|v| v.as_bool());
             let mem = memory::update_memory(
                 &state.pool,
@@ -2136,9 +2275,18 @@ pub async fn dispatch(
             Ok(serde_json::to_value(rel).unwrap())
         }
         "memory_context" => {
-            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
-            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
-            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let workspace_id = args
+                .get("workspace_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let topic_key = args
+                .get("topic_key")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let results = memory::get_context(
                 &state.pool,
@@ -2161,7 +2309,8 @@ pub async fn dispatch(
             let task_id = require_str(args, "task_id")?;
             let depends_on_task_id = require_str(args, "depends_on_task_id")?;
             let dep_type = args.get("dep_type").and_then(|v| v.as_str());
-            let dep = tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
+            let dep =
+                tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
             Ok(serde_json::to_value(dep).unwrap())
         }
         "task_depends_remove" => {
@@ -2181,13 +2330,19 @@ pub async fn dispatch(
             let title_pattern = require_str(args, "title_pattern")?;
             let description_template = args.get("description_template").and_then(|v| v.as_str());
             let default_priority = args.get("default_priority").and_then(|v| v.as_str());
-            let default_labels: Option<Vec<String>> =
-                args.get("default_labels").and_then(|v| v.as_array()).map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            let default_labels: Option<Vec<String>> = args
+                .get("default_labels")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
                 });
             let checklist: Option<Vec<String>> =
                 args.get("checklist").and_then(|v| v.as_array()).map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
                 });
             let tmpl = tasks::create_template(
                 &state.pool,
@@ -2213,8 +2368,10 @@ pub async fn dispatch(
         }
         "task_template_use" => {
             let template_id = require_str(args, "template_id")?;
-            let title_vars: Option<std::collections::HashMap<String, String>> =
-                args.get("title_vars").and_then(|v| v.as_object()).map(|obj| {
+            let title_vars: Option<std::collections::HashMap<String, String>> = args
+                .get("title_vars")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
                     obj.iter()
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect()
@@ -2223,7 +2380,9 @@ pub async fn dispatch(
             let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
             let labels: Option<Vec<String>> =
                 args.get("labels").and_then(|v| v.as_array()).map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
                 });
             let task = tasks::create_from_template(
                 &state.pool,
@@ -2240,7 +2399,11 @@ pub async fn dispatch(
             let task_ids: Vec<String> = args
                 .get("task_ids")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let result = tasks::batch_close(&state.pool, &task_ids).await?;
             Ok(serde_json::to_value(result).unwrap())
@@ -2249,7 +2412,11 @@ pub async fn dispatch(
             let task_ids: Vec<String> = args
                 .get("task_ids")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let status = require_str(args, "status")?;
             let result = tasks::batch_update_status(&state.pool, &task_ids, status).await?;
@@ -2259,7 +2426,11 @@ pub async fn dispatch(
             let task_ids: Vec<String> = args
                 .get("task_ids")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let assignee_id = require_str(args, "assignee_id")?;
             let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
@@ -2270,31 +2441,54 @@ pub async fn dispatch(
             let embedding: Vec<f32> = args
                 .get("embedding")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect()
+                })
                 .unwrap_or_default();
             if embedding.is_empty() {
                 return Err(nous_core::error::NousError::Validation(
                     "embedding array cannot be empty".into(),
                 ));
             }
-            memory::store_embedding(&state.pool, memory_id, &embedding).await?;
+            memory::store_embedding(&state.pool, &state.vec_pool, memory_id, &embedding).await?;
             Ok(serde_json::json!({"stored": true}))
         }
         "memory_search_similar" => {
             let embedding: Vec<f32> = args
                 .get("embedding")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect()
+                })
                 .unwrap_or_default();
             if embedding.is_empty() {
                 return Err(nous_core::error::NousError::Validation(
                     "embedding array cannot be empty".into(),
                 ));
             }
-            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(10);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(10);
             let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
-            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|f| f as f32);
-            let results = memory::search_similar(&state.pool, &embedding, limit, workspace_id, threshold).await?;
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32);
+            let results = memory::search_similar(
+                &state.pool,
+                &state.vec_pool,
+                &embedding,
+                limit,
+                workspace_id,
+                threshold,
+            )
+            .await?;
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_session_start" => {
@@ -2313,7 +2507,9 @@ pub async fn dispatch(
             let summary = require_str(args, "summary")?;
             let agent_id = args.get("agent_id").and_then(|v| v.as_str());
             let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
-            let session = memory::session_summary(&state.pool, session_id, summary, agent_id, workspace_id).await?;
+            let session =
+                memory::session_summary(&state.pool, session_id, summary, agent_id, workspace_id)
+                    .await?;
             Ok(serde_json::to_value(session).unwrap())
         }
         "memory_save_prompt" => {
@@ -2321,14 +2517,17 @@ pub async fn dispatch(
             let session_id = args.get("session_id").and_then(|v| v.as_str());
             let agent_id = args.get("agent_id").and_then(|v| v.as_str());
             let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
-            let mem = memory::save_prompt(&state.pool, session_id, agent_id, workspace_id, prompt).await?;
+            let mem = memory::save_prompt(&state.pool, session_id, agent_id, workspace_id, prompt)
+                .await?;
             Ok(serde_json::to_value(mem).unwrap())
         }
         "memory_current_project" => {
             let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
             match memory::detect_current_project(cwd) {
                 Some(project) => Ok(serde_json::to_value(project).unwrap()),
-                None => Ok(serde_json::json!({"detected": false, "message": "no project marker found"})),
+                None => {
+                    Ok(serde_json::json!({"detected": false, "message": "no project marker found"}))
+                }
             }
         }
         "room_unarchive" => {
@@ -2340,7 +2539,8 @@ pub async fn dispatch(
             let room_id = require_str(args, "room_id")?;
             let agent_id = require_str(args, "agent_id")?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let messages = nous_core::messages::list_mentions(&state.pool, room_id, agent_id, limit).await?;
+            let messages =
+                nous_core::messages::list_mentions(&state.pool, room_id, agent_id, limit).await?;
             Ok(serde_json::to_value(messages).unwrap())
         }
         "room_inspect" => {
@@ -2352,14 +2552,25 @@ pub async fn dispatch(
             let ids: Vec<String> = args
                 .get("ids")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let cascade = args.get("cascade").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cascade = args
+                .get("cascade")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let mut results = serde_json::Map::new();
             for id in &ids {
                 match agents::deregister_agent(&state.pool, id, cascade).await {
-                    Ok(result) => { results.insert(id.clone(), serde_json::json!(result)); }
-                    Err(e) => { results.insert(id.clone(), serde_json::json!({"error": e.to_string()})); }
+                    Ok(result) => {
+                        results.insert(id.clone(), serde_json::json!(result));
+                    }
+                    Err(e) => {
+                        results.insert(id.clone(), serde_json::json!({"error": e.to_string()}));
+                    }
                 }
             }
             Ok(serde_json::Value::Object(results))

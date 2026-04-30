@@ -344,10 +344,7 @@ async fn execute(cmd: TaskCommands) -> Result<(), Box<dyn std::error::Error>> {
                 let tmpl = tasks::get_template(pool, &id).await?;
                 println!("{}", serde_json::to_string_pretty(&tmpl)?);
             }
-            TemplateCommands::Use {
-                template,
-                assignee,
-            } => {
+            TemplateCommands::Use { template, assignee } => {
                 let task = tasks::create_from_template(
                     pool,
                     &template,

@@ -158,7 +158,8 @@ pub async fn get_worktree_by_slug(
             .await?
     };
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("worktree slug '{slug}' not found")))?;
+    let row =
+        row.ok_or_else(|| NousError::NotFound(format!("worktree slug '{slug}' not found")))?;
     Worktree::from_row(&row).map_err(NousError::Sqlite)
 }
 
@@ -294,10 +295,7 @@ async fn get_by_id_or_slug(pool: &SqlitePool, id_or_slug: &str) -> Result<Worktr
     }
 }
 
-pub async fn create(
-    pool: &SqlitePool,
-    req: CreateWorktreeRequest,
-) -> Result<Worktree, NousError> {
+pub async fn create(pool: &SqlitePool, req: CreateWorktreeRequest) -> Result<Worktree, NousError> {
     if req.branch.trim().is_empty() {
         return Err(NousError::Validation("branch cannot be empty".into()));
     }
@@ -307,9 +305,7 @@ pub async fn create(
 
     let id = Uuid::now_v7().to_string();
     let slug = req.slug.unwrap_or_else(|| id[id.len() - 8..].to_string());
-    let wt_path = PathBuf::from(&req.repo_root)
-        .join(".worktrees")
-        .join(&slug);
+    let wt_path = PathBuf::from(&req.repo_root).join(".worktrees").join(&slug);
     let path_str = wt_path.to_string_lossy().to_string();
 
     let output = Command::new("git")
