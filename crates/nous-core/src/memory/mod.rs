@@ -202,6 +202,13 @@ impl MemoryRelation {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimilarMemory {
+    #[serde(flatten)]
+    pub memory: Memory,
+    pub score: f32,
+}
+
 // --- Request types ---
 
 #[derive(Debug, Clone)]
@@ -706,6 +713,112 @@ fn sanitize_fts_query(query: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Store a pre-computed embedding vector for a memory.
+/// The embedding is stored as a BLOB of f32 values in little-endian byte order.
+pub async fn store_embedding(
+    pool: &SqlitePool,
+    memory_id: &str,
+    embedding: &[f32],
+) -> Result<(), NousError> {
+    // Verify memory exists
+    let _ = get_memory_by_id(pool, memory_id).await?;
+
+    let bytes = embedding_to_bytes(embedding);
+    sqlx::query("UPDATE memories SET embedding = ? WHERE id = ?")
+        .bind(&bytes)
+        .bind(memory_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Search memories by cosine similarity to a query embedding.
+/// Returns top-K memories with similarity scores, ordered by similarity descending.
+pub async fn search_similar(
+    pool: &SqlitePool,
+    query_embedding: &[f32],
+    limit: u32,
+    workspace_id: Option<&str>,
+    threshold: Option<f32>,
+) -> Result<Vec<SimilarMemory>, NousError> {
+    if query_embedding.is_empty() {
+        return Err(NousError::Validation("embedding cannot be empty".into()));
+    }
+
+    let limit = limit.min(100);
+    let threshold = threshold.unwrap_or(0.0);
+
+    // Fetch all memories with embeddings
+    let mut conditions = vec!["embedding IS NOT NULL".to_string(), "archived = 0".to_string()];
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(ws) = workspace_id {
+        conditions.push("workspace_id = ?".to_string());
+        binds.push(ws.to_string());
+    }
+
+    let sql = format!(
+        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
+         topic_key, valid_from, valid_until, archived, created_at, updated_at, embedding \
+         FROM memories WHERE {}",
+        conditions.join(" AND ")
+    );
+
+    let mut query = sqlx::query(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+
+    let rows = query.fetch_all(pool).await?;
+
+    let mut results: Vec<SimilarMemory> = Vec::new();
+    for row in &rows {
+        let blob: Vec<u8> = row.try_get("embedding").map_err(NousError::Sqlite)?;
+        let emb = bytes_to_embedding(&blob);
+        let score = cosine_similarity(query_embedding, &emb);
+        if score >= threshold {
+            let memory = Memory::from_row(row).map_err(NousError::Sqlite)?;
+            results.push(SimilarMemory { memory, score });
+        }
+    }
+
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit as usize);
+
+    Ok(results)
+}
+
+fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom == 0.0 {
+        0.0
+    } else {
+        dot / denom
+    }
 }
 
 #[cfg(test)]
@@ -1400,5 +1513,87 @@ mod tests {
             RelationType::ConflictsWith
         );
         assert!("unknown".parse::<RelationType>().is_err());
+    }
+
+    #[tokio::test]
+    async fn store_and_search_embedding() {
+        let (pool, _tmp) = setup().await;
+
+        let mem = save_memory(
+            &pool,
+            SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: None,
+                title: "Vector test".into(),
+                content: "Testing vector similarity".into(),
+                memory_type: MemoryType::Fact,
+                importance: None,
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+        store_embedding(&pool, &mem.id, &embedding).await.unwrap();
+
+        let query = vec![0.9, 0.1, 0.0, 0.0];
+        let results = search_similar(&pool, &query, 10, None, None).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].score > 0.9);
+        assert_eq!(results[0].memory.id, mem.id);
+    }
+
+    #[tokio::test]
+    async fn search_similar_respects_threshold() {
+        let (pool, _tmp) = setup().await;
+
+        let mem = save_memory(
+            &pool,
+            SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: None,
+                title: "High similarity".into(),
+                content: "Should match".into(),
+                memory_type: MemoryType::Fact,
+                importance: None,
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        store_embedding(&pool, &mem.id, &[1.0, 0.0, 0.0]).await.unwrap();
+
+        // Orthogonal vector should have ~0 similarity
+        let results = search_similar(&pool, &[0.0, 1.0, 0.0], 10, None, Some(0.5))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let a = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&a, &a) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        assert!(cosine_similarity(&a, &b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn embedding_roundtrip() {
+        let original = vec![1.0f32, -2.5, 3.14, 0.0];
+        let bytes = embedding_to_bytes(&original);
+        let recovered = bytes_to_embedding(&bytes);
+        assert_eq!(original, recovered);
     }
 }

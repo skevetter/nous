@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
@@ -641,4 +643,371 @@ pub async fn search_tasks(
         .map(Task::from_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(NousError::Sqlite)
+}
+
+// --- Task Dependencies ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDependency {
+    pub id: String,
+    pub task_id: String,
+    pub depends_on_task_id: String,
+    pub dep_type: String,
+    pub created_at: String,
+}
+
+impl TaskDependency {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            task_id: row.try_get("task_id")?,
+            depends_on_task_id: row.try_get("depends_on_task_id")?,
+            dep_type: row.try_get("dep_type")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
+pub async fn add_dependency(
+    pool: &SqlitePool,
+    task_id: &str,
+    depends_on_task_id: &str,
+    dep_type: Option<&str>,
+) -> Result<TaskDependency, NousError> {
+    // Validate both tasks exist
+    let _ = get_task(pool, task_id).await?;
+    let _ = get_task(pool, depends_on_task_id).await?;
+
+    if task_id == depends_on_task_id {
+        return Err(NousError::Validation("task cannot depend on itself".into()));
+    }
+
+    let dep_type = dep_type.unwrap_or("blocked_by");
+    if !matches!(dep_type, "blocked_by" | "blocks" | "waiting_on") {
+        return Err(NousError::Validation(format!(
+            "invalid dep_type: '{dep_type}' — must be blocked_by, blocks, or waiting_on"
+        )));
+    }
+
+    // Check for circular dependencies
+    if would_create_cycle(pool, task_id, depends_on_task_id).await? {
+        return Err(NousError::Conflict("would create circular dependency".into()));
+    }
+
+    let id = Uuid::now_v7().to_string();
+    sqlx::query(
+        "INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dep_type) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(task_id)
+    .bind(depends_on_task_id)
+    .bind(dep_type)
+    .execute(pool)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err) if db_err.message().contains("UNIQUE") => {
+            NousError::Conflict("dependency already exists".into())
+        }
+        _ => NousError::Sqlite(e),
+    })?;
+
+    get_dependency_by_id(pool, &id).await
+}
+
+async fn get_dependency_by_id(pool: &SqlitePool, id: &str) -> Result<TaskDependency, NousError> {
+    let row = sqlx::query("SELECT * FROM task_dependencies WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let row = row.ok_or_else(|| NousError::NotFound(format!("dependency '{id}' not found")))?;
+    TaskDependency::from_row(&row).map_err(NousError::Sqlite)
+}
+
+pub async fn remove_dependency(
+    pool: &SqlitePool,
+    task_id: &str,
+    depends_on_task_id: &str,
+    dep_type: Option<&str>,
+) -> Result<(), NousError> {
+    let dep_type = dep_type.unwrap_or("blocked_by");
+    let result = sqlx::query(
+        "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ? AND dep_type = ?"
+    )
+    .bind(task_id)
+    .bind(depends_on_task_id)
+    .bind(dep_type)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(NousError::NotFound("dependency not found".into()));
+    }
+    Ok(())
+}
+
+pub async fn list_dependencies(
+    pool: &SqlitePool,
+    task_id: &str,
+) -> Result<Vec<TaskDependency>, NousError> {
+    let rows = sqlx::query(
+        "SELECT * FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ? ORDER BY created_at DESC"
+    )
+    .bind(task_id)
+    .bind(task_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(TaskDependency::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)
+}
+
+async fn would_create_cycle(
+    pool: &SqlitePool,
+    task_id: &str,
+    depends_on_task_id: &str,
+) -> Result<bool, NousError> {
+    // BFS from depends_on_task_id — if we reach task_id, it's a cycle
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(depends_on_task_id.to_string());
+
+    while let Some(current) = queue.pop_front() {
+        if current == task_id {
+            return Ok(true);
+        }
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        let rows = sqlx::query(
+            "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?"
+        )
+        .bind(&current)
+        .fetch_all(pool)
+        .await?;
+        for row in rows {
+            let dep: String = row.try_get("depends_on_task_id").map_err(NousError::Sqlite)?;
+            queue.push_back(dep);
+        }
+    }
+    Ok(false)
+}
+
+// --- Task Templates ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskTemplate {
+    pub id: String,
+    pub name: String,
+    pub title_pattern: String,
+    pub description_template: Option<String>,
+    pub default_priority: String,
+    pub default_labels: Vec<String>,
+    pub checklist: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl TaskTemplate {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        let labels_str: String = row.try_get("default_labels")?;
+        let default_labels: Vec<String> = serde_json::from_str(&labels_str).unwrap_or_default();
+        let checklist_str: String = row.try_get("checklist")?;
+        let checklist: Vec<String> = serde_json::from_str(&checklist_str).unwrap_or_default();
+
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            title_pattern: row.try_get("title_pattern")?,
+            description_template: row.try_get("description_template")?,
+            default_priority: row.try_get("default_priority")?,
+            default_labels,
+            checklist,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+pub async fn create_template(
+    pool: &SqlitePool,
+    name: &str,
+    title_pattern: &str,
+    description_template: Option<&str>,
+    default_priority: Option<&str>,
+    default_labels: Option<&[String]>,
+    checklist: Option<&[String]>,
+) -> Result<TaskTemplate, NousError> {
+    if name.trim().is_empty() {
+        return Err(NousError::Validation("template name cannot be empty".into()));
+    }
+    if title_pattern.trim().is_empty() {
+        return Err(NousError::Validation("title_pattern cannot be empty".into()));
+    }
+
+    let id = Uuid::now_v7().to_string();
+    let priority = default_priority.unwrap_or("medium");
+    let labels_json = serde_json::to_string(&default_labels.unwrap_or(&[])).unwrap();
+    let checklist_json = serde_json::to_string(&checklist.unwrap_or(&[])).unwrap();
+
+    sqlx::query(
+        "INSERT INTO task_templates (id, name, title_pattern, description_template, default_priority, default_labels, checklist) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(name.trim())
+    .bind(title_pattern.trim())
+    .bind(description_template)
+    .bind(priority)
+    .bind(&labels_json)
+    .bind(&checklist_json)
+    .execute(pool)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err) if db_err.message().contains("UNIQUE") => {
+            NousError::Conflict(format!("template '{}' already exists", name.trim()))
+        }
+        _ => NousError::Sqlite(e),
+    })?;
+
+    get_template(pool, &id).await
+}
+
+pub async fn get_template(pool: &SqlitePool, id: &str) -> Result<TaskTemplate, NousError> {
+    let row = sqlx::query("SELECT * FROM task_templates WHERE id = ? OR name = ?")
+        .bind(id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let row = row.ok_or_else(|| NousError::NotFound(format!("template '{id}' not found")))?;
+    TaskTemplate::from_row(&row).map_err(NousError::Sqlite)
+}
+
+pub async fn list_templates(pool: &SqlitePool, limit: Option<u32>) -> Result<Vec<TaskTemplate>, NousError> {
+    let limit = limit.unwrap_or(50).min(200);
+    let rows = sqlx::query("SELECT * FROM task_templates ORDER BY created_at DESC LIMIT ?")
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+    rows.iter()
+        .map(TaskTemplate::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)
+}
+
+pub async fn create_from_template(
+    pool: &SqlitePool,
+    template_id: &str,
+    title_vars: Option<&HashMap<String, String>>,
+    overrides_description: Option<&str>,
+    overrides_assignee: Option<&str>,
+    overrides_labels: Option<&[String]>,
+) -> Result<Task, NousError> {
+    let template = get_template(pool, template_id).await?;
+
+    // Substitute variables in title pattern: {{var_name}} -> value
+    let mut title = template.title_pattern.clone();
+    if let Some(vars) = title_vars {
+        for (key, value) in vars {
+            title = title.replace(&format!("{{{{{key}}}}}"), value);
+        }
+    }
+
+    let labels = overrides_labels
+        .map(|l| l.to_vec())
+        .unwrap_or(template.default_labels);
+
+    let description = overrides_description
+        .map(|s| s.to_string())
+        .or(template.description_template);
+
+    create_task(
+        pool,
+        &title,
+        description.as_deref(),
+        Some(&template.default_priority),
+        overrides_assignee,
+        Some(&labels),
+        None,
+        false,
+        None,
+    )
+    .await
+}
+
+// --- Batch Operations ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchResult {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<BatchError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchError {
+    pub id: String,
+    pub error: String,
+}
+
+pub async fn batch_close(
+    pool: &SqlitePool,
+    task_ids: &[String],
+) -> Result<BatchResult, NousError> {
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for id in task_ids {
+        match close_task(pool, id, None).await {
+            Ok(_) => succeeded.push(id.clone()),
+            Err(e) => failed.push(BatchError {
+                id: id.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(BatchResult { succeeded, failed })
+}
+
+pub async fn batch_update_status(
+    pool: &SqlitePool,
+    task_ids: &[String],
+    status: &str,
+) -> Result<BatchResult, NousError> {
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for id in task_ids {
+        match update_task(pool, id, Some(status), None, None, None, None, None).await {
+            Ok(_) => succeeded.push(id.clone()),
+            Err(e) => failed.push(BatchError {
+                id: id.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(BatchResult { succeeded, failed })
+}
+
+pub async fn batch_assign(
+    pool: &SqlitePool,
+    task_ids: &[String],
+    assignee_id: &str,
+) -> Result<BatchResult, NousError> {
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for id in task_ids {
+        match update_task(pool, id, None, None, Some(assignee_id), None, None, None).await {
+            Ok(_) => succeeded.push(id.clone()),
+            Err(e) => failed.push(BatchError {
+                id: id.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    Ok(BatchResult { succeeded, failed })
 }

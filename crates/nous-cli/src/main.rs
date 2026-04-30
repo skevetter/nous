@@ -62,6 +62,8 @@ enum Commands {
         #[command(subcommand)]
         command: WorktreeCommands,
     },
+    /// Start the MCP server (stdio transport for agent integration)
+    McpServer,
     /// Start the HTTP daemon
     Serve,
 }
@@ -101,6 +103,9 @@ async fn main() {
         }
         Commands::Worktree { command } => {
             commands::worktree::run(command).await;
+        }
+        Commands::McpServer => {
+            commands::mcp_server::run().await;
         }
         Commands::Serve => {
             commands::serve::run().await;

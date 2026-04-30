@@ -21,11 +21,11 @@ use nous_core::worktrees;
 use crate::error::AppError;
 use crate::state::AppState;
 
-#[derive(Serialize)]
-struct ToolSchema {
-    name: &'static str,
-    description: &'static str,
-    input_schema: Value,
+#[derive(Serialize, Clone)]
+pub struct ToolSchema {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: Value,
 }
 
 #[derive(Deserialize)]
@@ -48,8 +48,8 @@ pub struct ToolContent {
     pub text: String,
 }
 
-pub async fn list_tools() -> impl IntoResponse {
-    let tools = vec![
+pub fn get_tool_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "room_create",
             description: "Create a new chat room",
@@ -935,8 +935,135 @@ pub async fn list_tools() -> impl IntoResponse {
                 "properties": {}
             }),
         },
-    ];
+        ToolSchema {
+            name: "task_depends_add",
+            description: "Add a dependency between tasks (execution-order constraint)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID that has the dependency" },
+                    "depends_on_task_id": { "type": "string", "description": "Task ID it depends on" },
+                    "dep_type": { "type": "string", "description": "Dependency type: blocked_by, blocks, waiting_on (default: blocked_by)" }
+                },
+                "required": ["task_id", "depends_on_task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_depends_remove",
+            description: "Remove a dependency between tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID" },
+                    "depends_on_task_id": { "type": "string", "description": "Depends-on task ID" },
+                    "dep_type": { "type": "string", "description": "Dependency type (default: blocked_by)" }
+                },
+                "required": ["task_id", "depends_on_task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_depends_list",
+            description: "List all dependencies for a task",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID" }
+                },
+                "required": ["task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_create",
+            description: "Create a reusable task template",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Template name (unique)" },
+                    "title_pattern": { "type": "string", "description": "Title pattern (use {{var}} for variables)" },
+                    "description_template": { "type": "string", "description": "Description template" },
+                    "default_priority": { "type": "string", "description": "Default priority: critical, high, medium, low" },
+                    "default_labels": { "type": "array", "items": { "type": "string" }, "description": "Default labels" },
+                    "checklist": { "type": "array", "items": { "type": "string" }, "description": "Checklist items" }
+                },
+                "required": ["name", "title_pattern"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_list",
+            description: "List task templates",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "task_template_get",
+            description: "Get a task template by ID or name",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Template ID or name" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_use",
+            description: "Create a task from a template",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "template_id": { "type": "string", "description": "Template ID or name" },
+                    "title_vars": { "type": "object", "description": "Variables to substitute in title pattern (key: value)" },
+                    "description": { "type": "string", "description": "Override description" },
+                    "assignee_id": { "type": "string", "description": "Override assignee" },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Override labels" }
+                },
+                "required": ["template_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_close",
+            description: "Batch close multiple tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs to close" }
+                },
+                "required": ["task_ids"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_update_status",
+            description: "Batch update status of multiple tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs" },
+                    "status": { "type": "string", "description": "New status: open, in_progress, done, closed" }
+                },
+                "required": ["task_ids", "status"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_assign",
+            description: "Batch assign multiple tasks to an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs" },
+                    "assignee_id": { "type": "string", "description": "Assignee agent ID" }
+                },
+                "required": ["task_ids", "assignee_id"]
+            }),
+        },
+    ]
+}
 
+pub async fn list_tools() -> impl IntoResponse {
+    let tools = get_tool_schemas();
     Json(serde_json::json!({ "tools": tools }))
 }
 
@@ -976,7 +1103,7 @@ fn require_str<'a>(args: &'a Value, field: &str) -> Result<&'a str, nous_core::e
         })
 }
 
-async fn dispatch(
+pub async fn dispatch(
     state: &AppState,
     name: &str,
     args: &Value,
@@ -1871,6 +1998,114 @@ async fn dispatch(
             let id = require_str(args, "id")?;
             let relations = memory::list_relations(&state.pool, id).await?;
             Ok(serde_json::to_value(relations).unwrap())
+        }
+        "task_depends_add" => {
+            let task_id = require_str(args, "task_id")?;
+            let depends_on_task_id = require_str(args, "depends_on_task_id")?;
+            let dep_type = args.get("dep_type").and_then(|v| v.as_str());
+            let dep = tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
+            Ok(serde_json::to_value(dep).unwrap())
+        }
+        "task_depends_remove" => {
+            let task_id = require_str(args, "task_id")?;
+            let depends_on_task_id = require_str(args, "depends_on_task_id")?;
+            let dep_type = args.get("dep_type").and_then(|v| v.as_str());
+            tasks::remove_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
+            Ok(serde_json::json!({"removed": true}))
+        }
+        "task_depends_list" => {
+            let task_id = require_str(args, "task_id")?;
+            let deps = tasks::list_dependencies(&state.pool, task_id).await?;
+            Ok(serde_json::to_value(deps).unwrap())
+        }
+        "task_template_create" => {
+            let name = require_str(args, "name")?;
+            let title_pattern = require_str(args, "title_pattern")?;
+            let description_template = args.get("description_template").and_then(|v| v.as_str());
+            let default_priority = args.get("default_priority").and_then(|v| v.as_str());
+            let default_labels: Option<Vec<String>> =
+                args.get("default_labels").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let checklist: Option<Vec<String>> =
+                args.get("checklist").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let tmpl = tasks::create_template(
+                &state.pool,
+                name,
+                title_pattern,
+                description_template,
+                default_priority,
+                default_labels.as_deref(),
+                checklist.as_deref(),
+            )
+            .await?;
+            Ok(serde_json::to_value(tmpl).unwrap())
+        }
+        "task_template_list" => {
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let templates = tasks::list_templates(&state.pool, limit).await?;
+            Ok(serde_json::to_value(templates).unwrap())
+        }
+        "task_template_get" => {
+            let id = require_str(args, "id")?;
+            let tmpl = tasks::get_template(&state.pool, id).await?;
+            Ok(serde_json::to_value(tmpl).unwrap())
+        }
+        "task_template_use" => {
+            let template_id = require_str(args, "template_id")?;
+            let title_vars: Option<std::collections::HashMap<String, String>> =
+                args.get("title_vars").and_then(|v| v.as_object()).map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                });
+            let description = args.get("description").and_then(|v| v.as_str());
+            let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
+            let labels: Option<Vec<String>> =
+                args.get("labels").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let task = tasks::create_from_template(
+                &state.pool,
+                template_id,
+                title_vars.as_ref(),
+                description,
+                assignee_id,
+                labels.as_deref(),
+            )
+            .await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_batch_close" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let result = tasks::batch_close(&state.pool, &task_ids).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "task_batch_update_status" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let status = require_str(args, "status")?;
+            let result = tasks::batch_update_status(&state.pool, &task_ids, status).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "task_batch_assign" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let assignee_id = require_str(args, "assignee_id")?;
+            let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
+            Ok(serde_json::to_value(result).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

@@ -96,6 +96,77 @@ pub enum TaskCommands {
         #[arg(long, default_value = "20")]
         limit: u32,
     },
+    /// Manage task dependencies
+    Depends {
+        #[command(subcommand)]
+        command: DependsCommands,
+    },
+    /// Manage task templates
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DependsCommands {
+    /// Add a dependency
+    Add {
+        /// Task ID
+        task_id: String,
+        /// Depends on task ID
+        depends_on: String,
+        /// Dependency type: blocked_by, blocks, waiting_on
+        #[arg(long, default_value = "blocked_by")]
+        dep_type: String,
+    },
+    /// Remove a dependency
+    Remove {
+        /// Task ID
+        task_id: String,
+        /// Depends on task ID
+        depends_on: String,
+        /// Dependency type
+        #[arg(long, default_value = "blocked_by")]
+        dep_type: String,
+    },
+    /// List dependencies for a task
+    List {
+        /// Task ID
+        task_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TemplateCommands {
+    /// Create a task template
+    Create {
+        /// Template name (unique)
+        name: String,
+        /// Title pattern (use {{var}} for variables)
+        title_pattern: String,
+        /// Description template
+        #[arg(long)]
+        description: Option<String>,
+        /// Default priority
+        #[arg(long, default_value = "medium")]
+        priority: String,
+    },
+    /// List templates
+    List,
+    /// Get a template
+    Get {
+        /// Template ID or name
+        id: String,
+    },
+    /// Create a task from a template
+    Use {
+        /// Template ID or name
+        template: String,
+        /// Assignee agent ID
+        #[arg(long)]
+        assignee: Option<String>,
+    },
 }
 
 pub async fn run(cmd: TaskCommands) {
@@ -223,6 +294,72 @@ async fn execute(cmd: TaskCommands) -> Result<(), Box<dyn std::error::Error>> {
             let results = tasks::search_tasks(pool, &query, Some(limit)).await?;
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
+        TaskCommands::Depends { command } => match command {
+            DependsCommands::Add {
+                task_id,
+                depends_on,
+                dep_type,
+            } => {
+                let dep =
+                    tasks::add_dependency(pool, &task_id, &depends_on, Some(&dep_type)).await?;
+                println!("{}", serde_json::to_string_pretty(&dep)?);
+            }
+            DependsCommands::Remove {
+                task_id,
+                depends_on,
+                dep_type,
+            } => {
+                tasks::remove_dependency(pool, &task_id, &depends_on, Some(&dep_type)).await?;
+                println!("Dependency removed");
+            }
+            DependsCommands::List { task_id } => {
+                let deps = tasks::list_dependencies(pool, &task_id).await?;
+                println!("{}", serde_json::to_string_pretty(&deps)?);
+            }
+        },
+        TaskCommands::Template { command } => match command {
+            TemplateCommands::Create {
+                name,
+                title_pattern,
+                description,
+                priority,
+            } => {
+                let tmpl = tasks::create_template(
+                    pool,
+                    &name,
+                    &title_pattern,
+                    description.as_deref(),
+                    Some(&priority),
+                    None,
+                    None,
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&tmpl)?);
+            }
+            TemplateCommands::List => {
+                let templates = tasks::list_templates(pool, None).await?;
+                println!("{}", serde_json::to_string_pretty(&templates)?);
+            }
+            TemplateCommands::Get { id } => {
+                let tmpl = tasks::get_template(pool, &id).await?;
+                println!("{}", serde_json::to_string_pretty(&tmpl)?);
+            }
+            TemplateCommands::Use {
+                template,
+                assignee,
+            } => {
+                let task = tasks::create_from_template(
+                    pool,
+                    &template,
+                    None,
+                    None,
+                    assignee.as_deref(),
+                    None,
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            }
+        },
     }
 
     pools.close().await;
