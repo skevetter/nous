@@ -238,10 +238,9 @@ CLI entry points use `anyhow` for contextual error chains. The `NousError::exit_
 
 | Variant | Trigger | Exit code |
 |---------|---------|-----------|
-| `Sqlite(rusqlite::Error)` | Any SQLite operation failure | 1 |
+| `Sqlite(sqlx::Error)` | Any SQLite operation failure | 1 |
 | `Io(std::io::Error)` | File read/write, socket, process | 1 |
 | `Config(String)` | Missing or malformed config file | 1 |
-| `Encryption(String)` | SQLCipher key mismatch, re-key failure | 1 |
 | `Internal(String)` | Invariant violation, unexpected state | 1 |
 | `Embedding(String)` | ONNX inference failure, model load error | 1 |
 | `Validation(String)` | Input fails schema constraints | 2 |
@@ -258,7 +257,7 @@ CLI entry points use `anyhow` for contextual error chains. The `NousError::exit_
         ▼
   WriteChannel / ReadPool
         │
-        │  NousError::Sqlite(_) if rusqlite fails
+        │  NousError::Sqlite(_) if sqlx fails
         │  NousError::Embedding(_) if ort inference fails
         ▼
   crates/nous-cli/src/server.rs  (MCP tool handler)
@@ -352,7 +351,6 @@ All database tests create isolated SQLite instances via `tempdir`, so parallel t
 |------|-------|----------|-----------------|
 | `nous-shared/tests/error_tests.rs` | nous-shared | Unit | `NousError` variants, exit codes |
 | `nous-shared/tests/ids_tests.rs` | nous-shared | Unit | UUIDv7 generation, ID type round-trips |
-| `nous-shared/tests/key_rotation_tests.rs` | nous-shared | Unit | SQLCipher key rotation |
 | `nous-shared/tests/sqlite_tests.rs` | nous-shared | Unit | Migration runner, WAL mode flag |
 | `nous-shared/tests/xdg_tests.rs` | nous-shared | Unit | XDG cache path resolution |
 | `nous-core/tests/db_tests.rs` | nous-core | Unit | Schema migrations, CRUD on memories |
@@ -437,7 +435,6 @@ Both are workspace members (`[workspace].members` in root `Cargo.toml`). `cargo 
 | Fuzz target for MCP input dispatch | `cargo-fuzz` on `handle_store` / `handle_recall` entry points | Finds panics on malformed JSON before attackers do |
 | Mock clock for schedule_e2e | Inject `Arc<dyn Clock>` trait, advance by tick in tests | Removes wall-clock dependency, eliminates CI flakiness |
 | Embedding pipeline snapshot tests | Store expected 384-dim vectors for fixed inputs; assert cosine similarity > 0.99 | Detects model version drift |
-| SQLCipher re-key round-trip tests | Open DB, rotate key, re-open with new key, verify all rows readable | Already tested in `key_rotation_tests.rs`; worth extending to encrypted + vector extension |
 
 ### 4.5 Open Questions
 
@@ -452,7 +449,7 @@ Both are workspace members (`[workspace].members` in root `Cargo.toml`). `cargo 
 
 ### 5.1 Current State
 
-A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request. It runs on `ubuntu-latest` (free tier — public repos get unlimited CI minutes) with a single job: format check → lint → test → release build. The job sets `CARGO_BUILD_JOBS: 1` because free GitHub runners have limited RAM (7GB); bundled SQLCipher and ONNX Runtime exhaust memory under parallel compilation. No paid runners are needed for MVP.
+A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request. It runs on `ubuntu-latest` (free tier — public repos get unlimited CI minutes) with a single job: format check → lint → test → release build. The job sets `CARGO_BUILD_JOBS: 1` because free GitHub runners have limited RAM (7GB); ONNX Runtime exhausts memory under parallel compilation. No paid runners are needed for MVP.
 
 The workspace uses Rust toolchain `1.88` (pinned via `dtolnay/rust-toolchain`) with `rustfmt` and `clippy` components. Cargo cache is keyed on `Cargo.lock` hash to get fast incremental builds on cache hit.
 
@@ -513,7 +510,7 @@ StandardError=journal
 ### 5.3 Integration Points
 
 - **System architecture** (`01-system-architecture.md`): The daemon mode (`nous serve --transport http`) is what the systemd service runs. CI must build and test the daemon binary; `cargo build --release` in step 9 produces it.
-- **Data layer** (`02-data-layer.md`): The release build includes bundled SQLCipher (`rusqlite = { features = ["bundled-sqlcipher"] }`). Cross-compilation for macOS requires the host to provide an OpenSSL-compatible build environment or use `cross` with a Docker image that includes it.
+- **Data layer** (`02-data-layer.md`): Cross-compilation for macOS requires the host to provide an OpenSSL-compatible build environment or use `cross` with a Docker image that includes it.
 - **Testing** (§4 above): `cargo test --workspace` in CI step 7 runs all 31 test files. The `schedule_e2e.rs` time-sensitive tests run here; wall-clock variance under GitHub Actions load is a known flakiness source.
 - **nous-otlp binary**: The workspace includes `crates/nous-otlp` as a member. `cargo build --release` produces both `nous-cli` and `nous-otlp` binaries. The release workflow must distribute both.
 
@@ -556,7 +553,7 @@ The `tests/correlation` and `tests/e2e` workspace members participate in the ver
 
 **Disk space management in CI:**
 
-The `jlumbroso/free-disk-space@v1.3.1` step reclaims ~20GB by removing Android SDK, .NET SDK, Haskell GHC, large pre-installed packages, Docker images, and swap storage. This is necessary because bundled SQLCipher (`rusqlite = { features = ["bundled-sqlcipher"] }`) and ONNX Runtime (`ort = "2.0.0-rc.12"`) produce large build artifacts that can exhaust the default 14GB free space on the GitHub-hosted `ubuntu-latest` runner.
+The `jlumbroso/free-disk-space@v1.3.1` step reclaims ~20GB by removing Android SDK, .NET SDK, Haskell GHC, large pre-installed packages, Docker images, and swap storage. This is necessary because ONNX Runtime (`ort = "2.0.0-rc.12"`) produces large build artifacts that can exhaust the default 14GB free space on the GitHub-hosted `ubuntu-latest` runner.
 
 ### 5.4 Open Questions
 

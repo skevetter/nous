@@ -675,7 +675,7 @@ A task can be linked to a memory via the existing `memory_relate` operation (`do
 | Dependency | Version / Reference | Required by |
 |------------|--------------------|----|
 | SQLite WAL mode + FTS5 | System SQLite (≥3.35) | Rooms FTS, task indexes |
-| `rusqlite` | existing in `Cargo.toml` | All DB operations |
+| `sqlx` | existing in `Cargo.toml` | All DB operations |
 | `tokio::sync::broadcast` | existing `tokio` dep | Notification delivery |
 | `dashmap` | add if not present | `NotificationRegistry` (concurrent room→sender map) |
 | `uuid` (v7) | `crates/nous-shared/src/ids.rs:40` | Task and room IDs |
