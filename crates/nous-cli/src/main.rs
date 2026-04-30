@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 
+use commands::agent::AgentCommands;
+use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
 use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
@@ -17,6 +19,16 @@ struct Cli {
 enum Commands {
     /// Run diagnostic checks
     Doctor,
+    /// Agent registry operations
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
+    /// Artifact registry operations
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommands,
+    },
     /// Chat room operations
     Chat {
         #[command(subcommand)]
@@ -47,6 +59,12 @@ async fn main() {
     match cli.command {
         Commands::Doctor => {
             commands::doctor::run().await;
+        }
+        Commands::Agent { command } => {
+            commands::agent::run(command).await;
+        }
+        Commands::Artifact { command } => {
+            commands::artifact::run(command).await;
         }
         Commands::Chat { command } => {
             commands::chat::run(command).await;

@@ -40,6 +40,46 @@ pub fn app(state: AppState) -> Router {
             "/worktrees/{id}/archive",
             post(routes::worktrees::archive),
         )
+        .route(
+            "/agents",
+            post(routes::agents::register).get(routes::agents::list),
+        )
+        .route(
+            "/agents/tree",
+            get(routes::agents::tree),
+        )
+        .route(
+            "/agents/search",
+            get(routes::agents::search),
+        )
+        .route(
+            "/agents/stale",
+            get(routes::agents::stale),
+        )
+        .route(
+            "/agents/{id}",
+            get(routes::agents::get).delete(routes::agents::deregister),
+        )
+        .route(
+            "/agents/{id}/heartbeat",
+            post(routes::agents::heartbeat),
+        )
+        .route(
+            "/agents/{id}/children",
+            get(routes::agents::children),
+        )
+        .route(
+            "/agents/{id}/ancestors",
+            get(routes::agents::ancestors),
+        )
+        .route(
+            "/artifacts",
+            post(routes::agents::register_artifact).get(routes::agents::list_artifacts),
+        )
+        .route(
+            "/artifacts/{id}",
+            delete(routes::agents::deregister_artifact),
+        )
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
@@ -324,7 +364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_list_tools_returns_19_tools() {
+    async fn mcp_list_tools_returns_35_tools() {
         let (state, _tmp) = test_state().await;
         let app = app(state);
 
@@ -344,7 +384,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 35);
     }
 
     #[tokio::test]

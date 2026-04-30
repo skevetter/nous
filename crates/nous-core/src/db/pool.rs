@@ -141,6 +141,67 @@ const MIGRATIONS: &[Migration] = &[
               CREATE INDEX IF NOT EXISTS idx_worktrees_branch ON worktrees(branch); \
               CREATE TRIGGER IF NOT EXISTS worktrees_au AFTER UPDATE ON worktrees WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE worktrees SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
     },
+    Migration {
+        version: "011",
+        name: "agents",
+        sql: "CREATE TABLE IF NOT EXISTS agents (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              name TEXT NOT NULL, \
+              agent_type TEXT NOT NULL CHECK(agent_type IN ('engineer','manager','director','senior-manager')), \
+              parent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, \
+              namespace TEXT NOT NULL DEFAULT 'default', \
+              status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive','archived','running','idle','blocked','done')), \
+              room TEXT, \
+              last_seen_at TEXT, \
+              metadata_json TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              UNIQUE(name, namespace)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_agents_namespace ON agents(namespace); \
+              CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(namespace, status); \
+              CREATE TRIGGER IF NOT EXISTS agents_au AFTER UPDATE ON agents WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE agents SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
+    },
+    Migration {
+        version: "012",
+        name: "agent_relationships_and_artifacts",
+        sql: "CREATE TABLE IF NOT EXISTS agent_relationships (\
+              parent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, \
+              child_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, \
+              relationship_type TEXT NOT NULL DEFAULT 'reports_to', \
+              namespace TEXT NOT NULL DEFAULT 'default', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              PRIMARY KEY (parent_id, child_id, namespace)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_rel_parent ON agent_relationships(parent_id, namespace); \
+              CREATE INDEX IF NOT EXISTS idx_rel_child ON agent_relationships(child_id, namespace); \
+              CREATE TABLE IF NOT EXISTS artifacts (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, \
+              artifact_type TEXT NOT NULL CHECK(artifact_type IN ('worktree','room','schedule','branch')), \
+              name TEXT NOT NULL, \
+              path TEXT, \
+              status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','deleted')), \
+              namespace TEXT NOT NULL DEFAULT 'default', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              last_seen_at TEXT, \
+              UNIQUE(agent_id, artifact_type, name, namespace)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_artifacts_agent ON artifacts(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_artifacts_ns ON artifacts(namespace); \
+              CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(agent_id, artifact_type, namespace); \
+              CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE artifacts SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
+    },
+    Migration {
+        version: "013",
+        name: "agents_fts",
+        sql: "CREATE VIRTUAL TABLE IF NOT EXISTS agents_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS agents_fts_insert AFTER INSERT ON agents BEGIN INSERT INTO agents_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.agent_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata_json, '')); END; \
+              CREATE TRIGGER IF NOT EXISTS agents_fts_delete AFTER DELETE ON agents BEGIN DELETE FROM agents_fts WHERE rowid = OLD.rowid; END; \
+              CREATE TRIGGER IF NOT EXISTS agents_fts_update AFTER UPDATE ON agents WHEN NEW.name != OLD.name OR NEW.agent_type != OLD.agent_type OR IFNULL(NEW.metadata_json, '') != IFNULL(OLD.metadata_json, '') BEGIN DELETE FROM agents_fts WHERE rowid = OLD.rowid; INSERT INTO agents_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.agent_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata_json, '')); END;",
+    },
 ];
 
 struct Migration {
