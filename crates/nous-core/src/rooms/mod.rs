@@ -19,11 +19,14 @@ impl Room {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
         let metadata_str: Option<String> = row.try_get("metadata")?;
-        let metadata = metadata_str
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .unwrap_or(None);
+        let metadata = match metadata_str.as_deref().map(serde_json::from_str) {
+            Some(Ok(val)) => Some(val),
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "malformed JSON in room metadata column, treating as null");
+                None
+            }
+            None => None,
+        };
         let archived: i32 = row.try_get("archived")?;
 
         Ok(Self {
@@ -44,6 +47,12 @@ pub async fn create_room(
     purpose: Option<&str>,
     metadata: Option<&serde_json::Value>,
 ) -> Result<Room, NousError> {
+    if name.trim().is_empty() {
+        return Err(NousError::Validation(
+            "room name cannot be empty".into(),
+        ));
+    }
+
     let id = Uuid::now_v7().to_string();
     let metadata_json = metadata.map(|m| m.to_string());
 
