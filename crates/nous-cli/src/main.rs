@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 
 use commands::chat::ChatCommands;
+use commands::task::TaskCommands;
 
 #[derive(Parser)]
 #[command(name = "nous", about = "The nous platform CLI")]
@@ -19,6 +20,11 @@ enum Commands {
     Chat {
         #[command(subcommand)]
         command: ChatCommands,
+    },
+    /// Task management operations
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
     },
     /// Start the HTTP daemon
     Serve,
@@ -38,6 +44,9 @@ async fn main() {
         }
         Commands::Chat { command } => {
             commands::chat::run(command).await;
+        }
+        Commands::Task { command } => {
+            commands::task::run(command).await;
         }
         Commands::Serve => {
             commands::serve::run().await;
