@@ -2,11 +2,11 @@
 
 ## 1. Overview
 
-`search_similar` (`crates/nous-core/src/memory/mod.rs:739`) loads every row with a non-NULL `embedding` BLOB from the `memories` table and computes cosine similarity in Rust. On a database with N memories the query touches all N rows — O(N) I/O plus O(N) CPU before the first result is returned.
+`search_similar` (`crates/nous-core/src/memory/mod.rs:757`) loaded every row with a non-NULL `embedding` BLOB from the `memories` table and computed cosine similarity in Rust. On a database with N memories the query touches all N rows — O(N) I/O plus O(N) CPU before the first result is returned.
 
 sqlite-vec replaces this with a vec0 virtual table that stores embeddings in a dedicated file (`memory-vec.db`) and answers K-nearest-neighbour queries with a single indexed lookup. Response time becomes O(log N + K) instead of O(N), and the main FTS database is never touched during similarity search.
 
-The design doc `docs/design/06-features-p5-p7.md:483` specified this migration; this document records the implementation approach chosen.
+Implementation follows the approach specified in `docs/design/06-features-p5-p7.md:483`.
 
 ## 2. Architecture
 
@@ -26,9 +26,9 @@ pub struct DbPools {
 }
 ```
 
-SQLx cannot load native extensions at runtime, so vec0 requires rusqlite. `create_vec_pool` (`pool.rs:443`) opens the connection and calls `sqlite_vec::sqlite3_vec_init(conn.handle())` to register the extension before any queries run. The `sqlite-vec = "0.1.10-alpha.3"` and `rusqlite = { version = "0.32", features = ["bundled"] }` crate dependencies are declared at workspace level (`Cargo.toml:19-20`), giving a fully static distribution with no system SQLite dependency.
+SQLx cannot load native extensions at runtime, so vec0 requires rusqlite. `create_vec_pool` (`pool.rs:443`) opens the connection and calls `sqlite_vec::sqlite3_vec_init(conn.handle())` to register the extension before any queries run. The `sqlite-vec = "0.1.9"` and `rusqlite = { version = "0.32", features = ["bundled"] }` crate dependencies are declared at workspace level (`Cargo.toml:19-20`), giving a fully static distribution with no system SQLite dependency.
 
-The FTS pool runs its own migration runner (`run_migrations_on_pool`, `pool.rs:511`). The vec pool runs a separate runner (`run_vec_migrations`, `pool.rs:469`). Both are called from `DbPools::run_migrations` (`pool.rs:432`).
+The FTS pool runs its own migration runner (`run_migrations_on_pool`, `pool.rs:527`). The vec pool runs a separate runner (`run_vec_migrations`, `pool.rs:481`). Both are called from `DbPools::run_migrations` (`pool.rs:432`).
 
 ## 3. Schema
 
@@ -55,41 +55,36 @@ The FTS `memories` table retains its `embedding BLOB` column but it is no longer
 
 ## 4. Storage Flow
 
-`store_embedding` (`memory/mod.rs:720`) currently writes to the FTS pool only:
+`store_embedding` (`memory/mod.rs:720`) performs a dual write: first to the FTS pool's legacy BLOB column, then to the vec pool's `memory_embeddings` table.
 
-```rust
-pub async fn store_embedding(pool: &SqlitePool, memory_id: &str, embedding: &[f32]) -> Result<(), NousError> {
-    let bytes = embedding_to_bytes(embedding);          // Vec<f32> → LE bytes (mod.rs:793)
-    sqlx::query("UPDATE memories SET embedding = ? WHERE id = ?")
-        .bind(&bytes)
-        .bind(memory_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-```
-
-The new storage flow adds a write to the vec pool after the FTS write. The rusqlite write acquires the `Arc<Mutex<Connection>>` lock, executes an `INSERT OR REPLACE` into `memory_embeddings`, and releases the lock. The embedding bytes passed to vec0 are the same float32 LE representation used today; sqlite-vec consumes them directly.
+The FTS write updates the `memories.embedding` BLOB column for backwards compatibility:
 
 ```sql
-INSERT OR REPLACE INTO memory_embeddings(memory_id, embedding) VALUES (?1, ?2);
+UPDATE memories SET embedding = ? WHERE id = ?
 ```
 
-The two writes are not wrapped in a distributed transaction. If the vec write fails, the BLOB in `memories` still reflects the current embedding and remains the fallback (see §10).
+The vec write acquires the `Arc<Mutex<Connection>>` lock, deletes any prior row for the same `memory_id`, and inserts the new embedding:
+
+```sql
+DELETE FROM memory_embeddings WHERE memory_id = ?1;
+INSERT INTO memory_embeddings(memory_id, embedding) VALUES (?1, ?2);
+```
+
+The embedding bytes passed to both writes are the same float32 LE representation produced by `embedding_to_bytes` (`mod.rs:832`). The two writes are not wrapped in a distributed transaction. If the vec write fails, the BLOB in `memories` still holds the current embedding and remains the fallback (see §10).
 
 ## 5. Search Flow
 
-The replacement for `search_similar` (`memory/mod.rs:739`) issues a KNN query against the vec pool:
+`search_similar` (`memory/mod.rs:757`) issues a KNN query against the vec pool:
 
 ```sql
 SELECT memory_id, distance
 FROM memory_embeddings
 WHERE embedding MATCH ?1
-AND k = ?2
-ORDER BY distance;
+ORDER BY distance
+LIMIT ?2
 ```
 
-`?1` is the query embedding serialized as float32 LE bytes (same format as storage). `?2` is the limit (capped at 100 in the current implementation). vec0 returns rows sorted by ascending L2 distance; the caller maps `memory_id` values to full `Memory` records via a follow-up `SELECT … FROM memories WHERE id IN (…)` on the FTS pool.
+`?1` is the query embedding serialized as float32 LE bytes (same format as storage). `?2` is the limit (capped at 100). vec0 returns rows sorted by ascending L2 distance; the function maps `memory_id` values to full `Memory` records via a follow-up query on the FTS pool.
 
 The workspace filter (`workspace_id = ?`) and threshold filter applied in the current O(N) scan move to the post-KNN join step: vec0 returns the K nearest IDs, then the FTS query applies workspace and archival filters. This means the effective result set may be smaller than K when filters remove candidates; callers should over-fetch (e.g. `k = limit * 3`) if exact-limit results are required.
 
@@ -99,10 +94,10 @@ Migrations are split across two independent runners:
 
 | Runner | Applies to | Tracking table |
 |--------|-----------|----------------|
-| `run_migrations_on_pool` (`pool.rs:511`) | FTS pool (`SqlitePool`) | `schema_version` |
-| `run_vec_migrations` (`pool.rs:469`) | Vec pool (`VecPool`) | `vec_schema_version` |
+| `run_migrations_on_pool` (`pool.rs:527`) | FTS pool (`SqlitePool`) | `schema_version` |
+| `run_vec_migrations` (`pool.rs:481`) | Vec pool (`VecPool`) | `vec_schema_version` |
 
-`DbPools::run_migrations` (`pool.rs:432`) calls both in sequence at startup. The `VEC_MIGRATIONS` slice (`pool.rs:458`) currently contains one entry:
+`DbPools::run_migrations` (`pool.rs:432`) calls both in sequence at startup. The `VEC_MIGRATIONS` slice (`pool.rs:472`) currently contains one entry:
 
 ```
 vec_001  memory_embeddings_vec0  — CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(…)
@@ -111,6 +106,8 @@ vec_001  memory_embeddings_vec0  — CREATE VIRTUAL TABLE IF NOT EXISTS memory_e
 Vec migrations never run on the FTS pool. FTS migrations never run on the vec pool. Future schema changes to `memory_embeddings` (e.g. dimension change, adding a second vector column) are added to `VEC_MIGRATIONS` only.
 
 The existing `MIGRATIONS` slice in `pool.rs` still includes all FTS migrations and is unchanged. No existing migration SQL was modified.
+
+Existing `embedding` BLOBs in the `memories` table are not automatically migrated to `memory_embeddings` at startup. A one-time migration tool is needed to read each BLOB, insert it into vec0, and mark it migrated. Until that tool runs, memories whose embeddings exist only as BLOBs will not appear in KNN results (see §10 for the fallback behaviour and §11 for the deferred scope).
 
 ## 7. Embedding Model
 
