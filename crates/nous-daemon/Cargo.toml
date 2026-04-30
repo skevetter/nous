@@ -5,13 +5,15 @@ edition.workspace = true
 
 [dependencies]
 axum = "0.8"
-tokio = { workspace = true }
+nous-core = { path = "../nous-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-nous-core = { path = "../nous-core" }
+sqlx = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 http-body-util = "0.1"
+tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

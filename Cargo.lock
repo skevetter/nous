@@ -990,9 +990,11 @@ dependencies = [
 name = "nous-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "dirs",
  "nous-core",
+ "nous-daemon",
  "serde_json",
  "tokio",
  "tracing",
@@ -1024,6 +1026,8 @@ dependencies = [
  "nous-core",
  "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
  "tokio",
  "tower",
  "tracing",

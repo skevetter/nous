@@ -20,6 +20,8 @@ enum Commands {
         #[command(subcommand)]
         command: ChatCommands,
     },
+    /// Start the HTTP daemon
+    Serve,
 }
 
 #[tokio::main]
@@ -36,6 +38,9 @@ async fn main() {
         }
         Commands::Chat { command } => {
             commands::chat::run(command).await;
+        }
+        Commands::Serve => {
+            commands::serve::run().await;
         }
     }
 }
