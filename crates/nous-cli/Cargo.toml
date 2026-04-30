@@ -1,0 +1,11 @@
+[package]
+name = "nous-cli"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true }
+nous-core = { path = "../nous-core" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
