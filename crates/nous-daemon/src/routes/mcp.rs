@@ -1059,6 +1059,104 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "required": ["task_ids", "assignee_id"]
             }),
         },
+        ToolSchema {
+            name: "memory_store_embedding",
+            description: "Store a pre-computed embedding vector for a memory",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Memory ID" },
+                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Embedding vector (array of f32)" }
+                },
+                "required": ["memory_id", "embedding"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_search_similar",
+            description: "Search memories by cosine similarity to a query embedding vector",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Query embedding vector (array of f32)" },
+                    "limit": { "type": "integer", "description": "Max results (default: 10)" },
+                    "workspace_id": { "type": "string", "description": "Filter by workspace" },
+                    "threshold": { "type": "number", "description": "Minimum similarity threshold (default: 0.0)" }
+                },
+                "required": ["embedding"]
+            }),
+        },
+        ToolSchema {
+            name: "room_unarchive",
+            description: "Re-activate an archived room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Room ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "room_mentions",
+            description: "List messages mentioning a specific agent in a room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string", "description": "Room ID" },
+                    "agent_id": { "type": "string", "description": "Agent ID to search mentions for" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["room_id", "agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "room_inspect",
+            description: "Get room stats: message count, last message timestamp, subscriber count",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Room ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_bulk_deregister",
+            description: "Deregister multiple agents by ID list",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "string" }, "description": "List of agent IDs to deregister" },
+                    "cascade": { "type": "boolean", "description": "Cascade delete children (default: false)" }
+                },
+                "required": ["ids"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_update_status",
+            description: "Update an agent's status field directly",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "status": { "type": "string", "description": "New status: active, inactive, archived, running, idle, blocked, done" }
+                },
+                "required": ["id", "status"]
+            }),
+        },
+        ToolSchema {
+            name: "artifact_update",
+            description: "Update artifact fields (name, path)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Artifact ID" },
+                    "name": { "type": "string", "description": "New name" },
+                    "path": { "type": "string", "description": "New path" }
+                },
+                "required": ["id"]
+            }),
+        },
     ]
 }
 
@@ -2106,6 +2204,85 @@ pub async fn dispatch(
             let assignee_id = require_str(args, "assignee_id")?;
             let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
             Ok(serde_json::to_value(result).unwrap())
+        }
+        "memory_store_embedding" => {
+            let memory_id = require_str(args, "memory_id")?;
+            let embedding: Vec<f32> = args
+                .get("embedding")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                .unwrap_or_default();
+            if embedding.is_empty() {
+                return Err(nous_core::error::NousError::Validation(
+                    "embedding array cannot be empty".into(),
+                ));
+            }
+            memory::store_embedding(&state.pool, memory_id, &embedding).await?;
+            Ok(serde_json::json!({"stored": true}))
+        }
+        "memory_search_similar" => {
+            let embedding: Vec<f32> = args
+                .get("embedding")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                .unwrap_or_default();
+            if embedding.is_empty() {
+                return Err(nous_core::error::NousError::Validation(
+                    "embedding array cannot be empty".into(),
+                ));
+            }
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(10);
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
+            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|f| f as f32);
+            let results = memory::search_similar(&state.pool, &embedding, limit, workspace_id, threshold).await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "room_unarchive" => {
+            let id = require_str(args, "id")?;
+            let room = nous_core::rooms::unarchive_room(&state.pool, id).await?;
+            Ok(serde_json::to_value(room).unwrap())
+        }
+        "room_mentions" => {
+            let room_id = require_str(args, "room_id")?;
+            let agent_id = require_str(args, "agent_id")?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let messages = nous_core::messages::list_mentions(&state.pool, room_id, agent_id, limit).await?;
+            Ok(serde_json::to_value(messages).unwrap())
+        }
+        "room_inspect" => {
+            let id = require_str(args, "id")?;
+            let stats = nous_core::rooms::inspect_room(&state.pool, id).await?;
+            Ok(serde_json::to_value(stats).unwrap())
+        }
+        "agent_bulk_deregister" => {
+            let ids: Vec<String> = args
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let cascade = args.get("cascade").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut results = serde_json::Map::new();
+            for id in &ids {
+                match agents::deregister_agent(&state.pool, id, cascade).await {
+                    Ok(result) => { results.insert(id.clone(), serde_json::json!(result)); }
+                    Err(e) => { results.insert(id.clone(), serde_json::json!({"error": e.to_string()})); }
+                }
+            }
+            Ok(serde_json::Value::Object(results))
+        }
+        "agent_update_status" => {
+            let id = require_str(args, "id")?;
+            let status_str = require_str(args, "status")?;
+            let status: agents::AgentStatus = status_str.parse()?;
+            let agent = agents::update_agent_status(&state.pool, id, status).await?;
+            Ok(serde_json::to_value(agent).unwrap())
+        }
+        "artifact_update" => {
+            let id = require_str(args, "id")?;
+            let name = args.get("name").and_then(|v| v.as_str());
+            let path = args.get("path").and_then(|v| v.as_str());
+            let artifact = agents::update_artifact(&state.pool, id, name, path).await?;
+            Ok(serde_json::to_value(artifact).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

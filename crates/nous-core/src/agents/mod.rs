@@ -788,6 +788,46 @@ pub async fn deregister_artifact(pool: &SqlitePool, id: &str) -> Result<(), Nous
     Ok(())
 }
 
+pub async fn update_artifact(
+    pool: &SqlitePool,
+    id: &str,
+    name: Option<&str>,
+    path: Option<&str>,
+) -> Result<Artifact, NousError> {
+    let _existing = get_artifact_by_id(pool, id).await?;
+
+    let mut sets: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(name) = name {
+        if name.trim().is_empty() {
+            return Err(NousError::Validation("artifact name cannot be empty".into()));
+        }
+        sets.push("name = ?".to_string());
+        binds.push(name.trim().to_string());
+    }
+
+    if let Some(path) = path {
+        sets.push("path = ?".to_string());
+        binds.push(path.to_string());
+    }
+
+    if sets.is_empty() {
+        return get_artifact_by_id(pool, id).await;
+    }
+
+    let sql = format!("UPDATE artifacts SET {} WHERE id = ?", sets.join(", "));
+    binds.push(id.to_string());
+
+    let mut query = sqlx::query(&sql);
+    for bind in &binds {
+        query = query.bind(bind);
+    }
+    query.execute(pool).await?;
+
+    get_artifact_by_id(pool, id).await
+}
+
 // --- P7: Agent lifecycle, versioning, templates ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
