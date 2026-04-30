@@ -2273,4 +2273,67 @@ mod tests {
         // but at minimum the function should not panic
         let _ = project;
     }
+
+    #[tokio::test]
+    async fn save_memory_then_embed_with_mock() {
+        use crate::memory::embed::MockEmbedder;
+        use crate::memory::Embedder;
+
+        let (pool, vec_pool, _tmp) = setup().await;
+
+        let mem = save_memory(
+            &pool,
+            SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: Some("test-agent".into()),
+                title: "Embedding test".into(),
+                content: "This content should be embedded into the vector database".into(),
+                memory_type: MemoryType::Fact,
+                importance: Some(Importance::Moderate),
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let embedder = MockEmbedder::new();
+        let chunker = Chunker::default();
+        let chunks = chunker.chunk(&mem.id, &mem.content);
+        store_chunks(&vec_pool, &chunks).unwrap();
+
+        let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+        let embeddings = embedder.embed(&texts).unwrap();
+        for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+            store_chunk_embedding(&vec_pool, &chunk.id, embedding).unwrap();
+        }
+
+        let full_embeddings = embedder.embed(&[&mem.content]).unwrap();
+        store_embedding(&pool, &vec_pool, &mem.id, &full_embeddings[0])
+            .await
+            .unwrap();
+
+        let fetched = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        assert_eq!(fetched.id, mem.id);
+
+        let conn = vec_pool.lock().unwrap();
+        let chunk_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_chunks WHERE memory_id = ?1",
+                rusqlite::params![&mem.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(chunk_count, chunks.len() as i64);
+
+        let emb_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_embeddings WHERE memory_id = ?1",
+                rusqlite::params![&mem.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(emb_count > 0);
+    }
 }
