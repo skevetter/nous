@@ -12,6 +12,7 @@ use nous_core::messages::{
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::tasks;
+use nous_core::worktrees;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -289,6 +290,67 @@ pub async fn list_tools() -> impl IntoResponse {
                 "required": ["id", "sender_id", "content"]
             }),
         },
+        ToolSchema {
+            name: "worktree_create",
+            description: "Create a new git worktree",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "branch": { "type": "string", "description": "Branch name for the worktree" },
+                    "slug": { "type": "string", "description": "Optional slug identifier" },
+                    "repo_root": { "type": "string", "description": "Repository root path (defaults to '.')" },
+                    "agent_id": { "type": "string", "description": "Agent ID to associate" },
+                    "task_id": { "type": "string", "description": "Task ID to associate" }
+                },
+                "required": ["branch"]
+            }),
+        },
+        ToolSchema {
+            name: "worktree_list",
+            description: "List worktrees with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "Filter by status: active, stale, archived, deleted" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "task_id": { "type": "string", "description": "Filter by task ID" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "worktree_get",
+            description: "Get a worktree by ID or slug",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Worktree ID or slug" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "worktree_archive",
+            description: "Archive a worktree (removes git worktree, sets status to archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Worktree ID or slug" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "worktree_delete",
+            description: "Delete a worktree (removes directory, sets status to deleted)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Worktree ID or slug" }
+                },
+                "required": ["id"]
+            }),
+        },
     ];
 
     Json(serde_json::json!({ "tools": tools }))
@@ -549,6 +611,79 @@ async fn dispatch(
             let content = require_str(args, "content")?;
             let msg = tasks::add_note(&state.pool, id, sender_id, content).await?;
             Ok(msg)
+        }
+        "worktree_create" => {
+            let branch = require_str(args, "branch")?.to_string();
+            let slug = args.get("slug").and_then(|v| v.as_str()).map(String::from);
+            let repo_root = args
+                .get("repo_root")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".")
+                .to_string();
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let wt = worktrees::create(
+                &state.pool,
+                worktrees::CreateWorktreeRequest {
+                    slug,
+                    branch,
+                    repo_root,
+                    agent_id,
+                    task_id,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(wt).unwrap())
+        }
+        "worktree_list" => {
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<worktrees::WorktreeStatus>())
+                .transpose()?;
+            let agent_id = args
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let wts = worktrees::list(
+                &state.pool,
+                worktrees::ListWorktreesFilter {
+                    status,
+                    agent_id,
+                    task_id,
+                    repo_root: None,
+                    limit,
+                    offset: None,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(wts).unwrap())
+        }
+        "worktree_get" => {
+            let id = require_str(args, "id")?;
+            let wt = worktrees::get(&state.pool, id).await?;
+            Ok(serde_json::to_value(wt).unwrap())
+        }
+        "worktree_archive" => {
+            let id = require_str(args, "id")?;
+            let wt = worktrees::archive(&state.pool, id).await?;
+            Ok(serde_json::to_value(wt).unwrap())
+        }
+        "worktree_delete" => {
+            let id = require_str(args, "id")?;
+            worktrees::delete(&state.pool, id).await?;
+            Ok(serde_json::json!({"deleted": true}))
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

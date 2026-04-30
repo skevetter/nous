@@ -4,3 +4,4 @@ pub mod messages;
 pub mod rooms;
 pub mod search;
 pub mod tasks;
+pub mod worktrees;
