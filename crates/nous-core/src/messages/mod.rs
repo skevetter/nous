@@ -253,6 +253,30 @@ pub async fn search_messages(
         .map_err(NousError::Sqlite)
 }
 
+pub async fn list_mentions(
+    pool: &SqlitePool,
+    room_id: &str,
+    agent_id: &str,
+    limit: Option<u32>,
+) -> Result<Vec<Message>, NousError> {
+    let limit = limit.unwrap_or(50).min(200);
+    let pattern = format!("%@{}%", agent_id);
+
+    let rows = sqlx::query(
+        "SELECT * FROM room_messages WHERE room_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(room_id)
+    .bind(&pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(Message::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

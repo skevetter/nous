@@ -145,6 +145,59 @@ pub async fn archive_room(pool: &SqlitePool, id: &str) -> Result<(), NousError> 
     Ok(())
 }
 
+pub async fn unarchive_room(pool: &SqlitePool, id: &str) -> Result<Room, NousError> {
+    let result = sqlx::query(
+        "UPDATE rooms SET archived = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(NousError::NotFound(format!("room '{id}' not found")));
+    }
+
+    get_room(pool, id).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomStats {
+    pub room_id: String,
+    pub message_count: i64,
+    pub last_message_at: Option<String>,
+    pub subscriber_count: i64,
+}
+
+pub async fn inspect_room(pool: &SqlitePool, id: &str) -> Result<RoomStats, NousError> {
+    let _room = get_room(pool, id).await?;
+
+    let message_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM room_messages WHERE room_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+
+    let last_message_at: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM room_messages WHERE room_id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+
+    let subscriber_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM room_subscriptions WHERE room_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(RoomStats {
+        room_id: id.to_string(),
+        message_count,
+        last_message_at,
+        subscriber_count,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
