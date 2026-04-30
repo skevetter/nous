@@ -134,7 +134,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/rooms/{}", room.id))
+                    .uri(format!("/rooms/{}", room.id))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -177,7 +177,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/rooms/{}", room.id))
+                    .uri(format!("/rooms/{}", room.id))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -199,7 +199,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/rooms/{}/messages", room.id))
+                    .uri(format!("/rooms/{}/messages", room.id))
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from(
                         serde_json::to_string(&serde_json::json!({
@@ -246,7 +246,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/rooms/{}/messages", room.id))
+                    .uri(format!("/rooms/{}/messages", room.id))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -298,5 +298,62 @@ mod tests {
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.len(), 1);
         assert!(json[0]["content"].as_str().unwrap().contains("Deploy"));
+    }
+
+    #[tokio::test]
+    async fn mcp_list_tools_returns_10_tools() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/tools")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tools = json["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn mcp_call_room_create_returns_success() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/call")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "name": "room_create",
+                            "arguments": { "name": "mcp-test-room", "purpose": "MCP test" }
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("is_error").is_none());
+        let text = json["content"][0]["text"].as_str().unwrap();
+        let room: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(room["name"], "mcp-test-room");
+        assert_eq!(room["purpose"], "MCP test");
     }
 }

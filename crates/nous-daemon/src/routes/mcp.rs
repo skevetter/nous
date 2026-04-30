@@ -202,6 +202,15 @@ pub async fn call_tool(
     }
 }
 
+fn require_str<'a>(args: &'a Value, field: &str) -> Result<&'a str, nous_core::error::NousError> {
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            nous_core::error::NousError::Validation(format!("missing required field: {field}"))
+        })
+}
+
 async fn dispatch(
     state: &AppState,
     name: &str,
@@ -209,7 +218,7 @@ async fn dispatch(
 ) -> Result<Value, nous_core::error::NousError> {
     match name {
         "room_create" => {
-            let name = args["name"].as_str().unwrap_or_default();
+            let name = require_str(args, "name")?;
             let purpose = args.get("purpose").and_then(|v| v.as_str());
             let metadata = args.get("metadata").filter(|v| !v.is_null());
             let room = create_room(&state.pool, name, purpose, metadata).await?;
@@ -224,20 +233,20 @@ async fn dispatch(
             Ok(serde_json::to_value(rooms).unwrap())
         }
         "room_get" => {
-            let id = args["id"].as_str().unwrap_or_default();
+            let id = require_str(args, "id")?;
             let room = get_room(&state.pool, id).await?;
             Ok(serde_json::to_value(room).unwrap())
         }
         "room_delete" => {
-            let id = args["id"].as_str().unwrap_or_default();
+            let id = require_str(args, "id")?;
             let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
             delete_room(&state.pool, id, hard).await?;
             Ok(serde_json::json!({"deleted": true}))
         }
         "room_post_message" => {
-            let room_id = args["room_id"].as_str().unwrap_or_default().to_string();
-            let sender_id = args["sender_id"].as_str().unwrap_or_default().to_string();
-            let content = args["content"].as_str().unwrap_or_default().to_string();
+            let room_id = require_str(args, "room_id")?.to_string();
+            let sender_id = require_str(args, "sender_id")?.to_string();
+            let content = require_str(args, "content")?.to_string();
             let reply_to = args
                 .get("reply_to")
                 .and_then(|v| v.as_str())
@@ -258,7 +267,7 @@ async fn dispatch(
             Ok(serde_json::to_value(msg).unwrap())
         }
         "room_read_messages" => {
-            let room_id = args["room_id"].as_str().unwrap_or_default().to_string();
+            let room_id = require_str(args, "room_id")?.to_string();
             let since = args.get("since").and_then(|v| v.as_str()).map(String::from);
             let before = args
                 .get("before")
@@ -278,7 +287,7 @@ async fn dispatch(
             Ok(serde_json::to_value(messages).unwrap())
         }
         "room_search" => {
-            let query = args["query"].as_str().unwrap_or_default().to_string();
+            let query = require_str(args, "query")?.to_string();
             let room_id = args
                 .get("room_id")
                 .and_then(|v| v.as_str())
@@ -296,7 +305,7 @@ async fn dispatch(
             Ok(serde_json::to_value(results).unwrap())
         }
         "room_wait" => {
-            let room_id = args["room_id"].as_str().unwrap_or_default();
+            let room_id = require_str(args, "room_id")?;
             let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64());
             let topics: Option<Vec<String>> =
                 args.get("topics").and_then(|v| v.as_array()).map(|arr| {
@@ -308,8 +317,8 @@ async fn dispatch(
             Ok(serde_json::to_value(result).unwrap())
         }
         "room_subscribe" => {
-            let room_id = args["room_id"].as_str().unwrap_or_default();
-            let agent_id = args["agent_id"].as_str().unwrap_or_default();
+            let room_id = require_str(args, "room_id")?;
+            let agent_id = require_str(args, "agent_id")?;
             let topics: Option<Vec<String>> =
                 args.get("topics").and_then(|v| v.as_array()).map(|arr| {
                     arr.iter()
@@ -320,8 +329,8 @@ async fn dispatch(
             Ok(serde_json::json!({"subscribed": true}))
         }
         "room_unsubscribe" => {
-            let room_id = args["room_id"].as_str().unwrap_or_default();
-            let agent_id = args["agent_id"].as_str().unwrap_or_default();
+            let room_id = require_str(args, "room_id")?;
+            let agent_id = require_str(args, "agent_id")?;
             unsubscribe_from_room(&state.pool, room_id, agent_id).await?;
             Ok(serde_json::json!({"unsubscribed": true}))
         }
