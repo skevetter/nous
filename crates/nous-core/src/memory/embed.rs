@@ -10,8 +10,11 @@ pub trait Embedder: Send + Sync {
 
 pub struct OnnxEmbeddingModel {
     session: Mutex<ort::session::Session>,
+    tokenizer: tokenizers::Tokenizer,
     dimension: usize,
 }
+
+const MAX_SEQ_LEN: usize = 512;
 
 impl OnnxEmbeddingModel {
     pub fn load(model_path: Option<&str>) -> Result<Self, NousError> {
@@ -23,6 +26,21 @@ impl OnnxEmbeddingModel {
                 path.display()
             )));
         }
+
+        let tokenizer_path = path.with_file_name("tokenizer.json");
+        if !tokenizer_path.exists() {
+            return Err(NousError::Config(format!(
+                "tokenizer.json not found at: {}. Download it for all-MiniLM-L6-v2.",
+                tokenizer_path.display()
+            )));
+        }
+
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            NousError::Internal(format!(
+                "failed to load tokenizer from {}: {e}",
+                tokenizer_path.display()
+            ))
+        })?;
 
         let mut builder = ort::session::Session::builder()
             .map_err(|e| NousError::Internal(format!("failed to create session builder: {e}")))?;
@@ -40,20 +58,25 @@ impl OnnxEmbeddingModel {
 
         Ok(Self {
             session: Mutex::new(session),
+            tokenizer,
             dimension: crate::db::EMBEDDING_DIMENSION,
         })
     }
 
-    fn tokenize_simple(text: &str) -> Vec<i64> {
-        let mut ids = vec![101i64]; // [CLS]
-        for word in text.split_whitespace().take(510) {
-            let hash = word
-                .bytes()
-                .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-            ids.push((hash % 30000 + 1000) as i64);
-        }
-        ids.push(102); // [SEP]
-        ids
+    fn tokenize(&self, text: &str) -> Result<Vec<i64>, NousError> {
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| NousError::Internal(format!("tokenization failed: {e}")))?;
+
+        let ids: Vec<i64> = encoding
+            .get_ids()
+            .iter()
+            .take(MAX_SEQ_LEN)
+            .map(|&id| id as i64)
+            .collect();
+
+        Ok(ids)
     }
 }
 
@@ -67,7 +90,7 @@ impl Embedder for OnnxEmbeddingModel {
         let mut results = Vec::with_capacity(texts.len());
 
         for text in texts {
-            let input_ids = Self::tokenize_simple(text);
+            let input_ids = self.tokenize(text)?;
             let seq_len = input_ids.len();
             let attention_mask: Vec<i64> = vec![1; seq_len];
             let token_type_ids: Vec<i64> = vec![0; seq_len];
@@ -261,5 +284,29 @@ mod tests {
         assert!(path
             .to_string_lossy()
             .contains(".nous/models/all-MiniLM-L6-v2.onnx"));
+    }
+
+    #[test]
+    fn tokenizer_ids_within_vocab_range() {
+        let tokenizer_path = dirs::home_dir()
+            .map(|h| h.join(".nous/models/tokenizer.json"))
+            .unwrap_or_default();
+
+        if !tokenizer_path.exists() {
+            eprintln!("skipping tokenizer test: tokenizer.json not found");
+            return;
+        }
+
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).unwrap();
+        let encoding = tokenizer
+            .encode(
+                "Hello world, this is a test sentence for tokenization.",
+                true,
+            )
+            .unwrap();
+
+        for &id in encoding.get_ids() {
+            assert!(id < 30522, "token ID {id} exceeds vocab size 30522");
+        }
     }
 }

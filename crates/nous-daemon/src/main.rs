@@ -24,8 +24,14 @@ async fn main() {
         .await
         .expect("failed to run migrations");
 
-    let embedder: Arc<dyn nous_core::memory::Embedder> =
-        Arc::new(OnnxEmbeddingModel::load(None).expect("failed to load ONNX embedding model"));
+    let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
+        match OnnxEmbeddingModel::load(None) {
+            Ok(model) => Some(Arc::new(model)),
+            Err(e) => {
+                tracing::warn!("embedding model not available, vector/hybrid search disabled: {e}");
+                None
+            }
+        };
 
     let state = AppState {
         pool: pools.fts.clone(),

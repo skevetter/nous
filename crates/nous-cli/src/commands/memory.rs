@@ -3,6 +3,7 @@ use clap::Subcommand;
 use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory;
+use nous_core::memory::Embedder;
 
 #[derive(Subcommand)]
 pub enum MemoryCommands {
@@ -165,6 +166,26 @@ async fn execute(cmd: MemoryCommands) -> Result<(), Box<dyn std::error::Error>> 
                 },
             )
             .await?;
+
+            if let Ok(embedder) = memory::OnnxEmbeddingModel::load(None) {
+                let vec_pool = &pools.vec;
+                let chunker = memory::Chunker::default();
+                let chunks = chunker.chunk(&mem.id, &mem.content);
+                if memory::store_chunks(vec_pool, &chunks).is_ok() {
+                    let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+                    if let Ok(embeddings) = embedder.embed(&texts) {
+                        for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+                            let _ = memory::store_chunk_embedding(vec_pool, &chunk.id, embedding);
+                        }
+                    }
+                }
+                if let Ok(full_embeddings) = embedder.embed(&[&mem.content]) {
+                    if let Some(full_emb) = full_embeddings.first() {
+                        let _ = memory::store_embedding(pool, vec_pool, &mem.id, full_emb).await;
+                    }
+                }
+            }
+
             println!("{}", serde_json::to_string_pretty(&mem)?);
         }
         MemoryCommands::Search {
