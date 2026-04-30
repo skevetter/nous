@@ -48,9 +48,7 @@ pub async fn create_room(
     metadata: Option<&serde_json::Value>,
 ) -> Result<Room, NousError> {
     if name.trim().is_empty() {
-        return Err(NousError::Validation(
-            "room name cannot be empty".into(),
-        ));
+        return Err(NousError::Validation("room name cannot be empty".into()));
     }
 
     let id = Uuid::now_v7().to_string();

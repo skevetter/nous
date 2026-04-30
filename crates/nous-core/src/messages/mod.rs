@@ -76,12 +76,11 @@ pub async fn post_message(
         ));
     }
 
-    let room_exists: bool =
-        sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
-            .bind(&request.room_id)
-            .fetch_one(pool)
-            .await?
-            .get(0);
+    let room_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
+        .bind(&request.room_id)
+        .fetch_one(pool)
+        .await?
+        .get(0);
 
     if !room_exists {
         return Err(NousError::NotFound(format!(
@@ -160,12 +159,11 @@ pub async fn read_messages(
     pool: &SqlitePool,
     request: ReadMessagesRequest,
 ) -> Result<Vec<Message>, NousError> {
-    let room_exists: bool =
-        sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
-            .bind(&request.room_id)
-            .fetch_one(pool)
-            .await?
-            .get(0);
+    let room_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
+        .bind(&request.room_id)
+        .fetch_one(pool)
+        .await?
+        .get(0);
 
     if !room_exists {
         return Err(NousError::NotFound(format!(
@@ -209,9 +207,7 @@ pub async fn search_messages(
     request: SearchMessagesRequest,
 ) -> Result<Vec<Message>, NousError> {
     if request.query.trim().is_empty() {
-        return Err(NousError::Validation(
-            "search query cannot be empty".into(),
-        ));
+        return Err(NousError::Validation("search query cannot be empty".into()));
     }
 
     let limit = request.limit.unwrap_or(20).min(100);

@@ -993,6 +993,7 @@ dependencies = [
  "clap",
  "dirs",
  "nous-core",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

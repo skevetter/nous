@@ -83,17 +83,14 @@ pub async fn subscribe_to_room(
     agent_id: &str,
     topics: Option<Vec<String>>,
 ) -> Result<(), NousError> {
-    let room_exists: bool =
-        sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
-            .bind(room_id)
-            .fetch_one(pool)
-            .await?
-            .get(0);
+    let room_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
+        .bind(room_id)
+        .fetch_one(pool)
+        .await?
+        .get(0);
 
     if !room_exists {
-        return Err(NousError::NotFound(format!(
-            "room '{room_id}' not found"
-        )));
+        return Err(NousError::NotFound(format!("room '{room_id}' not found")));
     }
 
     let topics_json = topics.map(|t| serde_json::to_string(&t).unwrap_or_default());
@@ -179,10 +176,7 @@ pub async fn room_wait(
             match tokio::time::timeout(remaining, receiver.recv()).await {
                 Ok(Ok(notification)) => {
                     if topic_filter.is_empty()
-                        || notification
-                            .topics
-                            .iter()
-                            .any(|t| topic_filter.contains(t))
+                        || notification.topics.iter().any(|t| topic_filter.contains(t))
                     {
                         break WaitResult {
                             notification: Some(notification),
@@ -356,10 +350,7 @@ mod tests {
         let subs = list_subscriptions(&pool, "agent-1").await.unwrap();
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].room_id, room.id);
-        assert_eq!(
-            subs[0].topics,
-            Some(vec!["topic-a".to_string()])
-        );
+        assert_eq!(subs[0].topics, Some(vec!["topic-a".to_string()]));
 
         unsubscribe_from_room(&pool, &room.id, "agent-1")
             .await
@@ -376,8 +367,7 @@ mod tests {
         let registry = NotificationRegistry::new();
         let mut receiver = registry.subscribe(&room.id).await;
 
-        let metadata =
-            serde_json::json!({"topics": ["deployment"], "mentions": ["agent-2"]});
+        let metadata = serde_json::json!({"topics": ["deployment"], "mentions": ["agent-2"]});
 
         post_message(
             &pool,
