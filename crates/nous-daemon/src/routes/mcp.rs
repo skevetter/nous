@@ -11,6 +11,7 @@ use nous_core::messages::{
 };
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
+use nous_core::tasks;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -168,6 +169,124 @@ pub async fn list_tools() -> impl IntoResponse {
                     "agent_id": { "type": "string" }
                 },
                 "required": ["room_id", "agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_create",
+            description: "Create a new task",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Task title" },
+                    "description": { "type": "string", "description": "Task description" },
+                    "priority": { "type": "string", "description": "Priority: low, medium, high, critical" },
+                    "assignee_id": { "type": "string", "description": "Assignee agent ID" },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels" },
+                    "room_id": { "type": "string", "description": "Existing room ID for discussion" },
+                    "create_room": { "type": "boolean", "description": "Create a new room for this task" }
+                },
+                "required": ["title"]
+            }),
+        },
+        ToolSchema {
+            name: "task_list",
+            description: "List tasks with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "assignee_id": { "type": "string", "description": "Filter by assignee" },
+                    "label": { "type": "string", "description": "Filter by label" },
+                    "limit": { "type": "integer", "description": "Max results" },
+                    "offset": { "type": "integer", "description": "Offset for pagination" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "task_get",
+            description: "Get a task by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_update",
+            description: "Update a task's fields",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" },
+                    "status": { "type": "string", "description": "New status" },
+                    "priority": { "type": "string", "description": "New priority" },
+                    "assignee_id": { "type": "string", "description": "New assignee" },
+                    "description": { "type": "string", "description": "New description" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_close",
+            description: "Close a task",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_link",
+            description: "Create a link between two tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "source_id": { "type": "string", "description": "Source task ID" },
+                    "target_id": { "type": "string", "description": "Target task ID" },
+                    "link_type": { "type": "string", "description": "Link type: blocked_by, parent, related_to" }
+                },
+                "required": ["source_id", "target_id", "link_type"]
+            }),
+        },
+        ToolSchema {
+            name: "task_unlink",
+            description: "Remove a link between two tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "source_id": { "type": "string", "description": "Source task ID" },
+                    "target_id": { "type": "string", "description": "Target task ID" },
+                    "link_type": { "type": "string", "description": "Link type: blocked_by, parent, related_to" }
+                },
+                "required": ["source_id", "target_id", "link_type"]
+            }),
+        },
+        ToolSchema {
+            name: "task_list_links",
+            description: "List all links for a task",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_add_note",
+            description: "Add a note to a task's discussion room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" },
+                    "sender_id": { "type": "string", "description": "Sender agent ID" },
+                    "content": { "type": "string", "description": "Note content" }
+                },
+                "required": ["id", "sender_id", "content"]
             }),
         },
     ];
@@ -333,6 +452,103 @@ async fn dispatch(
             let agent_id = require_str(args, "agent_id")?;
             unsubscribe_from_room(&state.pool, room_id, agent_id).await?;
             Ok(serde_json::json!({"unsubscribed": true}))
+        }
+        "task_create" => {
+            let title = require_str(args, "title")?;
+            let description = args.get("description").and_then(|v| v.as_str());
+            let priority = args.get("priority").and_then(|v| v.as_str());
+            let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
+            let labels: Option<Vec<String>> =
+                args.get("labels").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                });
+            let room_id = args.get("room_id").and_then(|v| v.as_str());
+            let create_room_flag = args
+                .get("create_room")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let task = tasks::create_task(
+                &state.pool,
+                title,
+                description,
+                priority,
+                assignee_id,
+                labels.as_deref(),
+                room_id,
+                create_room_flag,
+                None,
+            )
+            .await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_list" => {
+            let status = args.get("status").and_then(|v| v.as_str());
+            let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
+            let label = args.get("label").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let result =
+                tasks::list_tasks(&state.pool, status, assignee_id, label, limit, offset, None, None)
+                    .await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "task_get" => {
+            let id = require_str(args, "id")?;
+            let task = tasks::get_task(&state.pool, id).await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_update" => {
+            let id = require_str(args, "id")?;
+            let status = args.get("status").and_then(|v| v.as_str());
+            let priority = args.get("priority").and_then(|v| v.as_str());
+            let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
+            let description = args.get("description").and_then(|v| v.as_str());
+            let task = tasks::update_task(
+                &state.pool,
+                id,
+                status,
+                priority,
+                assignee_id,
+                description,
+                None,
+                None,
+            )
+            .await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_close" => {
+            let id = require_str(args, "id")?;
+            let task = tasks::close_task(&state.pool, id, None).await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_link" => {
+            let source_id = require_str(args, "source_id")?;
+            let target_id = require_str(args, "target_id")?;
+            let link_type = require_str(args, "link_type")?;
+            let link =
+                tasks::link_tasks(&state.pool, source_id, target_id, link_type, None).await?;
+            Ok(serde_json::to_value(link).unwrap())
+        }
+        "task_unlink" => {
+            let source_id = require_str(args, "source_id")?;
+            let target_id = require_str(args, "target_id")?;
+            let link_type = require_str(args, "link_type")?;
+            tasks::unlink_tasks(&state.pool, source_id, target_id, link_type, None).await?;
+            Ok(serde_json::json!({"unlinked": true}))
+        }
+        "task_list_links" => {
+            let id = require_str(args, "id")?;
+            let links = tasks::list_links(&state.pool, id).await?;
+            Ok(serde_json::to_value(links).unwrap())
+        }
+        "task_add_note" => {
+            let id = require_str(args, "id")?;
+            let sender_id = require_str(args, "sender_id")?;
+            let content = require_str(args, "content")?;
+            let msg = tasks::add_note(&state.pool, id, sender_id, content).await?;
+            Ok(msg)
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"
