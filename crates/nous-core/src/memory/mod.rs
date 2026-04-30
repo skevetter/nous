@@ -1288,7 +1288,7 @@ mod tests {
     async fn setup() -> (SqlitePool, crate::db::VecPool, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations().await.unwrap();
+        pools.run_migrations("porter unicode61").await.unwrap();
         (pools.fts, pools.vec, tmp)
     }
 

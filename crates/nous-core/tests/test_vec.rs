@@ -27,7 +27,8 @@ fn vec0_table_creation() {
     let pools_future = DbPools::connect(tmp.path());
     let rt = tokio::runtime::Runtime::new().unwrap();
     let pools = rt.block_on(pools_future).unwrap();
-    rt.block_on(pools.run_migrations()).unwrap();
+    rt.block_on(pools.run_migrations("porter unicode61"))
+        .unwrap();
 
     let conn = pools.vec.lock().unwrap();
     let table_exists: bool = conn
@@ -225,7 +226,7 @@ fn knn_returns_correct_top_k() {
 async fn store_and_search_via_api() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    pools.run_migrations("porter unicode61").await.unwrap();
 
     let mem = memory::save_memory(
         &pools.fts,

@@ -8,7 +8,7 @@ use tempfile::TempDir;
 async fn setup() -> (sqlx::SqlitePool, nous_core::db::VecPool, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    pools.run_migrations("porter unicode61").await.unwrap();
     (pools.fts, pools.vec, tmp)
 }
 

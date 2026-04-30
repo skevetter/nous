@@ -139,7 +139,7 @@ mod tests {
     async fn test_state() -> (AppState, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations().await.unwrap();
+        pools.run_migrations("porter unicode61").await.unwrap();
         let state = AppState {
             pool: pools.fts.clone(),
             vec_pool: pools.vec.clone(),
