@@ -112,6 +112,116 @@ pub enum AgentCommands {
         #[arg(long)]
         namespace: Option<String>,
     },
+    /// Inspect an agent (full details with version and template)
+    Inspect {
+        /// Agent ID
+        id: String,
+    },
+    /// List version history for an agent
+    Versions {
+        /// Agent ID
+        id: String,
+        /// Max results
+        #[arg(long, default_value = "20")]
+        limit: u32,
+    },
+    /// Record a version for an agent (skills + config hashes)
+    RecordVersion {
+        /// Agent ID
+        #[arg(long)]
+        agent_id: String,
+        /// SHA-256 hash of concatenated skill contents
+        #[arg(long)]
+        skill_hash: String,
+        /// SHA-256 hash of effective config
+        #[arg(long)]
+        config_hash: String,
+        /// JSON array of skill details: [{name, path, hash}]
+        #[arg(long)]
+        skills_json: Option<String>,
+    },
+    /// Rollback an agent to a previous version
+    Rollback {
+        /// Agent ID
+        id: String,
+        /// Target version ID
+        #[arg(long)]
+        version: String,
+    },
+    /// Update agent status with optional reason
+    Status {
+        /// Agent ID
+        id: String,
+        /// New status
+        status: String,
+    },
+    /// List agents with upgrade_available flag set
+    Outdated {
+        /// Namespace
+        #[arg(long)]
+        namespace: Option<String>,
+        #[arg(long, default_value = "50")]
+        limit: u32,
+    },
+    /// Notify an agent that an upgrade is available
+    NotifyUpgrade {
+        /// Agent ID
+        id: String,
+    },
+    /// Template operations
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TemplateCommands {
+    /// Create a new agent template (immutable)
+    Create {
+        /// Template name (unique)
+        #[arg(long)]
+        name: String,
+        /// Template type (e.g. engineer, reviewer, monitor)
+        #[arg(long, rename_all = "kebab-case")]
+        r#type: String,
+        /// Default config JSON
+        #[arg(long)]
+        config: Option<String>,
+        /// Skill refs JSON array
+        #[arg(long)]
+        skills: Option<String>,
+    },
+    /// List templates
+    List {
+        /// Filter by type
+        #[arg(long, rename_all = "kebab-case")]
+        r#type: Option<String>,
+        #[arg(long, default_value = "50")]
+        limit: u32,
+    },
+    /// Get a template by ID
+    Get {
+        /// Template ID
+        id: String,
+    },
+    /// Create a new agent from a template
+    Instantiate {
+        /// Template ID
+        template_id: String,
+        /// Agent name override
+        #[arg(long)]
+        name: Option<String>,
+        /// Namespace
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Parent agent ID
+        #[arg(long)]
+        parent: Option<String>,
+        /// Config overrides JSON
+        #[arg(long)]
+        config_overrides: Option<String>,
+    },
 }
 
 pub async fn run(cmd: AgentCommands) {
@@ -242,6 +352,105 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             println!("{}", serde_json::to_string_pretty(&stale)?);
         }
+        AgentCommands::Inspect { id } => {
+            let resolved_id = if looks_like_uuid(&id) {
+                id
+            } else {
+                let agent = agents::lookup_agent(pool, &id, None).await?;
+                agent.id
+            };
+            let inspection = agents::inspect_agent(pool, &resolved_id).await?;
+            println!("{}", serde_json::to_string_pretty(&inspection)?);
+        }
+        AgentCommands::Versions { id, limit } => {
+            let versions = agents::list_versions(pool, &id, Some(limit)).await?;
+            println!("{}", serde_json::to_string_pretty(&versions)?);
+        }
+        AgentCommands::RecordVersion {
+            agent_id,
+            skill_hash,
+            config_hash,
+            skills_json,
+        } => {
+            let version = agents::record_version(
+                pool,
+                agents::RecordVersionRequest {
+                    agent_id,
+                    skill_hash,
+                    config_hash,
+                    skills_json,
+                },
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&version)?);
+        }
+        AgentCommands::Rollback { id, version } => {
+            let v = agents::rollback_agent(pool, &id, &version).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        AgentCommands::Status { id, status } => {
+            let agent_status: agents::AgentStatus = status.parse()?;
+            let agent = agents::update_agent_status(pool, &id, agent_status).await?;
+            println!("{}", serde_json::to_string_pretty(&agent)?);
+        }
+        AgentCommands::Outdated { namespace, limit } => {
+            let outdated =
+                agents::list_outdated_agents(pool, namespace.as_deref(), Some(limit)).await?;
+            println!("{}", serde_json::to_string_pretty(&outdated)?);
+        }
+        AgentCommands::NotifyUpgrade { id } => {
+            agents::set_upgrade_available(pool, &id, true).await?;
+            println!("{{\"notified\": true}}");
+        }
+        AgentCommands::Template { command } => match command {
+            TemplateCommands::Create {
+                name,
+                r#type,
+                config,
+                skills,
+            } => {
+                let template = agents::create_template(
+                    pool,
+                    agents::CreateTemplateRequest {
+                        name,
+                        template_type: r#type,
+                        default_config: config,
+                        skill_refs: skills,
+                    },
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&template)?);
+            }
+            TemplateCommands::List { r#type, limit } => {
+                let templates =
+                    agents::list_templates(pool, r#type.as_deref(), Some(limit)).await?;
+                println!("{}", serde_json::to_string_pretty(&templates)?);
+            }
+            TemplateCommands::Get { id } => {
+                let template = agents::get_template_by_id(pool, &id).await?;
+                println!("{}", serde_json::to_string_pretty(&template)?);
+            }
+            TemplateCommands::Instantiate {
+                template_id,
+                name,
+                namespace,
+                parent,
+                config_overrides,
+            } => {
+                let agent = agents::instantiate_from_template(
+                    pool,
+                    agents::InstantiateRequest {
+                        template_id,
+                        name,
+                        namespace,
+                        parent_id: parent,
+                        config_overrides,
+                    },
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&agent)?);
+            }
+        },
     }
 
     pools.close().await;

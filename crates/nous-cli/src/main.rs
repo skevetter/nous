@@ -5,6 +5,8 @@ mod commands;
 use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
+use commands::inventory::InventoryCommands;
+use commands::memory::MemoryCommands;
 use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
@@ -35,6 +37,16 @@ enum Commands {
         #[command(subcommand)]
         command: ChatCommands,
     },
+    /// Inventory management (P5 artifact registry)
+    Inventory {
+        #[command(subcommand)]
+        command: InventoryCommands,
+    },
+    /// Memory operations (P6 persistent structured memory)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
     /// Task management operations
     Task {
         #[command(subcommand)]
@@ -50,6 +62,8 @@ enum Commands {
         #[command(subcommand)]
         command: WorktreeCommands,
     },
+    /// Start the MCP server (stdio transport for agent integration)
+    McpServer,
     /// Start the HTTP daemon
     Serve,
 }
@@ -75,6 +89,12 @@ async fn main() {
         Commands::Chat { command } => {
             commands::chat::run(command).await;
         }
+        Commands::Inventory { command } => {
+            commands::inventory::run(command).await;
+        }
+        Commands::Memory { command } => {
+            commands::memory::run(command).await;
+        }
         Commands::Task { command } => {
             commands::task::run(command).await;
         }
@@ -83,6 +103,9 @@ async fn main() {
         }
         Commands::Worktree { command } => {
             commands::worktree::run(command).await;
+        }
+        Commands::McpServer => {
+            commands::mcp_server::run().await;
         }
         Commands::Serve => {
             commands::serve::run().await;

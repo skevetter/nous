@@ -194,12 +194,16 @@ pub struct Agent {
     pub room: Option<String>,
     pub last_seen_at: Option<String>,
     pub metadata_json: Option<String>,
+    pub current_version_id: Option<String>,
+    pub upgrade_available: bool,
+    pub template_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 impl Agent {
     fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        let upgrade_flag: i32 = row.try_get("upgrade_available").unwrap_or(0);
         Ok(Self {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
@@ -210,6 +214,9 @@ impl Agent {
             room: row.try_get("room")?,
             last_seen_at: row.try_get("last_seen_at")?,
             metadata_json: row.try_get("metadata_json")?,
+            current_version_id: row.try_get("current_version_id").unwrap_or(None),
+            upgrade_available: upgrade_flag != 0,
+            template_id: row.try_get("template_id").unwrap_or(None),
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -779,6 +786,403 @@ pub async fn deregister_artifact(pool: &SqlitePool, id: &str) -> Result<(), Nous
     }
 
     Ok(())
+}
+
+// --- P7: Agent lifecycle, versioning, templates ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentVersion {
+    pub id: String,
+    pub agent_id: String,
+    pub skill_hash: String,
+    pub config_hash: String,
+    pub skills_json: String,
+    pub created_at: String,
+}
+
+impl AgentVersion {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            agent_id: row.try_get("agent_id")?,
+            skill_hash: row.try_get("skill_hash")?,
+            config_hash: row.try_get("config_hash")?,
+            skills_json: row.try_get("skills_json")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTemplate {
+    pub id: String,
+    pub name: String,
+    pub template_type: String,
+    pub default_config: String,
+    pub skill_refs: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl AgentTemplate {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            template_type: row.try_get("template_type")?,
+            default_config: row.try_get("default_config")?,
+            skill_refs: row.try_get("skill_refs")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInspection {
+    #[serde(flatten)]
+    pub agent: Agent,
+    pub current_version: Option<AgentVersion>,
+    pub template: Option<AgentTemplate>,
+    pub version_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordVersionRequest {
+    pub agent_id: String,
+    pub skill_hash: String,
+    pub config_hash: String,
+    pub skills_json: Option<String>,
+}
+
+pub async fn record_version(
+    pool: &SqlitePool,
+    req: RecordVersionRequest,
+) -> Result<AgentVersion, NousError> {
+    let _agent = get_agent_by_id(pool, &req.agent_id).await?;
+    let id = Uuid::now_v7().to_string();
+    let skills = req.skills_json.unwrap_or_else(|| "[]".to_string());
+
+    sqlx::query(
+        "INSERT INTO agent_versions (id, agent_id, skill_hash, config_hash, skills_json) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&req.agent_id)
+    .bind(&req.skill_hash)
+    .bind(&req.config_hash)
+    .bind(&skills)
+    .execute(pool)
+    .await?;
+
+    sqlx::query("UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?")
+        .bind(&id)
+        .bind(&req.agent_id)
+        .execute(pool)
+        .await?;
+
+    get_version_by_id(pool, &id).await
+}
+
+pub async fn get_version_by_id(pool: &SqlitePool, id: &str) -> Result<AgentVersion, NousError> {
+    let row = sqlx::query("SELECT * FROM agent_versions WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+    let row = row.ok_or_else(|| NousError::NotFound(format!("agent version '{id}' not found")))?;
+    AgentVersion::from_row(&row).map_err(NousError::Sqlite)
+}
+
+pub async fn list_versions(
+    pool: &SqlitePool,
+    agent_id: &str,
+    limit: Option<u32>,
+) -> Result<Vec<AgentVersion>, NousError> {
+    let _agent = get_agent_by_id(pool, agent_id).await?;
+    let limit = limit.unwrap_or(20).min(100);
+
+    let rows = sqlx::query(
+        "SELECT * FROM agent_versions WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(agent_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(AgentVersion::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)
+}
+
+pub async fn inspect_agent(pool: &SqlitePool, id: &str) -> Result<AgentInspection, NousError> {
+    let agent = get_agent_by_id(pool, id).await?;
+
+    let current_version: Option<AgentVersion> = {
+        let row = sqlx::query(
+            "SELECT v.* FROM agent_versions v \
+             INNER JOIN agents a ON a.current_version_id = v.id \
+             WHERE a.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        row.map(|r| AgentVersion::from_row(&r))
+            .transpose()
+            .map_err(NousError::Sqlite)?
+    };
+
+    let template: Option<AgentTemplate> = {
+        let row = sqlx::query(
+            "SELECT t.* FROM agent_templates t \
+             INNER JOIN agents a ON a.template_id = t.id \
+             WHERE a.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        row.map(|r| AgentTemplate::from_row(&r))
+            .transpose()
+            .map_err(NousError::Sqlite)?
+    };
+
+    let version_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM agent_versions WHERE agent_id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(AgentInspection {
+        agent,
+        current_version,
+        template,
+        version_count,
+    })
+}
+
+pub async fn rollback_agent(
+    pool: &SqlitePool,
+    agent_id: &str,
+    version_id: &str,
+) -> Result<AgentVersion, NousError> {
+    let version = get_version_by_id(pool, version_id).await?;
+    if version.agent_id != agent_id {
+        return Err(NousError::Validation(
+            "version does not belong to this agent".into(),
+        ));
+    }
+
+    sqlx::query("UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?")
+        .bind(version_id)
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
+
+    Ok(version)
+}
+
+pub async fn set_upgrade_available(
+    pool: &SqlitePool,
+    agent_id: &str,
+    available: bool,
+) -> Result<(), NousError> {
+    let flag = if available { 1 } else { 0 };
+    let result =
+        sqlx::query("UPDATE agents SET upgrade_available = ? WHERE id = ?")
+            .bind(flag)
+            .bind(agent_id)
+            .execute(pool)
+            .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(NousError::NotFound(format!("agent '{agent_id}' not found")));
+    }
+    Ok(())
+}
+
+pub async fn list_outdated_agents(
+    pool: &SqlitePool,
+    namespace: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<Agent>, NousError> {
+    let limit = limit.unwrap_or(50).min(200);
+
+    if let Some(ns) = namespace {
+        let rows = sqlx::query(
+            "SELECT * FROM agents WHERE upgrade_available = 1 AND namespace = ? \
+             ORDER BY updated_at DESC LIMIT ?",
+        )
+        .bind(ns)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        rows.iter()
+            .map(Agent::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::Sqlite)
+    } else {
+        let rows = sqlx::query(
+            "SELECT * FROM agents WHERE upgrade_available = 1 \
+             ORDER BY updated_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        rows.iter()
+            .map(Agent::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::Sqlite)
+    }
+}
+
+// --- Template operations ---
+
+#[derive(Debug, Clone)]
+pub struct CreateTemplateRequest {
+    pub name: String,
+    pub template_type: String,
+    pub default_config: Option<String>,
+    pub skill_refs: Option<String>,
+}
+
+pub async fn create_template(
+    pool: &SqlitePool,
+    req: CreateTemplateRequest,
+) -> Result<AgentTemplate, NousError> {
+    if req.name.trim().is_empty() {
+        return Err(NousError::Validation(
+            "template name cannot be empty".into(),
+        ));
+    }
+
+    let id = Uuid::now_v7().to_string();
+    let config = req.default_config.unwrap_or_else(|| "{}".to_string());
+    let skills = req.skill_refs.unwrap_or_else(|| "[]".to_string());
+
+    sqlx::query(
+        "INSERT INTO agent_templates (id, name, template_type, default_config, skill_refs) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(req.name.trim())
+    .bind(&req.template_type)
+    .bind(&config)
+    .bind(&skills)
+    .execute(pool)
+    .await?;
+
+    get_template_by_id(pool, &id).await
+}
+
+pub async fn get_template_by_id(pool: &SqlitePool, id: &str) -> Result<AgentTemplate, NousError> {
+    let row = sqlx::query("SELECT * FROM agent_templates WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+    let row =
+        row.ok_or_else(|| NousError::NotFound(format!("agent template '{id}' not found")))?;
+    AgentTemplate::from_row(&row).map_err(NousError::Sqlite)
+}
+
+pub async fn list_templates(
+    pool: &SqlitePool,
+    template_type: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<AgentTemplate>, NousError> {
+    let limit = limit.unwrap_or(50).min(200);
+
+    if let Some(t) = template_type {
+        let rows = sqlx::query(
+            "SELECT * FROM agent_templates WHERE template_type = ? \
+             ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(t)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        rows.iter()
+            .map(AgentTemplate::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::Sqlite)
+    } else {
+        let rows = sqlx::query(
+            "SELECT * FROM agent_templates ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        rows.iter()
+            .map(AgentTemplate::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::Sqlite)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstantiateRequest {
+    pub template_id: String,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
+    pub parent_id: Option<String>,
+    pub config_overrides: Option<String>,
+}
+
+pub async fn instantiate_from_template(
+    pool: &SqlitePool,
+    req: InstantiateRequest,
+) -> Result<Agent, NousError> {
+    let template = get_template_by_id(pool, &req.template_id).await?;
+
+    let agent_type: AgentType = template.template_type.parse().unwrap_or(AgentType::Engineer);
+    let name = req.name.unwrap_or_else(|| {
+        format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8])
+    });
+
+    let agent = register_agent(
+        pool,
+        RegisterAgentRequest {
+            name,
+            agent_type,
+            parent_id: req.parent_id,
+            namespace: req.namespace,
+            room: None,
+            metadata: Some(merge_config(&template.default_config, req.config_overrides.as_deref())),
+            status: Some(AgentStatus::Active),
+        },
+    )
+    .await?;
+
+    sqlx::query("UPDATE agents SET template_id = ? WHERE id = ?")
+        .bind(&req.template_id)
+        .bind(&agent.id)
+        .execute(pool)
+        .await?;
+
+    get_agent_by_id(pool, &agent.id).await
+}
+
+fn merge_config(base: &str, overrides: Option<&str>) -> String {
+    let Some(overrides) = overrides else {
+        return base.to_string();
+    };
+
+    let Ok(mut base_val) = serde_json::from_str::<serde_json::Value>(base) else {
+        return base.to_string();
+    };
+
+    let Ok(over_val) = serde_json::from_str::<serde_json::Value>(overrides) else {
+        return base.to_string();
+    };
+
+    if let (Some(base_obj), Some(over_obj)) = (base_val.as_object_mut(), over_val.as_object()) {
+        for (k, v) in over_obj {
+            base_obj.insert(k.clone(), v.clone());
+        }
+    }
+
+    serde_json::to_string(&base_val).unwrap_or_else(|_| base.to_string())
 }
 
 pub async fn list_stale_agents(

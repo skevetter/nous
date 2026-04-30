@@ -1,5 +1,5 @@
 pub mod error;
-mod routes;
+pub mod routes;
 pub mod state;
 
 use axum::routing::{delete, get, post};
@@ -73,12 +73,86 @@ pub fn app(state: AppState) -> Router {
             get(routes::agents::ancestors),
         )
         .route(
+            "/agents/{id}/inspect",
+            get(routes::agents::inspect),
+        )
+        .route(
+            "/agents/{id}/versions",
+            get(routes::agents::list_versions),
+        )
+        .route(
+            "/agents/{id}/rollback",
+            post(routes::agents::rollback),
+        )
+        .route(
+            "/agents/{id}/notify-upgrade",
+            post(routes::agents::notify_upgrade),
+        )
+        .route(
+            "/agents/versions",
+            post(routes::agents::record_version),
+        )
+        .route(
+            "/agents/outdated",
+            get(routes::agents::list_outdated),
+        )
+        .route(
+            "/templates",
+            post(routes::agents::create_template).get(routes::agents::list_templates),
+        )
+        .route(
+            "/templates/{id}",
+            get(routes::agents::get_template),
+        )
+        .route(
+            "/templates/instantiate",
+            post(routes::agents::instantiate),
+        )
+        .route(
             "/artifacts",
             post(routes::agents::register_artifact).get(routes::agents::list_artifacts),
         )
         .route(
             "/artifacts/{id}",
             delete(routes::agents::deregister_artifact),
+        )
+        .route(
+            "/memories",
+            post(routes::memory::save).get(routes::memory::context),
+        )
+        .route(
+            "/memories/search",
+            get(routes::memory::search),
+        )
+        .route(
+            "/memories/relate",
+            post(routes::memory::relate),
+        )
+        .route(
+            "/memories/{id}",
+            get(routes::memory::get).put(routes::memory::update),
+        )
+        .route(
+            "/memories/{id}/relations",
+            get(routes::memory::list_relations),
+        )
+        .route(
+            "/inventory",
+            post(routes::inventory::register).get(routes::inventory::list),
+        )
+        .route(
+            "/inventory/search",
+            get(routes::inventory::search),
+        )
+        .route(
+            "/inventory/{id}",
+            get(routes::inventory::get)
+                .put(routes::inventory::update)
+                .delete(routes::inventory::deregister),
+        )
+        .route(
+            "/inventory/{id}/archive",
+            post(routes::inventory::archive),
         )
         .route(
             "/schedules",
@@ -402,7 +476,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 44);
+        assert_eq!(tools.len(), 78);
     }
 
     #[tokio::test]

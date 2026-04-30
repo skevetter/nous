@@ -1,6 +1,7 @@
 use nous_core::agents::{
-    self, AgentStatus, AgentType, ArtifactType, ListAgentsFilter, ListArtifactsFilter,
-    RegisterAgentRequest, RegisterArtifactRequest,
+    self, AgentStatus, AgentType, ArtifactType, CreateTemplateRequest, InstantiateRequest,
+    ListAgentsFilter, ListArtifactsFilter, RecordVersionRequest, RegisterAgentRequest,
+    RegisterArtifactRequest,
 };
 use nous_core::db::DbPools;
 use tempfile::TempDir;
@@ -797,6 +798,482 @@ async fn test_update_agent_status() {
         .await
         .unwrap();
     assert_eq!(updated.status, "blocked");
+
+    pools.close().await;
+}
+
+// --- P7: Agent lifecycle, versioning, templates ---
+
+#[tokio::test]
+async fn test_record_and_list_versions() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "versioned-agent".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let v1 = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "abc123".into(),
+            config_hash: "cfg001".into(),
+            skills_json: Some(r#"[{"name":"skill-a","path":"a.md","hash":"aaa"}]"#.into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(v1.agent_id, agent.id);
+    assert_eq!(v1.skill_hash, "abc123");
+    assert!(!v1.id.is_empty());
+
+    let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert_eq!(refreshed.current_version_id.as_deref(), Some(v1.id.as_str()));
+    assert!(!refreshed.upgrade_available);
+
+    let v2 = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "def456".into(),
+            config_hash: "cfg002".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let versions = agents::list_versions(pool, &agent.id, None).await.unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].id, v2.id);
+    assert_eq!(versions[1].id, v1.id);
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_inspect_agent() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "inspectable".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let inspection = agents::inspect_agent(pool, &agent.id).await.unwrap();
+    assert_eq!(inspection.agent.name, "inspectable");
+    assert!(inspection.current_version.is_none());
+    assert!(inspection.template.is_none());
+    assert_eq!(inspection.version_count, 0);
+
+    agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "h1".into(),
+            config_hash: "c1".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let inspection = agents::inspect_agent(pool, &agent.id).await.unwrap();
+    assert!(inspection.current_version.is_some());
+    assert_eq!(inspection.version_count, 1);
+    assert_eq!(inspection.current_version.unwrap().skill_hash, "h1");
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_rollback_agent() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "rollback-agent".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let v1 = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "old-hash".into(),
+            config_hash: "old-cfg".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let _v2 = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "new-hash".into(),
+            config_hash: "new-cfg".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let rolled = agents::rollback_agent(pool, &agent.id, &v1.id).await.unwrap();
+    assert_eq!(rolled.skill_hash, "old-hash");
+
+    let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert_eq!(refreshed.current_version_id.as_deref(), Some(v1.id.as_str()));
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_rollback_wrong_agent_rejected() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let a1 = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "agent-a".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let a2 = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "agent-b".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let v1 = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: a1.id.clone(),
+            skill_hash: "h1".into(),
+            config_hash: "c1".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let result = agents::rollback_agent(pool, &a2.id, &v1.id).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("does not belong"));
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_upgrade_available_flag() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "upgrade-agent".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(!agent.upgrade_available);
+
+    agents::set_upgrade_available(pool, &agent.id, true).await.unwrap();
+    let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert!(refreshed.upgrade_available);
+
+    let outdated = agents::list_outdated_agents(pool, None, None).await.unwrap();
+    assert_eq!(outdated.len(), 1);
+    assert_eq!(outdated[0].id, agent.id);
+
+    agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "new".into(),
+            config_hash: "new".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let refreshed = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert!(!refreshed.upgrade_available);
+
+    let outdated = agents::list_outdated_agents(pool, None, None).await.unwrap();
+    assert!(outdated.is_empty());
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_create_and_list_templates() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let template = agents::create_template(
+        pool,
+        CreateTemplateRequest {
+            name: "code-reviewer".into(),
+            template_type: "engineer".into(),
+            default_config: Some(r#"{"provider":"claude/sonnet","mode":"bypassPermissions"}"#.into()),
+            skill_refs: Some(r#"["org:code-reviewer","superpowers:debugging"]"#.into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(template.name, "code-reviewer");
+    assert_eq!(template.template_type, "engineer");
+    assert!(!template.id.is_empty());
+
+    let all = agents::list_templates(pool, None, None).await.unwrap();
+    assert_eq!(all.len(), 1);
+
+    let by_type = agents::list_templates(pool, Some("engineer"), None).await.unwrap();
+    assert_eq!(by_type.len(), 1);
+
+    let empty = agents::list_templates(pool, Some("nonexistent"), None).await.unwrap();
+    assert!(empty.is_empty());
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_template_unique_name() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    agents::create_template(
+        pool,
+        CreateTemplateRequest {
+            name: "unique-template".into(),
+            template_type: "engineer".into(),
+            default_config: None,
+            skill_refs: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let result = agents::create_template(
+        pool,
+        CreateTemplateRequest {
+            name: "unique-template".into(),
+            template_type: "manager".into(),
+            default_config: None,
+            skill_refs: None,
+        },
+    )
+    .await;
+
+    assert!(result.is_err());
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_instantiate_from_template() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let template = agents::create_template(
+        pool,
+        CreateTemplateRequest {
+            name: "worker-template".into(),
+            template_type: "engineer".into(),
+            default_config: Some(r#"{"provider":"claude/sonnet","retries":3}"#.into()),
+            skill_refs: Some(r#"["skill-a"]"#.into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let agent = agents::instantiate_from_template(
+        pool,
+        InstantiateRequest {
+            template_id: template.id.clone(),
+            name: Some("my-worker-1".into()),
+            namespace: None,
+            parent_id: None,
+            config_overrides: Some(r#"{"retries":5,"debug":true}"#.into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(agent.name, "my-worker-1");
+    assert_eq!(agent.agent_type, "engineer");
+    assert_eq!(agent.template_id.as_deref(), Some(template.id.as_str()));
+
+    let meta: serde_json::Value = serde_json::from_str(agent.metadata_json.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["provider"], "claude/sonnet");
+    assert_eq!(meta["retries"], 5);
+    assert_eq!(meta["debug"], true);
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_instantiate_auto_name() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let template = agents::create_template(
+        pool,
+        CreateTemplateRequest {
+            name: "auto-named".into(),
+            template_type: "engineer".into(),
+            default_config: None,
+            skill_refs: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let agent = agents::instantiate_from_template(
+        pool,
+        InstantiateRequest {
+            template_id: template.id.clone(),
+            name: None,
+            namespace: None,
+            parent_id: None,
+            config_overrides: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(agent.name.starts_with("auto-named-"));
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_versions_cascade_on_agent_delete() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "cascade-v".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let v = agents::record_version(
+        pool,
+        RecordVersionRequest {
+            agent_id: agent.id.clone(),
+            skill_hash: "h".into(),
+            config_hash: "c".into(),
+            skills_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    agents::deregister_agent(pool, &agent.id, false).await.unwrap();
+
+    let result = agents::get_version_by_id(pool, &v.id).await;
+    assert!(result.is_err());
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_agent_new_fields_default() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "default-fields".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(agent.current_version_id.is_none());
+    assert!(!agent.upgrade_available);
+    assert!(agent.template_id.is_none());
 
     pools.close().await;
 }

@@ -1,6 +1,8 @@
 pub mod agents;
 pub mod health;
+pub mod inventory;
 pub mod mcp;
+pub mod memory;
 pub mod messages;
 pub mod rooms;
 pub mod schedules;

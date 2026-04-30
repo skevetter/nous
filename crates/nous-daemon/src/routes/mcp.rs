@@ -12,6 +12,8 @@ use nous_core::messages::{
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::agents;
+use nous_core::inventory;
+use nous_core::memory;
 use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
@@ -19,11 +21,11 @@ use nous_core::worktrees;
 use crate::error::AppError;
 use crate::state::AppState;
 
-#[derive(Serialize)]
-struct ToolSchema {
-    name: &'static str,
-    description: &'static str,
-    input_schema: Value,
+#[derive(Serialize, Clone)]
+pub struct ToolSchema {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input_schema: Value,
 }
 
 #[derive(Deserialize)]
@@ -46,8 +48,8 @@ pub struct ToolContent {
     pub text: String,
 }
 
-pub async fn list_tools() -> impl IntoResponse {
-    let tools = vec![
+pub fn get_tool_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "room_create",
             description: "Create a new chat room",
@@ -479,6 +481,128 @@ pub async fn list_tools() -> impl IntoResponse {
             }),
         },
         ToolSchema {
+            name: "agent_inspect",
+            description: "Inspect an agent: full details with current version and template info",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_versions",
+            description: "List version history for an agent (newest first)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "limit": { "type": "integer", "description": "Max results (default 20)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_record_version",
+            description: "Record a new version for an agent (skill hashes + config hash). Clears upgrade_available flag.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "skill_hash": { "type": "string", "description": "SHA-256 of concatenated skill file contents" },
+                    "config_hash": { "type": "string", "description": "SHA-256 of effective config" },
+                    "skills_json": { "type": "string", "description": "JSON array: [{name, path, hash}]" }
+                },
+                "required": ["agent_id", "skill_hash", "config_hash"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_rollback",
+            description: "Rollback an agent to a previous version (advisory — agent must restart with old skills)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "version_id": { "type": "string", "description": "Target version ID to rollback to" }
+                },
+                "required": ["agent_id", "version_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_notify_upgrade",
+            description: "Set upgrade_available flag for an agent (advisory notification)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_outdated",
+            description: "List agents with upgrade_available flag set",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_create",
+            description: "Create an immutable agent template (blueprint for spawning agents)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Template name (unique)" },
+                    "type": { "type": "string", "description": "Template type (e.g. engineer, reviewer, monitor)" },
+                    "default_config": { "type": "string", "description": "Default config JSON" },
+                    "skill_refs": { "type": "string", "description": "JSON array of skill file paths or names" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_list",
+            description: "List agent templates",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "description": "Filter by template type" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "agent_template_get",
+            description: "Get an agent template by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Template ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_instantiate",
+            description: "Create a new agent from a template with optional config overrides",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "template_id": { "type": "string", "description": "Template ID" },
+                    "name": { "type": "string", "description": "Agent name override" },
+                    "namespace": { "type": "string", "description": "Namespace" },
+                    "parent_id": { "type": "string", "description": "Parent agent ID" },
+                    "config_overrides": { "type": "string", "description": "Config overrides JSON (merged with template defaults)" }
+                },
+                "required": ["template_id"]
+            }),
+        },
+        ToolSchema {
             name: "artifact_register",
             description: "Register a new artifact owned by an agent",
             input_schema: serde_json::json!({
@@ -515,6 +639,204 @@ pub async fn list_tools() -> impl IntoResponse {
                     "namespace": { "type": "string", "description": "Filter by namespace" },
                     "limit": { "type": "integer", "description": "Max results" }
                 }
+            }),
+        },
+        ToolSchema {
+            name: "inventory_register",
+            description: "Register a new inventory item (P5 artifact registry)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Item name" },
+                    "type": { "type": "string", "description": "Artifact type: worktree, room, schedule, branch, file, docker-image, binary" },
+                    "owner_agent_id": { "type": "string", "description": "Owning agent ID (optional)" },
+                    "path": { "type": "string", "description": "Filesystem or logical path" },
+                    "namespace": { "type": "string", "description": "Namespace (default: 'default')" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for discovery" },
+                    "metadata": { "type": "string", "description": "JSON metadata (type-specific fields)" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_list",
+            description: "List inventory items with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "description": "Filter by artifact type" },
+                    "status": { "type": "string", "description": "Filter by status: active, archived, deleted" },
+                    "owner_agent_id": { "type": "string", "description": "Filter by owner agent ID" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "orphaned": { "type": "boolean", "description": "Show only orphaned (unowned) items" },
+                    "limit": { "type": "integer", "description": "Max results (default: 50)" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "inventory_get",
+            description: "Get an inventory item by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_update",
+            description: "Update an inventory item (name, path, tags, metadata)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" },
+                    "name": { "type": "string", "description": "New name" },
+                    "path": { "type": "string", "description": "New path" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "New tags (replaces existing)" },
+                    "metadata": { "type": "string", "description": "New JSON metadata (replaces existing)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_search",
+            description: "Search inventory by tags (AND semantics: item must have ALL specified tags)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to search (AND semantics)" },
+                    "type": { "type": "string", "description": "Filter by artifact type" },
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["tags"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_archive",
+            description: "Archive an active inventory item (status: active → archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "inventory_deregister",
+            description: "Deregister an inventory item (soft-delete by default, hard=true removes row)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Item ID" },
+                    "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_save",
+            description: "Save a new memory (persistent structured observation). If topic_key matches an existing active memory, it updates instead.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Short searchable title" },
+                    "content": { "type": "string", "description": "Structured content (use **What**, **Why**, **Where**, **Learned** format)" },
+                    "type": { "type": "string", "description": "Memory type: decision, convention, bugfix, architecture, fact, observation" },
+                    "importance": { "type": "string", "description": "Importance: low, moderate, high (default: moderate)" },
+                    "agent_id": { "type": "string", "description": "Agent ID that created this memory" },
+                    "workspace_id": { "type": "string", "description": "Workspace scope (default: 'default')" },
+                    "topic_key": { "type": "string", "description": "Topic key for upsert (e.g. 'architecture/auth-model')" },
+                    "valid_from": { "type": "string", "description": "ISO-8601 start of validity" },
+                    "valid_until": { "type": "string", "description": "ISO-8601 end of validity" }
+                },
+                "required": ["title", "content", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_search",
+            description: "Search memories using full-text search (FTS5)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "workspace_id": { "type": "string", "description": "Filter by workspace" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "type": { "type": "string", "description": "Filter by memory type" },
+                    "importance": { "type": "string", "description": "Filter by importance" },
+                    "include_archived": { "type": "boolean", "description": "Include archived memories (default: false)" },
+                    "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_get",
+            description: "Get a memory by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_update",
+            description: "Update a memory (title, content, importance, topic_key, archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" },
+                    "title": { "type": "string", "description": "New title" },
+                    "content": { "type": "string", "description": "New content" },
+                    "importance": { "type": "string", "description": "New importance" },
+                    "topic_key": { "type": "string", "description": "New topic key" },
+                    "valid_from": { "type": "string", "description": "New valid_from" },
+                    "valid_until": { "type": "string", "description": "New valid_until" },
+                    "archived": { "type": "boolean", "description": "Set archived state" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_relate",
+            description: "Create a relation between two memories (supersedes, conflicts_with, related, compatible, scoped, not_conflict)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "source_id": { "type": "string", "description": "Source memory ID" },
+                    "target_id": { "type": "string", "description": "Target memory ID" },
+                    "relation_type": { "type": "string", "description": "Relation type: supersedes, conflicts_with, related, compatible, scoped, not_conflict" }
+                },
+                "required": ["source_id", "target_id", "relation_type"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_context",
+            description: "Get recent memories as context (ordered by recency, non-archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "workspace_id": { "type": "string", "description": "Filter by workspace" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "topic_key": { "type": "string", "description": "Filter by topic key" },
+                    "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "memory_relations",
+            description: "List all relations for a memory",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" }
+                },
+                "required": ["id"]
             }),
         },
         ToolSchema {
@@ -613,8 +935,135 @@ pub async fn list_tools() -> impl IntoResponse {
                 "properties": {}
             }),
         },
-    ];
+        ToolSchema {
+            name: "task_depends_add",
+            description: "Add a dependency between tasks (execution-order constraint)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID that has the dependency" },
+                    "depends_on_task_id": { "type": "string", "description": "Task ID it depends on" },
+                    "dep_type": { "type": "string", "description": "Dependency type: blocked_by, blocks, waiting_on (default: blocked_by)" }
+                },
+                "required": ["task_id", "depends_on_task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_depends_remove",
+            description: "Remove a dependency between tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID" },
+                    "depends_on_task_id": { "type": "string", "description": "Depends-on task ID" },
+                    "dep_type": { "type": "string", "description": "Dependency type (default: blocked_by)" }
+                },
+                "required": ["task_id", "depends_on_task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_depends_list",
+            description: "List all dependencies for a task",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID" }
+                },
+                "required": ["task_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_create",
+            description: "Create a reusable task template",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Template name (unique)" },
+                    "title_pattern": { "type": "string", "description": "Title pattern (use {{var}} for variables)" },
+                    "description_template": { "type": "string", "description": "Description template" },
+                    "default_priority": { "type": "string", "description": "Default priority: critical, high, medium, low" },
+                    "default_labels": { "type": "array", "items": { "type": "string" }, "description": "Default labels" },
+                    "checklist": { "type": "array", "items": { "type": "string" }, "description": "Checklist items" }
+                },
+                "required": ["name", "title_pattern"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_list",
+            description: "List task templates",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Max results" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "task_template_get",
+            description: "Get a task template by ID or name",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Template ID or name" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_template_use",
+            description: "Create a task from a template",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "template_id": { "type": "string", "description": "Template ID or name" },
+                    "title_vars": { "type": "object", "description": "Variables to substitute in title pattern (key: value)" },
+                    "description": { "type": "string", "description": "Override description" },
+                    "assignee_id": { "type": "string", "description": "Override assignee" },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Override labels" }
+                },
+                "required": ["template_id"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_close",
+            description: "Batch close multiple tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs to close" }
+                },
+                "required": ["task_ids"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_update_status",
+            description: "Batch update status of multiple tasks",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs" },
+                    "status": { "type": "string", "description": "New status: open, in_progress, done, closed" }
+                },
+                "required": ["task_ids", "status"]
+            }),
+        },
+        ToolSchema {
+            name: "task_batch_assign",
+            description: "Batch assign multiple tasks to an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": { "type": "array", "items": { "type": "string" }, "description": "List of task IDs" },
+                    "assignee_id": { "type": "string", "description": "Assignee agent ID" }
+                },
+                "required": ["task_ids", "assignee_id"]
+            }),
+        },
+    ]
+}
 
+pub async fn list_tools() -> impl IntoResponse {
+    let tools = get_tool_schemas();
     Json(serde_json::json!({ "tools": tools }))
 }
 
@@ -654,7 +1103,7 @@ fn require_str<'a>(args: &'a Value, field: &str) -> Result<&'a str, nous_core::e
         })
 }
 
-async fn dispatch(
+pub async fn dispatch(
     state: &AppState,
     name: &str,
     args: &Value,
@@ -1054,6 +1503,98 @@ async fn dispatch(
             let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
             Ok(serde_json::to_value(stale).unwrap())
         }
+        "agent_inspect" => {
+            let id = require_str(args, "id")?;
+            let inspection = agents::inspect_agent(&state.pool, id).await?;
+            Ok(serde_json::to_value(inspection).unwrap())
+        }
+        "agent_versions" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let versions = agents::list_versions(&state.pool, agent_id, limit).await?;
+            Ok(serde_json::to_value(versions).unwrap())
+        }
+        "agent_record_version" => {
+            let agent_id = require_str(args, "agent_id")?.to_string();
+            let skill_hash = require_str(args, "skill_hash")?.to_string();
+            let config_hash = require_str(args, "config_hash")?.to_string();
+            let skills_json = args.get("skills_json").and_then(|v| v.as_str()).map(String::from);
+            let version = agents::record_version(
+                &state.pool,
+                agents::RecordVersionRequest {
+                    agent_id,
+                    skill_hash,
+                    config_hash,
+                    skills_json,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(version).unwrap())
+        }
+        "agent_rollback" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let version_id = require_str(args, "version_id")?;
+            let version = agents::rollback_agent(&state.pool, agent_id, version_id).await?;
+            Ok(serde_json::to_value(version).unwrap())
+        }
+        "agent_notify_upgrade" => {
+            let id = require_str(args, "id")?;
+            agents::set_upgrade_available(&state.pool, id, true).await?;
+            Ok(serde_json::json!({"notified": true}))
+        }
+        "agent_outdated" => {
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let outdated = agents::list_outdated_agents(&state.pool, namespace, limit).await?;
+            Ok(serde_json::to_value(outdated).unwrap())
+        }
+        "agent_template_create" => {
+            let name = require_str(args, "name")?.to_string();
+            let template_type = require_str(args, "type")?.to_string();
+            let default_config = args.get("default_config").and_then(|v| v.as_str()).map(String::from);
+            let skill_refs = args.get("skill_refs").and_then(|v| v.as_str()).map(String::from);
+            let template = agents::create_template(
+                &state.pool,
+                agents::CreateTemplateRequest {
+                    name,
+                    template_type,
+                    default_config,
+                    skill_refs,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(template).unwrap())
+        }
+        "agent_template_list" => {
+            let template_type = args.get("type").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let templates = agents::list_templates(&state.pool, template_type, limit).await?;
+            Ok(serde_json::to_value(templates).unwrap())
+        }
+        "agent_template_get" => {
+            let id = require_str(args, "id")?;
+            let template = agents::get_template_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(template).unwrap())
+        }
+        "agent_instantiate" => {
+            let template_id = require_str(args, "template_id")?.to_string();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let parent_id = args.get("parent_id").and_then(|v| v.as_str()).map(String::from);
+            let config_overrides = args.get("config_overrides").and_then(|v| v.as_str()).map(String::from);
+            let agent = agents::instantiate_from_template(
+                &state.pool,
+                agents::InstantiateRequest {
+                    template_id,
+                    name,
+                    namespace,
+                    parent_id,
+                    config_overrides,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(agent).unwrap())
+        }
         "artifact_register" => {
             let agent_id = require_str(args, "agent_id")?.to_string();
             let artifact_type_str = require_str(args, "type")?;
@@ -1198,6 +1739,373 @@ async fn dispatch(
         "schedule_health" => {
             let health = schedules::schedule_health(&state.pool).await?;
             Ok(health)
+        }
+        "inventory_register" => {
+            let name = require_str(args, "name")?.to_string();
+            let type_str = require_str(args, "type")?;
+            let artifact_type: inventory::InventoryType = type_str.parse()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let item = inventory::register_item(
+                &state.pool,
+                inventory::RegisterItemRequest {
+                    name,
+                    artifact_type,
+                    owner_agent_id,
+                    namespace,
+                    path,
+                    metadata,
+                    tags,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_list" => {
+            let artifact_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .transpose()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = inventory::list_items(
+                &state.pool,
+                &inventory::ListItemsFilter {
+                    artifact_type,
+                    status,
+                    owner_agent_id,
+                    namespace,
+                    orphaned,
+                    limit,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "inventory_get" => {
+            let id = require_str(args, "id")?;
+            let item = inventory::get_item_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_update" => {
+            let id = require_str(args, "id")?.to_string();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let item = inventory::update_item(
+                &state.pool,
+                inventory::UpdateItemRequest {
+                    id,
+                    name,
+                    path,
+                    metadata,
+                    tags,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_search" => {
+            let tags: Vec<String> = args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let artifact_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .transpose()?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = inventory::search_by_tags(
+                &state.pool,
+                &inventory::SearchItemsRequest {
+                    tags,
+                    artifact_type,
+                    status,
+                    namespace,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "inventory_archive" => {
+            let id = require_str(args, "id")?;
+            let item = inventory::archive_item(&state.pool, id).await?;
+            Ok(serde_json::to_value(item).unwrap())
+        }
+        "inventory_deregister" => {
+            let id = require_str(args, "id")?;
+            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
+            inventory::deregister_item(&state.pool, id, hard).await?;
+            Ok(serde_json::json!({"ok": true}))
+        }
+        "memory_save" => {
+            let title = require_str(args, "title")?.to_string();
+            let content = require_str(args, "content")?.to_string();
+            let type_str = require_str(args, "type")?;
+            let memory_type: memory::MemoryType = type_str.parse()?;
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
+            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let mem = memory::save_memory(
+                &state.pool,
+                memory::SaveMemoryRequest {
+                    workspace_id,
+                    agent_id,
+                    title,
+                    content,
+                    memory_type,
+                    importance,
+                    topic_key,
+                    valid_from,
+                    valid_until,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_search" => {
+            let query = require_str(args, "query")?.to_string();
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let memory_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::MemoryType>())
+                .transpose()?;
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = memory::search_memories(
+                &state.pool,
+                &memory::SearchMemoryRequest {
+                    query,
+                    workspace_id,
+                    agent_id,
+                    memory_type,
+                    importance,
+                    include_archived,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_get" => {
+            let id = require_str(args, "id")?;
+            let mem = memory::get_memory_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_update" => {
+            let id = require_str(args, "id")?.to_string();
+            let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
+            let content = args.get("content").and_then(|v| v.as_str()).map(String::from);
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
+            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let archived = args.get("archived").and_then(|v| v.as_bool());
+            let mem = memory::update_memory(
+                &state.pool,
+                memory::UpdateMemoryRequest {
+                    id,
+                    title,
+                    content,
+                    importance,
+                    topic_key,
+                    valid_from,
+                    valid_until,
+                    archived,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_relate" => {
+            let source_id = require_str(args, "source_id")?.to_string();
+            let target_id = require_str(args, "target_id")?.to_string();
+            let relation_type_str = require_str(args, "relation_type")?;
+            let relation_type: memory::RelationType = relation_type_str.parse()?;
+            let rel = memory::relate_memories(
+                &state.pool,
+                &memory::RelateRequest {
+                    source_id,
+                    target_id,
+                    relation_type,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(rel).unwrap())
+        }
+        "memory_context" => {
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = memory::get_context(
+                &state.pool,
+                &memory::ContextRequest {
+                    workspace_id,
+                    agent_id,
+                    topic_key,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_relations" => {
+            let id = require_str(args, "id")?;
+            let relations = memory::list_relations(&state.pool, id).await?;
+            Ok(serde_json::to_value(relations).unwrap())
+        }
+        "task_depends_add" => {
+            let task_id = require_str(args, "task_id")?;
+            let depends_on_task_id = require_str(args, "depends_on_task_id")?;
+            let dep_type = args.get("dep_type").and_then(|v| v.as_str());
+            let dep = tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
+            Ok(serde_json::to_value(dep).unwrap())
+        }
+        "task_depends_remove" => {
+            let task_id = require_str(args, "task_id")?;
+            let depends_on_task_id = require_str(args, "depends_on_task_id")?;
+            let dep_type = args.get("dep_type").and_then(|v| v.as_str());
+            tasks::remove_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
+            Ok(serde_json::json!({"removed": true}))
+        }
+        "task_depends_list" => {
+            let task_id = require_str(args, "task_id")?;
+            let deps = tasks::list_dependencies(&state.pool, task_id).await?;
+            Ok(serde_json::to_value(deps).unwrap())
+        }
+        "task_template_create" => {
+            let name = require_str(args, "name")?;
+            let title_pattern = require_str(args, "title_pattern")?;
+            let description_template = args.get("description_template").and_then(|v| v.as_str());
+            let default_priority = args.get("default_priority").and_then(|v| v.as_str());
+            let default_labels: Option<Vec<String>> =
+                args.get("default_labels").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let checklist: Option<Vec<String>> =
+                args.get("checklist").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let tmpl = tasks::create_template(
+                &state.pool,
+                name,
+                title_pattern,
+                description_template,
+                default_priority,
+                default_labels.as_deref(),
+                checklist.as_deref(),
+            )
+            .await?;
+            Ok(serde_json::to_value(tmpl).unwrap())
+        }
+        "task_template_list" => {
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let templates = tasks::list_templates(&state.pool, limit).await?;
+            Ok(serde_json::to_value(templates).unwrap())
+        }
+        "task_template_get" => {
+            let id = require_str(args, "id")?;
+            let tmpl = tasks::get_template(&state.pool, id).await?;
+            Ok(serde_json::to_value(tmpl).unwrap())
+        }
+        "task_template_use" => {
+            let template_id = require_str(args, "template_id")?;
+            let title_vars: Option<std::collections::HashMap<String, String>> =
+                args.get("title_vars").and_then(|v| v.as_object()).map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                });
+            let description = args.get("description").and_then(|v| v.as_str());
+            let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
+            let labels: Option<Vec<String>> =
+                args.get("labels").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+            let task = tasks::create_from_template(
+                &state.pool,
+                template_id,
+                title_vars.as_ref(),
+                description,
+                assignee_id,
+                labels.as_deref(),
+            )
+            .await?;
+            Ok(serde_json::to_value(task).unwrap())
+        }
+        "task_batch_close" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let result = tasks::batch_close(&state.pool, &task_ids).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "task_batch_update_status" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let status = require_str(args, "status")?;
+            let result = tasks::batch_update_status(&state.pool, &task_ids, status).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "task_batch_assign" => {
+            let task_ids: Vec<String> = args
+                .get("task_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let assignee_id = require_str(args, "assignee_id")?;
+            let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
+            Ok(serde_json::to_value(result).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

@@ -241,6 +241,144 @@ const MIGRATIONS: &[Migration] = &[
               CREATE INDEX IF NOT EXISTS idx_runs_schedule_started ON schedule_runs(schedule_id, started_at DESC); \
               CREATE INDEX IF NOT EXISTS idx_runs_status ON schedule_runs(status);",
     },
+    Migration {
+        version: "015",
+        name: "inventory",
+        sql: "CREATE TABLE IF NOT EXISTS inventory (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              name TEXT NOT NULL, \
+              artifact_type TEXT NOT NULL CHECK(artifact_type IN ('worktree','room','schedule','branch','file','docker-image','binary')), \
+              owner_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, \
+              namespace TEXT NOT NULL DEFAULT 'default', \
+              path TEXT, \
+              status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','deleted')), \
+              metadata TEXT, \
+              tags TEXT NOT NULL DEFAULT '[]', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              archived_at TEXT\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_inventory_owner ON inventory(owner_agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_inventory_namespace_type ON inventory(namespace, artifact_type); \
+              CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory(status); \
+              CREATE INDEX IF NOT EXISTS idx_inventory_name ON inventory(name); \
+              CREATE TRIGGER IF NOT EXISTS inventory_au AFTER UPDATE ON inventory WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE inventory SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END; \
+              CREATE VIRTUAL TABLE IF NOT EXISTS inventory_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS inventory_fts_insert AFTER INSERT ON inventory BEGIN INSERT INTO inventory_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.artifact_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END; \
+              CREATE TRIGGER IF NOT EXISTS inventory_fts_delete AFTER DELETE ON inventory BEGIN DELETE FROM inventory_fts WHERE rowid = OLD.rowid; END; \
+              CREATE TRIGGER IF NOT EXISTS inventory_fts_update AFTER UPDATE ON inventory WHEN NEW.name != OLD.name OR NEW.artifact_type != OLD.artifact_type OR IFNULL(NEW.metadata, '') != IFNULL(OLD.metadata, '') OR NEW.tags != OLD.tags BEGIN DELETE FROM inventory_fts WHERE rowid = OLD.rowid; INSERT INTO inventory_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.artifact_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END;",
+    },
+    Migration {
+        version: "016",
+        name: "memories",
+        sql: "CREATE TABLE IF NOT EXISTS memories (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              workspace_id TEXT NOT NULL DEFAULT 'default', \
+              agent_id TEXT, \
+              title TEXT NOT NULL, \
+              content TEXT NOT NULL, \
+              memory_type TEXT NOT NULL CHECK(memory_type IN ('decision','convention','bugfix','architecture','fact','observation')), \
+              importance TEXT NOT NULL DEFAULT 'moderate' CHECK(importance IN ('low','moderate','high')), \
+              topic_key TEXT, \
+              valid_from TEXT, \
+              valid_until TEXT, \
+              archived INTEGER NOT NULL DEFAULT 0, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_memories_workspace ON memories(workspace_id); \
+              CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type); \
+              CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance); \
+              CREATE INDEX IF NOT EXISTS idx_memories_topic ON memories(topic_key); \
+              CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories(archived); \
+              CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE memories SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END; \
+              CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || NEW.content || ' ' || NEW.memory_type || ' ' || COALESCE(NEW.topic_key, '')); END; \
+              CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN DELETE FROM memories_fts WHERE rowid = OLD.rowid; END; \
+              CREATE TRIGGER IF NOT EXISTS memories_fts_update AFTER UPDATE ON memories WHEN NEW.title != OLD.title OR NEW.content != OLD.content OR NEW.memory_type != OLD.memory_type OR IFNULL(NEW.topic_key, '') != IFNULL(OLD.topic_key, '') BEGIN DELETE FROM memories_fts WHERE rowid = OLD.rowid; INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || NEW.content || ' ' || NEW.memory_type || ' ' || COALESCE(NEW.topic_key, '')); END; \
+              CREATE TABLE IF NOT EXISTS memory_relations (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, \
+              target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, \
+              relation_type TEXT NOT NULL CHECK(relation_type IN ('supersedes','conflicts_with','related','compatible','scoped','not_conflict')), \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              UNIQUE(source_id, target_id, relation_type)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_memory_relations_source ON memory_relations(source_id); \
+              CREATE INDEX IF NOT EXISTS idx_memory_relations_target ON memory_relations(target_id); \
+              CREATE TABLE IF NOT EXISTS memory_access_log (\
+              id INTEGER PRIMARY KEY AUTOINCREMENT, \
+              memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, \
+              access_type TEXT NOT NULL CHECK(access_type IN ('recall','search','context')), \
+              session_id TEXT, \
+              accessed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_access_log_memory ON memory_access_log(memory_id); \
+              CREATE INDEX IF NOT EXISTS idx_access_log_accessed ON memory_access_log(accessed_at); \
+              CREATE TABLE IF NOT EXISTS agent_workspace_access (\
+              agent_id TEXT NOT NULL, \
+              workspace_id TEXT NOT NULL, \
+              granted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              PRIMARY KEY (agent_id, workspace_id)\
+              );",
+    },
+    Migration {
+        version: "017",
+        name: "agent_lifecycle",
+        sql: "CREATE TABLE IF NOT EXISTS agent_versions (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, \
+              skill_hash TEXT NOT NULL, \
+              config_hash TEXT NOT NULL, \
+              skills_json TEXT NOT NULL DEFAULT '[]', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id); \
+              CREATE TABLE IF NOT EXISTS agent_templates (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              name TEXT NOT NULL UNIQUE, \
+              template_type TEXT NOT NULL, \
+              default_config TEXT NOT NULL DEFAULT '{}', \
+              skill_refs TEXT NOT NULL DEFAULT '[]', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              ALTER TABLE agents ADD COLUMN current_version_id TEXT REFERENCES agent_versions(id); \
+              ALTER TABLE agents ADD COLUMN upgrade_available INTEGER NOT NULL DEFAULT 0; \
+              ALTER TABLE agents ADD COLUMN template_id TEXT REFERENCES agent_templates(id);",
+    },
+    Migration {
+        version: "018",
+        name: "memory_embeddings",
+        sql: "ALTER TABLE memories ADD COLUMN embedding BLOB;",
+    },
+    Migration {
+        version: "019",
+        name: "task_dependencies_and_templates",
+        sql: "CREATE TABLE IF NOT EXISTS task_dependencies (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, \
+              depends_on_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, \
+              dep_type TEXT NOT NULL DEFAULT 'blocked_by' CHECK(dep_type IN ('blocked_by','blocks','waiting_on')), \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              UNIQUE(task_id, depends_on_task_id, dep_type)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id); \
+              CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_task_id); \
+              CREATE TABLE IF NOT EXISTS task_templates (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              name TEXT NOT NULL UNIQUE, \
+              title_pattern TEXT NOT NULL, \
+              description_template TEXT, \
+              default_priority TEXT NOT NULL DEFAULT 'medium' CHECK(default_priority IN ('critical','high','medium','low')), \
+              default_labels TEXT NOT NULL DEFAULT '[]', \
+              checklist TEXT NOT NULL DEFAULT '[]', \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE TRIGGER IF NOT EXISTS task_templates_au AFTER UPDATE ON task_templates WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE task_templates SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
+    },
 ];
 
 struct Migration {

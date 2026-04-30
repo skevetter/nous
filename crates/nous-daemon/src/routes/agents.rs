@@ -287,3 +287,166 @@ pub async fn deregister_artifact(
     nous_core::agents::deregister_artifact(&state.pool, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// --- P7: Agent lifecycle, versioning, templates ---
+
+#[derive(Deserialize)]
+pub struct RecordVersionBody {
+    pub agent_id: String,
+    pub skill_hash: String,
+    pub config_hash: String,
+    pub skills_json: Option<String>,
+}
+
+pub async fn inspect(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let inspection = nous_core::agents::inspect_agent(&state.pool, &id).await?;
+    Ok(Json(inspection))
+}
+
+pub async fn list_versions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<ListAgentsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit;
+    let versions = nous_core::agents::list_versions(&state.pool, &id, limit).await?;
+    Ok(Json(versions))
+}
+
+pub async fn record_version(
+    State(state): State<AppState>,
+    Json(body): Json<RecordVersionBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let version = nous_core::agents::record_version(
+        &state.pool,
+        nous_core::agents::RecordVersionRequest {
+            agent_id: body.agent_id,
+            skill_hash: body.skill_hash,
+            config_hash: body.config_hash,
+            skills_json: body.skills_json,
+        },
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(version)))
+}
+
+pub async fn rollback(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RollbackBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let version = nous_core::agents::rollback_agent(&state.pool, &id, &body.version_id).await?;
+    Ok(Json(version))
+}
+
+#[derive(Deserialize)]
+pub struct RollbackBody {
+    pub version_id: String,
+}
+
+pub async fn notify_upgrade(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    nous_core::agents::set_upgrade_available(&state.pool, &id, true).await?;
+    Ok(Json(serde_json::json!({"notified": true})))
+}
+
+pub async fn list_outdated(
+    State(state): State<AppState>,
+    Query(params): Query<ListAgentsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let agents = nous_core::agents::list_outdated_agents(
+        &state.pool,
+        params.namespace.as_deref(),
+        params.limit,
+    )
+    .await?;
+    Ok(Json(agents))
+}
+
+// --- Template routes ---
+
+#[derive(Deserialize)]
+pub struct CreateTemplateBody {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub template_type: String,
+    pub default_config: Option<String>,
+    pub skill_refs: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ListTemplatesQuery {
+    #[serde(rename = "type")]
+    pub template_type: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct InstantiateBody {
+    pub template_id: String,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
+    pub parent_id: Option<String>,
+    pub config_overrides: Option<String>,
+}
+
+pub async fn create_template(
+    State(state): State<AppState>,
+    Json(body): Json<CreateTemplateBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let template = nous_core::agents::create_template(
+        &state.pool,
+        nous_core::agents::CreateTemplateRequest {
+            name: body.name,
+            template_type: body.template_type,
+            default_config: body.default_config,
+            skill_refs: body.skill_refs,
+        },
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(template)))
+}
+
+pub async fn list_templates(
+    State(state): State<AppState>,
+    Query(params): Query<ListTemplatesQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let templates = nous_core::agents::list_templates(
+        &state.pool,
+        params.template_type.as_deref(),
+        params.limit,
+    )
+    .await?;
+    Ok(Json(templates))
+}
+
+pub async fn get_template(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let template = nous_core::agents::get_template_by_id(&state.pool, &id).await?;
+    Ok(Json(template))
+}
+
+pub async fn instantiate(
+    State(state): State<AppState>,
+    Json(body): Json<InstantiateBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let agent = nous_core::agents::instantiate_from_template(
+        &state.pool,
+        nous_core::agents::InstantiateRequest {
+            template_id: body.template_id,
+            name: body.name,
+            namespace: body.namespace,
+            parent_id: body.parent_id,
+            config_overrides: body.config_overrides,
+        },
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(agent)))
+}
