@@ -4,6 +4,8 @@ use std::process;
 use nous_core::config::Config;
 use nous_core::db::DbPools;
 
+use super::model;
+
 const DAEMON_PORT: u16 = 8377;
 
 pub async fn run() {
@@ -39,6 +41,7 @@ pub async fn run() {
     }
 
     check_port(DAEMON_PORT);
+    check_embedding_model();
 
     if has_failure {
         process::exit(1);
@@ -116,6 +119,22 @@ fn check_port(port: u16) {
 
 pub fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn check_embedding_model() {
+    let (model_ok, tokenizer_ok) = model::check_model_files();
+
+    if model_ok && tokenizer_ok {
+        println!("[OK] Embedding model files present");
+    } else {
+        if !model_ok {
+            println!("[WARN] Missing: all-MiniLM-L6-v2.onnx");
+        }
+        if !tokenizer_ok {
+            println!("[WARN] Missing: tokenizer.json");
+        }
+        println!("      Run `nous model download` to install embedding model");
+    }
 }
 
 fn config_file_path() -> std::path::PathBuf {

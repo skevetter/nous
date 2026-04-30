@@ -2616,7 +2616,7 @@ pub async fn dispatch(
 
             let embedder = state.embedder.as_ref().ok_or_else(|| {
                 nous_core::error::NousError::Internal(
-                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
+                    "embedding model not available — run `nous model download` to install".into(),
                 )
             })?;
             let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
@@ -2740,7 +2740,7 @@ pub async fn dispatch(
 
             let embedder = state.embedder.as_ref().ok_or_else(|| {
                 nous_core::error::NousError::Internal(
-                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
+                    "embedding model not available — run `nous model download` to install".into(),
                 )
             })?;
 
