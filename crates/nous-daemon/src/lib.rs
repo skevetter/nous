@@ -17,6 +17,13 @@ pub fn app(state: AppState) -> Router {
         .route("/rooms/{id}/messages", post(routes::messages::post))
         .route("/rooms/{id}/messages", get(routes::messages::read))
         .route("/search/messages", get(routes::search::search))
+        .route("/tasks", post(routes::tasks::create).get(routes::tasks::list))
+        .route("/tasks/{id}", get(routes::tasks::get).put(routes::tasks::update))
+        .route("/tasks/{id}/close", post(routes::tasks::close))
+        .route("/tasks/{id}/links", get(routes::tasks::list_links))
+        .route("/tasks/{id}/note", post(routes::tasks::add_note))
+        .route("/tasks/link", post(routes::tasks::link))
+        .route("/tasks/unlink", post(routes::tasks::unlink))
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
@@ -301,7 +308,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_list_tools_returns_10_tools() {
+    async fn mcp_list_tools_returns_19_tools() {
         let (state, _tmp) = test_state().await;
         let app = app(state);
 
@@ -321,7 +328,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 19);
     }
 
     #[tokio::test]
