@@ -680,8 +680,13 @@ pub async fn register_artifact(
         ));
     }
 
-    let _agent = get_agent_by_id(pool, &req.agent_id).await?;
-    let namespace = req.namespace.unwrap_or_else(|| "default".to_string());
+    let agent = get_agent_by_id(pool, &req.agent_id).await?;
+    let namespace = req.namespace.unwrap_or_else(|| agent.namespace.clone());
+    if agent.namespace != namespace {
+        return Err(NousError::Validation(
+            "artifact namespace must match owning agent's namespace".into(),
+        ));
+    }
     let id = Uuid::now_v7().to_string();
 
     sqlx::query(

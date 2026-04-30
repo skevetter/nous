@@ -454,6 +454,30 @@ pub async fn list_tools() -> impl IntoResponse {
             }),
         },
         ToolSchema {
+            name: "agent_search",
+            description: "Search agents by name/metadata using FTS5",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "namespace": { "type": "string", "description": "Namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_stale",
+            description: "List stale agents (past heartbeat threshold)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "threshold": { "type": "integer", "description": "Threshold in seconds (default 900)" },
+                    "namespace": { "type": "string", "description": "Namespace" }
+                }
+            }),
+        },
+        ToolSchema {
             name: "artifact_register",
             description: "Register a new artifact owned by an agent",
             input_schema: serde_json::json!({
@@ -919,6 +943,19 @@ async fn dispatch(
                 .transpose()?;
             agents::heartbeat(&state.pool, id, status).await?;
             Ok(serde_json::json!({"ok": true}))
+        }
+        "agent_search" => {
+            let query = require_str(args, "query")?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = agents::search_agents(&state.pool, query, namespace, limit).await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "agent_stale" => {
+            let threshold = args.get("threshold").and_then(|v| v.as_u64()).unwrap_or(900);
+            let namespace = args.get("namespace").and_then(|v| v.as_str());
+            let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
+            Ok(serde_json::to_value(stale).unwrap())
         }
         "artifact_register" => {
             let agent_id = require_str(args, "agent_id")?.to_string();
