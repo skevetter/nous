@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nous_core::db::DbPools;
+use nous_core::memory::MockEmbedder;
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::app;
 use nous_daemon::state::AppState;
@@ -19,6 +20,7 @@ async fn test_state() -> (AppState, TempDir) {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
+        embedder: Arc::new(MockEmbedder::new()),
     };
     (state, tmp)
 }

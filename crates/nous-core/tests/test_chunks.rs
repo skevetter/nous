@@ -276,9 +276,18 @@ async fn hybrid_search_end_to_end() {
     query_embedding[0] = 0.7;
     query_embedding[1] = 0.7;
 
-    let results = memory::search_hybrid(&pools.fts, &pools.vec, "async Rust", &query_embedding, 10)
-        .await
-        .unwrap();
+    let results = memory::search_hybrid_filtered(
+        &pools.fts,
+        &pools.vec,
+        "async Rust",
+        &query_embedding,
+        10,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(!results.is_empty());
     assert_eq!(results[0].memory.id, mem.id);

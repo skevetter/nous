@@ -400,6 +400,22 @@ const MIGRATIONS: &[Migration] = &[
               CREATE INDEX IF NOT EXISTS idx_memory_sessions_project ON memory_sessions(project); \
               ALTER TABLE memories ADD COLUMN session_id TEXT REFERENCES memory_sessions(id);",
     },
+    Migration {
+        version: "021",
+        name: "search_events",
+        sql: "CREATE TABLE IF NOT EXISTS search_events (\
+              id INTEGER PRIMARY KEY, \
+              query_text TEXT NOT NULL, \
+              search_type TEXT NOT NULL CHECK(search_type IN ('fts','vector','hybrid')), \
+              result_count INTEGER NOT NULL, \
+              latency_ms INTEGER NOT NULL, \
+              workspace_id TEXT, \
+              agent_id TEXT, \
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_search_events_type ON search_events(search_type); \
+              CREATE INDEX IF NOT EXISTS idx_search_events_created ON search_events(created_at);",
+    },
 ];
 
 struct Migration {

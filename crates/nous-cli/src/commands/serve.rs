@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use nous_core::config::Config;
 use nous_core::db::DbPools;
+use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
@@ -20,10 +21,13 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let pools = DbPools::connect(&config.data_dir).await?;
     pools.run_migrations().await?;
 
+    let embedder: Arc<dyn nous_core::memory::Embedder> = Arc::new(OnnxEmbeddingModel::load(None)?);
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
+        embedder,
     };
 
     let addr = format!("{}:{}", config.host, config.port);

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use nous_core::config::Config;
 use nous_core::db::DbPools;
+use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::routes::mcp::{dispatch, get_tool_schemas};
 use nous_daemon::state::AppState;
@@ -40,10 +41,13 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
     let pools = DbPools::connect(&config.data_dir).await?;
     pools.run_migrations().await?;
 
+    let embedder: Arc<dyn nous_core::memory::Embedder> = Arc::new(OnnxEmbeddingModel::load(None)?);
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
+        embedder,
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
