@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 async fn test_state() -> (AppState, TempDir) {
@@ -21,6 +23,8 @@ async fn test_state() -> (AppState, TempDir) {
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
     };
     (state, tmp)
 }
@@ -34,6 +38,8 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder: None,
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
     };
     (state, tmp)
 }

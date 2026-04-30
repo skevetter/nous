@@ -8,6 +8,8 @@ use nous_daemon::routes::mcp::{dispatch, get_tool_schemas};
 use nous_daemon::state::AppState;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 pub async fn run(tools_filter: Option<String>) {
     if let Err(e) = execute(tools_filter).await {
@@ -55,6 +57,8 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder,
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
