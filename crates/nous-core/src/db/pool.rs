@@ -469,14 +469,30 @@ extern "C" {
     ) -> std::ffi::c_int;
 }
 
-const VEC_MIGRATIONS: &[Migration] = &[Migration {
-    version: "vec_001",
-    name: "memory_embeddings_vec0",
-    sql: "CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
+const VEC_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: "vec_001",
+        name: "memory_embeddings_vec0",
+        sql: "CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
               memory_id TEXT PRIMARY KEY, \
               embedding float[384]\
               );",
-}];
+    },
+    Migration {
+        version: "vec_002",
+        name: "memory_chunks",
+        sql: "CREATE TABLE IF NOT EXISTS memory_chunks (\
+              id TEXT PRIMARY KEY, \
+              memory_id TEXT NOT NULL, \
+              content TEXT NOT NULL, \
+              chunk_index INTEGER NOT NULL, \
+              start_offset INTEGER NOT NULL, \
+              end_offset INTEGER NOT NULL, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_chunks_memory_id ON memory_chunks(memory_id);",
+    },
+];
 
 fn run_vec_migrations(vec_pool: &VecPool) -> Result<(), NousError> {
     let conn = vec_pool

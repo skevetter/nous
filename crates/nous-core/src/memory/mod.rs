@@ -1,9 +1,18 @@
+pub mod chunk;
+pub mod embed;
+pub mod rerank;
+
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::db::VecPool;
 use crate::error::NousError;
+
+pub use chunk::{Chunk, Chunker};
+pub use embed::{Embedder, MockEmbedder, OnnxEmbeddingModel};
+pub use rerank::rerank_rrf;
 
 // --- Types ---
 
@@ -1060,6 +1069,161 @@ fn truncate_title(s: &str) -> String {
     } else {
         first_line.to_string()
     }
+}
+
+// --- Chunk pipeline operations ---
+
+pub fn store_chunks(vec_pool: &VecPool, chunks: &[Chunk]) -> Result<(), NousError> {
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+    for chunk in chunks {
+        conn.execute(
+            "INSERT OR REPLACE INTO memory_chunks (id, memory_id, content, chunk_index, start_offset, end_offset) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                chunk.id,
+                chunk.memory_id,
+                chunk.content,
+                chunk.index,
+                chunk.start_offset,
+                chunk.end_offset,
+            ],
+        )
+        .map_err(|e| NousError::Internal(format!("failed to store chunk: {e}")))?;
+    }
+
+    Ok(())
+}
+
+pub fn store_chunk_embedding(
+    vec_pool: &VecPool,
+    chunk_id: &str,
+    embedding: &[f32],
+) -> Result<(), NousError> {
+    let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+    conn.execute(
+        "DELETE FROM memory_embeddings WHERE memory_id = ?1",
+        rusqlite::params![chunk_id],
+    )
+    .map_err(|e| NousError::Internal(format!("failed to delete old chunk embedding: {e}")))?;
+
+    conn.execute(
+        "INSERT INTO memory_embeddings(memory_id, embedding) VALUES (?1, ?2)",
+        rusqlite::params![chunk_id, bytes],
+    )
+    .map_err(|e| NousError::Internal(format!("failed to insert chunk embedding: {e}")))?;
+
+    Ok(())
+}
+
+pub async fn search_hybrid(
+    fts_pool: &SqlitePool,
+    vec_pool: &VecPool,
+    query: &str,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<SimilarMemory>, NousError> {
+    let fts_limit = (limit * 2).min(100) as u32;
+    let vec_limit = (limit * 2).min(100) as u32;
+
+    // FTS search
+    let fts_memories = search_memories(
+        fts_pool,
+        &SearchMemoryRequest {
+            query: query.to_string(),
+            limit: Some(fts_limit),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let fts_results: Vec<SimilarMemory> = fts_memories
+        .into_iter()
+        .enumerate()
+        .map(|(rank, memory)| SimilarMemory {
+            memory,
+            score: 1.0 / (1.0 + rank as f32),
+        })
+        .collect();
+
+    // Vector search
+    let vec_results =
+        search_similar(fts_pool, vec_pool, query_embedding, vec_limit, None, None).await?;
+
+    // RRF merge
+    let mut merged = rerank_rrf(&fts_results, &vec_results, None);
+    merged.truncate(limit);
+    Ok(merged)
+}
+
+pub fn delete_chunks(vec_pool: &VecPool, memory_id: &str) -> Result<(), NousError> {
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+    // Get chunk IDs for this memory to also clean up their embeddings
+    let chunk_ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM memory_chunks WHERE memory_id = ?1")
+            .map_err(|e| NousError::Internal(format!("failed to prepare chunk query: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![memory_id], |row| row.get(0))
+            .map_err(|e| NousError::Internal(format!("failed to query chunks: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    // Delete embeddings for each chunk
+    for chunk_id in &chunk_ids {
+        conn.execute(
+            "DELETE FROM memory_embeddings WHERE memory_id = ?1",
+            rusqlite::params![chunk_id],
+        )
+        .map_err(|e| NousError::Internal(format!("failed to delete chunk embedding: {e}")))?;
+    }
+
+    // Delete the chunks themselves
+    conn.execute(
+        "DELETE FROM memory_chunks WHERE memory_id = ?1",
+        rusqlite::params![memory_id],
+    )
+    .map_err(|e| NousError::Internal(format!("failed to delete chunks: {e}")))?;
+
+    Ok(())
+}
+
+pub fn get_chunks_for_memory(vec_pool: &VecPool, memory_id: &str) -> Result<Vec<Chunk>, NousError> {
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, memory_id, content, chunk_index, start_offset, end_offset \
+             FROM memory_chunks WHERE memory_id = ?1 ORDER BY chunk_index",
+        )
+        .map_err(|e| NousError::Internal(format!("failed to prepare chunks query: {e}")))?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![memory_id], |row| {
+            Ok(Chunk {
+                id: row.get(0)?,
+                memory_id: row.get(1)?,
+                content: row.get(2)?,
+                index: row.get::<_, i64>(3)? as usize,
+                start_offset: row.get::<_, i64>(4)? as usize,
+                end_offset: row.get::<_, i64>(5)? as usize,
+            })
+        })
+        .map_err(|e| NousError::Internal(format!("failed to query chunks: {e}")))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| NousError::Internal(format!("failed to collect chunks: {e}")))
 }
 
 #[cfg(test)]

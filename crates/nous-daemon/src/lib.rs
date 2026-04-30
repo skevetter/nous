@@ -423,7 +423,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 91);
+        assert_eq!(tools.len(), 95);
     }
 
     #[tokio::test]

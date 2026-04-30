@@ -8,6 +8,7 @@ use serde_json::Value;
 use nous_core::agents;
 use nous_core::inventory;
 use nous_core::memory;
+use nous_core::memory::embed::Embedder;
 use nous_core::messages::{
     post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
     SearchMessagesRequest,
@@ -1083,6 +1084,56 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                     "threshold": { "type": "number", "description": "Minimum similarity threshold (default: 0.0)" }
                 },
                 "required": ["embedding"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_chunk",
+            description: "Chunk text for a given memory_id and store chunks (no embedding)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Memory ID to chunk" },
+                    "chunk_size": { "type": "integer", "description": "Tokens per chunk (default: 256)" },
+                    "overlap": { "type": "integer", "description": "Overlap tokens (default: 64)" }
+                },
+                "required": ["memory_id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_embed",
+            description: "Generate embeddings for all chunks of a memory_id using local ONNX model",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Memory ID whose chunks to embed" }
+                },
+                "required": ["memory_id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_search_hybrid",
+            description: "Hybrid search: FTS + vector similarity + RRF reranking",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query text" },
+                    "query_embedding": { "type": "array", "items": { "type": "number" }, "description": "Query embedding vector" },
+                    "limit": { "type": "integer", "description": "Max results (default: 10)" }
+                },
+                "required": ["query", "query_embedding"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_store_with_embedding",
+            description: "Full pipeline: chunk text, generate embeddings, and store (all-in-one)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Memory ID to process" },
+                    "chunk_size": { "type": "integer", "description": "Tokens per chunk (default: 256)" },
+                    "overlap": { "type": "integer", "description": "Overlap tokens (default: 64)" }
+                },
+                "required": ["memory_id"]
             }),
         },
         ToolSchema {
@@ -2490,6 +2541,121 @@ pub async fn dispatch(
             )
             .await?;
             Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_chunk" => {
+            let memory_id = require_str(args, "memory_id")?;
+            let chunk_size = args
+                .get("chunk_size")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(256);
+            let overlap = args
+                .get("overlap")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(64);
+
+            let mem = memory::get_memory_by_id(&state.pool, memory_id).await?;
+            let chunker = memory::Chunker::new(chunk_size, overlap);
+            let chunks = chunker.chunk(memory_id, &mem.content);
+            memory::store_chunks(&state.vec_pool, &chunks)?;
+
+            Ok(serde_json::json!({
+                "memory_id": memory_id,
+                "chunk_count": chunks.len(),
+                "chunks": chunks
+            }))
+        }
+        "memory_embed" => {
+            let memory_id = require_str(args, "memory_id")?;
+            let chunks = memory::get_chunks_for_memory(&state.vec_pool, memory_id)?;
+            if chunks.is_empty() {
+                return Err(nous_core::error::NousError::Validation(
+                    "no chunks found for memory_id — run memory_chunk first".into(),
+                ));
+            }
+
+            let embedder = memory::OnnxEmbeddingModel::load(None)?;
+            let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+            let embeddings = embedder.embed(&texts)?;
+
+            for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+                memory::store_chunk_embedding(&state.vec_pool, &chunk.id, embedding)?;
+            }
+
+            Ok(serde_json::json!({
+                "memory_id": memory_id,
+                "chunks_embedded": chunks.len()
+            }))
+        }
+        "memory_search_hybrid" => {
+            let query = require_str(args, "query")?;
+            let query_embedding: Vec<f32> = args
+                .get("query_embedding")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if query_embedding.is_empty() {
+                return Err(nous_core::error::NousError::Validation(
+                    "query_embedding array cannot be empty".into(),
+                ));
+            }
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(10);
+
+            let results =
+                memory::search_hybrid(&state.pool, &state.vec_pool, query, &query_embedding, limit)
+                    .await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_store_with_embedding" => {
+            let memory_id = require_str(args, "memory_id")?;
+            let chunk_size = args
+                .get("chunk_size")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(256);
+            let overlap = args
+                .get("overlap")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(64);
+
+            let mem = memory::get_memory_by_id(&state.pool, memory_id).await?;
+
+            // Chunk
+            let chunker = memory::Chunker::new(chunk_size, overlap);
+            let chunks = chunker.chunk(memory_id, &mem.content);
+            memory::store_chunks(&state.vec_pool, &chunks)?;
+
+            // Embed
+            let embedder = memory::OnnxEmbeddingModel::load(None)?;
+            let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+            let embeddings = embedder.embed(&texts)?;
+
+            for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+                memory::store_chunk_embedding(&state.vec_pool, &chunk.id, embedding)?;
+            }
+
+            // Also store a full-document embedding for the memory itself
+            let full_embeddings = embedder.embed(&[&mem.content])?;
+            if let Some(full_emb) = full_embeddings.first() {
+                memory::store_embedding(&state.pool, &state.vec_pool, memory_id, full_emb).await?;
+            }
+
+            Ok(serde_json::json!({
+                "memory_id": memory_id,
+                "chunk_count": chunks.len(),
+                "chunks_embedded": chunks.len(),
+                "full_embedding_stored": true
+            }))
         }
         "memory_session_start" => {
             let agent_id = args.get("agent_id").and_then(|v| v.as_str());
