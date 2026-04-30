@@ -821,6 +821,206 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+// --- Memory session lifecycle ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySession {
+    pub id: String,
+    pub agent_id: Option<String>,
+    pub project: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub summary: Option<String>,
+}
+
+impl MemorySession {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            agent_id: row.try_get("agent_id")?,
+            project: row.try_get("project")?,
+            started_at: row.try_get("started_at")?,
+            ended_at: row.try_get("ended_at")?,
+            summary: row.try_get("summary")?,
+        })
+    }
+}
+
+pub async fn session_start(
+    pool: &SqlitePool,
+    agent_id: Option<&str>,
+    project: Option<&str>,
+) -> Result<MemorySession, NousError> {
+    let id = Uuid::now_v7().to_string();
+
+    sqlx::query("INSERT INTO memory_sessions (id, agent_id, project) VALUES (?, ?, ?)")
+        .bind(&id)
+        .bind(agent_id)
+        .bind(project)
+        .execute(pool)
+        .await?;
+
+    get_session_by_id(pool, &id).await
+}
+
+pub async fn session_end(pool: &SqlitePool, session_id: &str) -> Result<MemorySession, NousError> {
+    let session = get_session_by_id(pool, session_id).await?;
+    if session.ended_at.is_some() {
+        return Err(NousError::Validation("session already ended".into()));
+    }
+
+    sqlx::query(
+        "UPDATE memory_sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+    )
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+
+    get_session_by_id(pool, session_id).await
+}
+
+pub async fn session_summary(
+    pool: &SqlitePool,
+    session_id: &str,
+    summary: &str,
+    agent_id: Option<&str>,
+    workspace_id: Option<&str>,
+) -> Result<MemorySession, NousError> {
+    if summary.trim().is_empty() {
+        return Err(NousError::Validation("summary cannot be empty".into()));
+    }
+
+    let _session = get_session_by_id(pool, session_id).await?;
+
+    sqlx::query("UPDATE memory_sessions SET summary = ? WHERE id = ?")
+        .bind(summary.trim())
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+
+    save_memory(
+        pool,
+        SaveMemoryRequest {
+            workspace_id: workspace_id.map(String::from),
+            agent_id: agent_id.map(String::from),
+            title: format!("Session summary: {session_id}"),
+            content: summary.trim().to_string(),
+            memory_type: MemoryType::Observation,
+            importance: Some(Importance::Moderate),
+            topic_key: Some(format!("session/{session_id}")),
+            valid_from: None,
+            valid_until: None,
+        },
+    )
+    .await?;
+
+    get_session_by_id(pool, session_id).await
+}
+
+pub async fn save_prompt(
+    pool: &SqlitePool,
+    session_id: Option<&str>,
+    agent_id: Option<&str>,
+    workspace_id: Option<&str>,
+    prompt: &str,
+) -> Result<Memory, NousError> {
+    if prompt.trim().is_empty() {
+        return Err(NousError::Validation("prompt cannot be empty".into()));
+    }
+
+    if let Some(sid) = session_id {
+        let _session = get_session_by_id(pool, sid).await?;
+    }
+
+    let mem = save_memory(
+        pool,
+        SaveMemoryRequest {
+            workspace_id: workspace_id.map(String::from),
+            agent_id: agent_id.map(String::from),
+            title: truncate_title(prompt),
+            content: prompt.trim().to_string(),
+            memory_type: MemoryType::Observation,
+            importance: Some(Importance::Low),
+            topic_key: None,
+            valid_from: None,
+            valid_until: None,
+        },
+    )
+    .await?;
+
+    if let Some(sid) = session_id {
+        sqlx::query("UPDATE memories SET session_id = ? WHERE id = ?")
+            .bind(sid)
+            .bind(&mem.id)
+            .execute(pool)
+            .await?;
+    }
+
+    get_memory_by_id(pool, &mem.id).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedProject {
+    pub name: String,
+    pub project_type: String,
+    pub path: String,
+}
+
+pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
+    let path = std::path::Path::new(cwd);
+
+    let markers = [
+        ("Cargo.toml", "rust"),
+        ("package.json", "node"),
+        ("go.mod", "go"),
+        ("pyproject.toml", "python"),
+        ("setup.py", "python"),
+        ("Gemfile", "ruby"),
+        ("pom.xml", "java"),
+        ("build.gradle", "java"),
+        ("mix.exs", "elixir"),
+        ("CMakeLists.txt", "cpp"),
+    ];
+
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        for (marker, project_type) in &markers {
+            if dir.join(marker).exists() {
+                let name = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".into());
+                return Some(DetectedProject {
+                    name,
+                    project_type: project_type.to_string(),
+                    path: dir.to_string_lossy().to_string(),
+                });
+            }
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+async fn get_session_by_id(pool: &SqlitePool, id: &str) -> Result<MemorySession, NousError> {
+    let row = sqlx::query("SELECT * FROM memory_sessions WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+    let row = row.ok_or_else(|| NousError::NotFound(format!("memory session '{id}' not found")))?;
+    MemorySession::from_row(&row).map_err(NousError::Sqlite)
+}
+
+fn truncate_title(s: &str) -> String {
+    let first_line = s.lines().next().unwrap_or(s);
+    if first_line.len() > 80 {
+        format!("{}...", &first_line[..77])
+    } else {
+        first_line.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

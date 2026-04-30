@@ -379,6 +379,21 @@ const MIGRATIONS: &[Migration] = &[
               ); \
               CREATE TRIGGER IF NOT EXISTS task_templates_au AFTER UPDATE ON task_templates WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE task_templates SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;",
     },
+    Migration {
+        version: "020",
+        name: "memory_sessions",
+        sql: "CREATE TABLE IF NOT EXISTS memory_sessions (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT, \
+              project TEXT, \
+              started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              ended_at TEXT, \
+              summary TEXT\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_memory_sessions_agent ON memory_sessions(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_memory_sessions_project ON memory_sessions(project); \
+              ALTER TABLE memories ADD COLUMN session_id TEXT REFERENCES memory_sessions(id);",
+    },
 ];
 
 struct Migration {
