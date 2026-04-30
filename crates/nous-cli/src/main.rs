@@ -6,6 +6,7 @@ use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
 use commands::inventory::InventoryCommands;
+use commands::memory::MemoryCommands;
 use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
@@ -40,6 +41,11 @@ enum Commands {
     Inventory {
         #[command(subcommand)]
         command: InventoryCommands,
+    },
+    /// Memory operations (P6 persistent structured memory)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
     },
     /// Task management operations
     Task {
@@ -83,6 +89,9 @@ async fn main() {
         }
         Commands::Inventory { command } => {
             commands::inventory::run(command).await;
+        }
+        Commands::Memory { command } => {
+            commands::memory::run(command).await;
         }
         Commands::Task { command } => {
             commands::task::run(command).await;

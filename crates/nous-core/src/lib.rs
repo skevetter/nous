@@ -4,6 +4,7 @@ pub mod db;
 pub mod domain {}
 pub mod error;
 pub mod inventory;
+pub mod memory;
 pub mod messages;
 pub mod notifications;
 pub mod rooms;

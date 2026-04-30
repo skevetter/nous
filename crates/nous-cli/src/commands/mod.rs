@@ -3,6 +3,7 @@ pub mod artifact;
 pub mod chat;
 pub mod doctor;
 pub mod inventory;
+pub mod memory;
 pub mod schedule;
 pub mod serve;
 pub mod task;

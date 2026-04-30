@@ -81,6 +81,26 @@ pub fn app(state: AppState) -> Router {
             delete(routes::agents::deregister_artifact),
         )
         .route(
+            "/memories",
+            post(routes::memory::save).get(routes::memory::context),
+        )
+        .route(
+            "/memories/search",
+            get(routes::memory::search),
+        )
+        .route(
+            "/memories/relate",
+            post(routes::memory::relate),
+        )
+        .route(
+            "/memories/{id}",
+            get(routes::memory::get).put(routes::memory::update),
+        )
+        .route(
+            "/memories/{id}/relations",
+            get(routes::memory::list_relations),
+        )
+        .route(
             "/inventory",
             post(routes::inventory::register).get(routes::inventory::list),
         )
@@ -420,7 +440,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 51);
+        assert_eq!(tools.len(), 58);
     }
 
     #[tokio::test]

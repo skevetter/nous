@@ -13,6 +13,7 @@ use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_ro
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::agents;
 use nous_core::inventory;
+use nous_core::memory;
 use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
@@ -610,6 +611,108 @@ pub async fn list_tools() -> impl IntoResponse {
                 "properties": {
                     "id": { "type": "string", "description": "Item ID" },
                     "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_save",
+            description: "Save a new memory (persistent structured observation). If topic_key matches an existing active memory, it updates instead.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Short searchable title" },
+                    "content": { "type": "string", "description": "Structured content (use **What**, **Why**, **Where**, **Learned** format)" },
+                    "type": { "type": "string", "description": "Memory type: decision, convention, bugfix, architecture, fact, observation" },
+                    "importance": { "type": "string", "description": "Importance: low, moderate, high (default: moderate)" },
+                    "agent_id": { "type": "string", "description": "Agent ID that created this memory" },
+                    "workspace_id": { "type": "string", "description": "Workspace scope (default: 'default')" },
+                    "topic_key": { "type": "string", "description": "Topic key for upsert (e.g. 'architecture/auth-model')" },
+                    "valid_from": { "type": "string", "description": "ISO-8601 start of validity" },
+                    "valid_until": { "type": "string", "description": "ISO-8601 end of validity" }
+                },
+                "required": ["title", "content", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_search",
+            description: "Search memories using full-text search (FTS5)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query" },
+                    "workspace_id": { "type": "string", "description": "Filter by workspace" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "type": { "type": "string", "description": "Filter by memory type" },
+                    "importance": { "type": "string", "description": "Filter by importance" },
+                    "include_archived": { "type": "boolean", "description": "Include archived memories (default: false)" },
+                    "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_get",
+            description: "Get a memory by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_update",
+            description: "Update a memory (title, content, importance, topic_key, archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" },
+                    "title": { "type": "string", "description": "New title" },
+                    "content": { "type": "string", "description": "New content" },
+                    "importance": { "type": "string", "description": "New importance" },
+                    "topic_key": { "type": "string", "description": "New topic key" },
+                    "valid_from": { "type": "string", "description": "New valid_from" },
+                    "valid_until": { "type": "string", "description": "New valid_until" },
+                    "archived": { "type": "boolean", "description": "Set archived state" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_relate",
+            description: "Create a relation between two memories (supersedes, conflicts_with, related, compatible, scoped, not_conflict)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "source_id": { "type": "string", "description": "Source memory ID" },
+                    "target_id": { "type": "string", "description": "Target memory ID" },
+                    "relation_type": { "type": "string", "description": "Relation type: supersedes, conflicts_with, related, compatible, scoped, not_conflict" }
+                },
+                "required": ["source_id", "target_id", "relation_type"]
+            }),
+        },
+        ToolSchema {
+            name: "memory_context",
+            description: "Get recent memories as context (ordered by recency, non-archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "workspace_id": { "type": "string", "description": "Filter by workspace" },
+                    "agent_id": { "type": "string", "description": "Filter by agent ID" },
+                    "topic_key": { "type": "string", "description": "Filter by topic key" },
+                    "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "memory_relations",
+            description: "List all relations for a memory",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory ID" }
                 },
                 "required": ["id"]
             }),
@@ -1419,6 +1522,141 @@ async fn dispatch(
             let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
             inventory::deregister_item(&state.pool, id, hard).await?;
             Ok(serde_json::json!({"ok": true}))
+        }
+        "memory_save" => {
+            let title = require_str(args, "title")?.to_string();
+            let content = require_str(args, "content")?.to_string();
+            let type_str = require_str(args, "type")?;
+            let memory_type: memory::MemoryType = type_str.parse()?;
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
+            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let mem = memory::save_memory(
+                &state.pool,
+                memory::SaveMemoryRequest {
+                    workspace_id,
+                    agent_id,
+                    title,
+                    content,
+                    memory_type,
+                    importance,
+                    topic_key,
+                    valid_from,
+                    valid_until,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_search" => {
+            let query = require_str(args, "query")?.to_string();
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let memory_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::MemoryType>())
+                .transpose()?;
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = memory::search_memories(
+                &state.pool,
+                &memory::SearchMemoryRequest {
+                    query,
+                    workspace_id,
+                    agent_id,
+                    memory_type,
+                    importance,
+                    include_archived,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_get" => {
+            let id = require_str(args, "id")?;
+            let mem = memory::get_memory_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_update" => {
+            let id = require_str(args, "id")?.to_string();
+            let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
+            let content = args.get("content").and_then(|v| v.as_str()).map(String::from);
+            let importance = args
+                .get("importance")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<memory::Importance>())
+                .transpose()?;
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let valid_from = args.get("valid_from").and_then(|v| v.as_str()).map(String::from);
+            let valid_until = args.get("valid_until").and_then(|v| v.as_str()).map(String::from);
+            let archived = args.get("archived").and_then(|v| v.as_bool());
+            let mem = memory::update_memory(
+                &state.pool,
+                memory::UpdateMemoryRequest {
+                    id,
+                    title,
+                    content,
+                    importance,
+                    topic_key,
+                    valid_from,
+                    valid_until,
+                    archived,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(mem).unwrap())
+        }
+        "memory_relate" => {
+            let source_id = require_str(args, "source_id")?.to_string();
+            let target_id = require_str(args, "target_id")?.to_string();
+            let relation_type_str = require_str(args, "relation_type")?;
+            let relation_type: memory::RelationType = relation_type_str.parse()?;
+            let rel = memory::relate_memories(
+                &state.pool,
+                &memory::RelateRequest {
+                    source_id,
+                    target_id,
+                    relation_type,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(rel).unwrap())
+        }
+        "memory_context" => {
+            let workspace_id = args.get("workspace_id").and_then(|v| v.as_str()).map(String::from);
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str()).map(String::from);
+            let topic_key = args.get("topic_key").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let results = memory::get_context(
+                &state.pool,
+                &memory::ContextRequest {
+                    workspace_id,
+                    agent_id,
+                    topic_key,
+                    limit,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(results).unwrap())
+        }
+        "memory_relations" => {
+            let id = require_str(args, "id")?;
+            let relations = memory::list_relations(&state.pool, id).await?;
+            Ok(serde_json::to_value(relations).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"
