@@ -11,6 +11,8 @@
 
 **P0 — Chat & Notifications:**
 
+P0 ships in two phases: (1) Foundation Layer (schema, WriteChannel, ReadPool, room tables) then (2) Chat features (notifications, subscriptions, room_wait) build on the foundation. Both are P0; the foundation is not a separate milestone.
+
 - Persistent, SQLite-backed chat rooms shared across agents in the same Nous instance
 - FTS5 full-text search over message history (see `docs/design-rooms.md` for schema)
 - Subscriber-based notification delivery so agents receive `@mention` events without polling
@@ -384,6 +386,25 @@ CREATE INDEX IF NOT EXISTS idx_task_links_source ON task_links(source_id)
 CREATE INDEX IF NOT EXISTS idx_task_links_target ON task_links(target_id)
 ```
 
+#### `task_events` table
+
+Structured audit trail for task status transitions, assignments, and other lifecycle events (see Open Question 4 resolution).
+
+```sql
+CREATE TABLE IF NOT EXISTS task_events (
+    id          TEXT PRIMARY KEY,  -- UUIDv7
+    task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    event_type  TEXT NOT NULL CHECK(event_type IN ('created','status_changed','assigned','priority_changed','linked','unlinked','note_added')),
+    old_value   TEXT,
+    new_value   TEXT,
+    actor_id    TEXT,              -- agent that triggered the event
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
+```
+
+`task_events` is populated by the `task_update`, `task_close`, `task_link`, `task_unlink`, and `task_add_note` handlers. Each handler inserts an event row as part of the same `WriteChannel` transaction that performs the mutation.
+
 **`labels` encoding:** A JSON array stored as TEXT. The query layer uses `json_each(labels)` for set-membership filtering: `WHERE EXISTS (SELECT 1 FROM json_each(labels) WHERE value = ?1)`. This avoids a separate `task_labels` junction table at the cost of no foreign key enforcement on label names.
 
 **`assignee_id`:** Stores the Paseo agent ID (`<org_id>-<team_id>-<role>-<suffix>` format). No foreign key to an agents table — agent identity is managed by `org-management`, not Nous. The field is `NULL` for unassigned tasks.
@@ -671,15 +692,15 @@ A task can be linked to a memory via the existing `memory_relate` operation (`do
 
 ## 7. Open Questions
 
-1. **Notification durability**: In-memory `broadcast::Sender` does not survive process restart. Agents that were offline miss notifications and must re-read from cursor. Should we persist a `last_delivered_at` cursor per subscriber so reconnecting agents get an accurate "you missed N messages" count, rather than requiring a full `room_read_messages` scan?
+1. **Notification durability**: ~~In-memory `broadcast::Sender` does not survive process restart. Agents that were offline miss notifications and must re-read from cursor. Should we persist a `last_delivered_at` cursor per subscriber so reconnecting agents get an accurate "you missed N messages" count, rather than requiring a full `room_read_messages` scan?~~ **Resolved:** at-most-once delivery is acceptable for MVP. Agents that were offline miss notifications and re-read from cursor on reconnect. No last_delivered_at cursor persistence for MVP.
 
 2. **`room_wait` and MCP timeout**: The MCP protocol has no standard long-poll mechanism. `room_wait` blocks the HTTP connection for up to 120 seconds. Some MCP clients enforce shorter timeouts. Should `room_wait` return immediately with a poll token, and a separate `room_poll` call checks delivery? Or is 120s acceptable given that Nous agents are the primary consumers (not browser clients)?
 
-3. **Topic enforcement**: Topics are free-form strings today. Unregistered or misspelled topics silently produce no matches. Should we add a `topics` table with FK enforcement, or keep topics as advisory metadata and document the conventions?
+3. **Topic enforcement**: ~~Topics are free-form strings today. Unregistered or misspelled topics silently produce no matches. Should we add a `topics` table with FK enforcement, or keep topics as advisory metadata and document the conventions?~~ **Resolved:** topics remain free-form strings with no FK enforcement for MVP. Convention-based (documented patterns like `deploy`, `incident`, `task:<id>`). A topics table may be added post-MVP if misspelling becomes a real problem.
 
-4. **Task history / audit log**: The reference `task-management` API exposes `task_history`. This design has no `task_history` table. Should we add an `task_events` table (`(id, task_id, event_type, payload, created_at)`) to record status transitions and assignment changes, or delegate history to the linked room (where agents post notes on transitions)?
+4. **Task history / audit log**: ~~The reference `task-management` API exposes `task_history`. This design has no `task_history` table. Should we add an `task_events` table (`(id, task_id, event_type, payload, created_at)`) to record status transitions and assignment changes, or delegate history to the linked room (where agents post notes on transitions)?~~ **Resolved:** ADD a `task_events` table for structured audit trail. See §5.1 for DDL.
 
-5. **Priority as integer vs enum**: `priority TEXT CHECK(...)` is human-readable but requires mapping to sort order (`critical=0, high=1, medium=2, low=3`) in `ORDER BY` queries. `priority INTEGER` with a display mapping is more sortable. Worth changing before migration is committed?
+5. **Priority as integer vs enum**: ~~`priority TEXT CHECK(...)` is human-readable but requires mapping to sort order (`critical=0, high=1, medium=2, low=3`) in `ORDER BY` queries. `priority INTEGER` with a display mapping is more sortable. Worth changing before migration is committed?~~ **Resolved:** keep priority as TEXT with CHECK constraint. The human-readable values (critical, high, medium, low) are preferable to opaque integers. Sort order is handled via a CASE expression in ORDER BY: `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`.
 
 6. **`task_list` performance at scale**: The `labels` JSON filter uses `json_each`, which scans the full table for the label membership check. At 10k+ tasks, this will be slow. A `task_labels` junction table with a composite index `(label, status, assignee_id)` would fix this but adds schema complexity. Defer until benchmarks show the need?
 

@@ -92,7 +92,7 @@ IDs follow the UUIDv7 convention (see `docs/design/01-system-architecture.md`). 
 ```sql
 CREATE TABLE IF NOT EXISTS worktrees (
     id         TEXT NOT NULL PRIMARY KEY,           -- UUIDv7
-    slug       TEXT NOT NULL UNIQUE,                -- e.g. "2y8hcni0"
+    slug       TEXT NOT NULL,                       -- e.g. "2y8hcni0"
     path       TEXT NOT NULL,                       -- absolute path on disk
     branch     TEXT NOT NULL,                       -- git branch name
     repo_root  TEXT NOT NULL,                       -- parent repo path
@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
     status     TEXT NOT NULL DEFAULT 'active'
                    CHECK (status IN ('active', 'stale', 'archived', 'deleted')),
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(slug, repo_root)
 );
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_agent   ON worktrees(agent_id);
@@ -115,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_branch  ON worktrees(branch);
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | `TEXT` (UUIDv7) | Globally unique; sortable by creation time |
-| `slug` | `TEXT` | Short path component, e.g. `2y8hcni0`; must be unique |
+| `slug` | `TEXT` | Short path component, e.g. `2y8hcni0`; unique per `repo_root` |
 | `path` | `TEXT` | Absolute path, e.g. `~/.paseo/worktrees/2y8hcni0/` |
 | `branch` | `TEXT` | The git branch checked out in this worktree |
 | `repo_root` | `TEXT` | Absolute path to the parent git repository |
@@ -512,6 +513,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_status           ON schedule_runs(status);
 
 `max_runs` controls both the run-count retention limit and — when set to 1 — implements one-shot timers (see §5.6). When `record_run_on` inserts a new run, it immediately purges the oldest rows exceeding `max_runs` for that schedule (`schedule_db.rs:151-168`).
 
+> **Note:** The `schedules` and `schedule_runs` tables currently use INTEGER (Unix epoch seconds) for timestamps. A future migration will convert these to ISO-8601 TEXT format to match the rest of the system (memories, rooms, tasks, agents all use TEXT timestamps). The INTEGER format is retained for now because the scheduler performs arithmetic on `next_run_at`.
+
 ### 5.5 Action Dispatch
 
 Three action types are supported (`dispatch_action`, `scheduler.rs:321-342`):
@@ -638,9 +641,9 @@ P4 is already shipped as cron-only. The event-trigger and one-shot extensions ar
 
 **Worktree Management**
 
-1. **Slug uniqueness scope**: the current Paseo convention derives the slug from the last 8 hex characters of the UUIDv7. Collisions are astronomically unlikely but possible across repos. Should the `UNIQUE` constraint on `slug` be repo-scoped (`UNIQUE(slug, repo_root)`) instead of global?
+1. **Slug uniqueness scope**: ~~the current Paseo convention derives the slug from the last 8 hex characters of the UUIDv7. Collisions are astronomically unlikely but possible across repos. Should the `UNIQUE` constraint on `slug` be repo-scoped (`UNIQUE(slug, repo_root)`) instead of global?~~ **Resolved:** change UNIQUE constraint to `UNIQUE(slug, repo_root)` instead of global `UNIQUE(slug)`. This allows the same slug in different repositories without collision. See updated DDL in §3.2.
 
-2. **Orphaned worktrees**: when an agent is deregistered, its `agent_id` FK is `SET NULL`. Should the cleanup job archive all worktrees where `agent_id IS NULL AND status = 'active'`, or leave them for manual resolution?
+2. **Orphaned worktrees**: ~~when an agent is deregistered, its `agent_id` FK is `SET NULL`. Should the cleanup job archive all worktrees where `agent_id IS NULL AND status = 'active'`, or leave them for manual resolution?~~ **Resolved:** a background cleanup job archives worktrees where `agent_id IS NULL AND status = 'active' AND updated_at < (now - 7 days)`. This prevents indefinite accumulation of orphaned worktrees while giving operators a week to manually reassign them.
 
 3. **Remote worktrees**: the current design assumes `path` is a local filesystem path. If Nous runs in a container, the path may not be accessible from the MCP caller's environment. Does the API need to return an SSH URI or mount path in addition to the local path?
 
@@ -654,8 +657,8 @@ P4 is already shipped as cron-only. The event-trigger and one-shot extensions ar
 
 **Schedule Engine**
 
-7. **`@once` cron sentinel**: the one-shot design proposes a `@once` literal in `cron_expr`. An alternative is a separate `trigger_at INTEGER` column that takes precedence over `cron_expr`. Which approach avoids more parser complexity?
+7. **`@once` cron sentinel**: ~~the one-shot design proposes a `@once` literal in `cron_expr`. An alternative is a separate `trigger_at INTEGER` column that takes precedence over `cron_expr`. Which approach avoids more parser complexity?~~ **Resolved:** add a `trigger_at INTEGER` column to the `schedules` table that takes precedence over `cron_expr` when non-NULL. This avoids parser complexity from a `@once` sentinel. When `trigger_at` is set, the scheduler fires at that timestamp and disables the schedule (`enabled=0`) after the run completes.
 
-8. **McpTool dispatch expansion**: `dispatch_mcp_tool` currently handles only `memory_stats`, `memory_search`, and `memory_forget`. Exposing all registered MCP tools requires a local call path into the MCP server. What is the interface boundary — a function call within the same Tokio runtime, or a loopback HTTP/stdio connection?
+8. **McpTool dispatch expansion**: ~~`dispatch_mcp_tool` currently handles only `memory_stats`, `memory_search`, and `memory_forget`. Exposing all registered MCP tools requires a local call path into the MCP server. What is the interface boundary — a function call within the same Tokio runtime, or a loopback HTTP/stdio connection?~~ **Resolved:** `dispatch_mcp_tool` uses direct Rust function pointers within the same Tokio runtime. No loopback HTTP/stdio connection. The scheduler holds an `Arc<NousServer>` and calls tool handler methods directly.
 
 9. **Event trigger delivery guarantees**: if the Nous process restarts while a room-message trigger is mid-flight, the trigger event is lost. Should event triggers write a durable event record to SQLite before firing so they survive restarts, or is at-most-once acceptable for event triggers?

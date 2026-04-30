@@ -91,10 +91,12 @@ The rmcp server runs on stdio. When Claude or another agent spawns `nous serve`,
 
 ### 1.4 Open Questions
 
-1. **JWT vs. API key for HTTP transport**: API keys are simpler to issue and rotate; JWTs enable expiry without server-side revocation. Which properties matter more for the initial multi-user deployment?
-2. **Role-based access control scope**: Should role enforcement (read-only vs. read-write) apply per namespace or per resource type (memories, rooms, tasks separately)?
-3. **Key rotation impact on encrypted DB**: SQLCipher re-encryption (`admin rotate-key`) changes the database key. Does the API key derive from or relate to the SQLCipher key, or are they independent secrets?
-4. **Child agent trust elevation**: Can a child agent explicitly request access to a sibling namespace? If so, what approval mechanism applies?
+**Resolved:** For MVP, ship without HTTP authentication. The daemon API is localhost-only (Unix socket). Authentication will be added when remote access (network-exposed HTTP transport) is needed. This resolves all auth open questions for the current scope.
+
+1. ~~**JWT vs. API key for HTTP transport**: API keys are simpler to issue and rotate; JWTs enable expiry without server-side revocation. Which properties matter more for the initial multi-user deployment?~~ Deferred until HTTP transport is network-exposed.
+2. ~~**Role-based access control scope**: Should role enforcement (read-only vs. read-write) apply per namespace or per resource type (memories, rooms, tasks separately)?~~ Deferred until RBAC milestone.
+3. ~~**Key rotation impact on encrypted DB**: SQLCipher re-encryption (`admin rotate-key`) changes the database key. Does the API key derive from or relate to the SQLCipher key, or are they independent secrets?~~ N/A — SQLCipher removed (see `02-data-layer.md`). API keys are independent secrets.
+4. ~~**Child agent trust elevation**: Can a child agent explicitly request access to a sibling namespace? If so, what approval mechanism applies?~~ Deferred until cross-namespace access is needed.
 
 ---
 
@@ -216,9 +218,9 @@ The main Nous process does not yet emit metrics to `nous-otlp`. The following co
 
 1. **Push vs. pull for internal metrics**: Should the main Nous process push spans to `nous-otlp` at localhost:4318, or should `nous-otlp` expose a Prometheus scrape endpoint that pulls from `otlp.db`?
 2. **Retention policy for `otlp.db`**: OTLP data accumulates without bound. What TTL applies — 7 days, 30 days, or configurable? Who triggers cleanup (daemon cron, `nous-otlp` itself, manual CLI)?
-3. **Encryption**: `otlp.db` uses `open_connection` from `nous_shared::sqlite`, which supports SQLCipher. Should the OTLP database be encrypted by default, or is plaintext acceptable given that it contains only telemetry, not user content?
+3. **Encryption**: ~~`otlp.db` uses `open_connection` from `nous_shared::sqlite`, which supports SQLCipher. Should the OTLP database be encrypted by default, or is plaintext acceptable given that it contains only telemetry, not user content?~~ **Resolved:** no. The OTLP database (`otlp.db`) is not encrypted. It contains telemetry data (spans, logs, metrics), not user content or secrets. Disk-level encryption (if needed) is handled by the OS/infrastructure layer.
 4. **Multi-node**: In a multi-node deployment (`01-system-architecture.md §multi-node`), do all nodes push to a single `nous-otlp` instance, or does each node run its own? If centralized, what port conflicts arise?
-5. **Health endpoint**: The daemon API exposes `/status` but not `/health`. A `/health` endpoint returning `200 OK` / `503 Service Unavailable` based on DB connectivity would enable container health checks and systemd watchdog integration. Should it also report `nous-otlp` reachability?
+5. **Health endpoint**: ~~The daemon API exposes `/status` but not `/health`. A `/health` endpoint returning `200 OK` / `503 Service Unavailable` based on DB connectivity would enable container health checks and systemd watchdog integration. Should it also report `nous-otlp` reachability?~~ **Resolved:** yes. Add `GET /health` endpoint returning 200 OK with `{status: "healthy", db_ok: bool, uptime_secs: u64}`. It performs a `SELECT 1` against `memory.db` to verify DB connectivity. It does NOT check `nous-otlp` reachability (separate process, optional).
 
 ---
 
@@ -310,12 +312,12 @@ The `thiserror` `#[error("...")]` attribute defines the string form. Agents must
 
 **Retryable error classification:**
 
-The current `NousError` enum has no `is_retryable()` predicate. Adding one would let the `WriteChannel` retry transient `Sqlite(SQLITE_BUSY)` errors without surfacing them to the caller:
+Only `SQLITE_BUSY` is retried automatically (3 attempts, 100ms exponential backoff). All other errors are terminal and propagated immediately to callers.
 
 | Variant | Retryable? | Rationale |
 |---------|-----------|-----------|
-| `Sqlite(SQLITE_BUSY)` | Yes, up to 3× | WAL reader-writer contention, resolves in milliseconds |
-| `Embedding(_)` | Yes, once | ONNX model may fail on first load due to race on model cache |
+| `Sqlite(SQLITE_BUSY)` | Yes, 3× with 100ms exponential backoff | WAL reader-writer contention, resolves in milliseconds |
+| `Embedding(_)` | No | Terminal — surface to caller for diagnosis |
 | `NotFound(_)` | No | Retry cannot create the missing resource |
 | `Conflict(_)` | No | Retry would hit the same unique constraint |
 | `Validation(_)` | No | Input is invariantly bad |
@@ -327,10 +329,10 @@ A `schedule_errors(id, schedule_id, fired_at, error_message, attempt)` table wou
 
 ### 3.5 Open Questions
 
-1. **Retryable vs. terminal errors**: Should `NousError` carry a `is_retryable()` predicate? Embedding failures are retryable; conflict errors are not. Callers currently treat all errors as terminal.
-2. **MCP error code taxonomy**: The MCP protocol supports structured error codes beyond `is_error`. Should Nous map `NousError` variants to MCP error codes for richer client-side handling?
-3. **Scheduled action error persistence**: Failed scheduled actions currently log and continue. A `schedule_errors` table would enable `nous schedule errors <id>` introspection. Worth the schema cost?
-4. **`anyhow` vs. `NousError` in `nous-otlp`**: `nous-otlp/src/main.rs` uses `anyhow::Result` throughout. Should it migrate to `NousError` for consistency, or is `anyhow` appropriate for a CLI-only binary?
+1. **Retryable vs. terminal errors**: ~~Should `NousError` carry a `is_retryable()` predicate? Embedding failures are retryable; conflict errors are not. Callers currently treat all errors as terminal.~~ **Resolved:** see §3.4 — only `SQLITE_BUSY` is retried (3×, 100ms exponential backoff). All other errors are terminal. The `WriteChannel` handles the retry internally; callers never see `SQLITE_BUSY`.
+2. **MCP error code taxonomy**: ~~The MCP protocol supports structured error codes beyond `is_error`. Should Nous map `NousError` variants to MCP error codes for richer client-side handling?~~ **Resolved:** deferred. The `is_error` boolean is sufficient for MVP. Structured MCP error codes will be added when client-side handling requires finer-grained error classification.
+3. **Scheduled action error persistence**: ~~Failed scheduled actions currently log and continue. A `schedule_errors` table would enable `nous schedule errors <id>` introspection. Worth the schema cost?~~ **Resolved:** deferred. Failed scheduled actions are logged via tracing and recorded in `schedule_runs.error`. A separate `schedule_errors` table adds schema complexity without clear benefit until operators request structured error querying.
+4. **`anyhow` vs. `NousError` in `nous-otlp`**: ~~`nous-otlp/src/main.rs` uses `anyhow::Result` throughout. Should it migrate to `NousError` for consistency, or is `anyhow` appropriate for a CLI-only binary?~~ **Resolved:** migrate `nous-otlp` from `anyhow` to `NousError` for consistency across the workspace. This is a code change, not a design change — the error variants already cover OTLP failure modes (`Io`, `Config`, `Sqlite`).
 
 ---
 
@@ -439,10 +441,10 @@ Both are workspace members (`[workspace].members` in root `Cargo.toml`). `cargo 
 
 ### 4.5 Open Questions
 
-1. **Property-based tests for cron parser**: The cron expression parser (`crates/nous-core/src/cron_parser.rs`) has no property-based coverage. `proptest` or `quickcheck` could generate arbitrary cron strings and verify the parser never panics. Is this worth the dependency?
+1. **Property-based tests for cron parser**: ~~The cron expression parser (`crates/nous-core/src/cron_parser.rs`) has no property-based coverage. `proptest` or `quickcheck` could generate arbitrary cron strings and verify the parser never panics. Is this worth the dependency?~~ **Resolved:** yes, add `proptest` for the cron parser. Property-based testing will generate arbitrary cron strings and verify the parser never panics and always produces valid `BTreeSet` values within field ranges. Worth the dependency for a safety-critical component.
 2. **Fuzz testing for MCP input**: MCP tool inputs arrive as unvalidated JSON. A `cargo-fuzz` target on the tool dispatch layer would surface panics on malformed input. Blocked on: fuzz infrastructure in CI.
-3. **Time-sensitive schedule tests**: `schedule_e2e.rs` uses real wall-clock time. Should it mock the clock or use a deterministic tick injector to remove CI flakiness?
-4. **Test coverage reporting**: No coverage gate exists in CI. Should a minimum line coverage threshold (e.g., 70%) gate merges to `main`?
+3. **Time-sensitive schedule tests**: ~~`schedule_e2e.rs` uses real wall-clock time. Should it mock the clock or use a deterministic tick injector to remove CI flakiness?~~ **Resolved:** yes, add an `Arc<dyn Clock>` trait for time abstraction. The scheduler and staleness detector will accept a `Clock` implementation, enabling deterministic tests that advance time without wall-clock sleeps. Eliminates the CI flakiness source in `schedule_e2e.rs`.
+4. **Test coverage reporting**: ~~No coverage gate exists in CI. Should a minimum line coverage threshold (e.g., 70%) gate merges to `main`?~~ **Resolved:** no minimum coverage percentage gate for MVP. Coverage reporting will be added when the codebase stabilizes and meaningful thresholds can be established empirically.
 
 ---
 
@@ -450,7 +452,7 @@ Both are workspace members (`[workspace].members` in root `Cargo.toml`). `cargo 
 
 ### 5.1 Current State
 
-A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request. It runs on `ubuntu-latest` with a single job: format check → lint → test → release build. The job sets `CARGO_BUILD_JOBS: 1` to avoid OOM kills on the hosted runner, at the cost of slower parallel compilation.
+A single GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main` and on every pull request. It runs on `ubuntu-latest` (free tier — public repos get unlimited CI minutes) with a single job: format check → lint → test → release build. The job sets `CARGO_BUILD_JOBS: 1` because free GitHub runners have limited RAM (7GB); bundled SQLCipher and ONNX Runtime exhaust memory under parallel compilation. No paid runners are needed for MVP.
 
 The workspace uses Rust toolchain `1.88` (pinned via `dtolnay/rust-toolchain`) with `rustfmt` and `clippy` components. Cargo cache is keyed on `Cargo.lock` hash to get fast incremental builds on cache hit.
 
@@ -558,11 +560,11 @@ The `jlumbroso/free-disk-space@v1.3.1` step reclaims ~20GB by removing Android S
 
 ### 5.4 Open Questions
 
-1. **`CARGO_BUILD_JOBS: 1` tax**: Single-job compilation avoids OOM on the free GitHub runner (7GB RAM) but significantly slows builds. Would a larger runner (16GB) justify the cost to restore parallel compilation?
-2. **Cross-compilation strategy**: `cross` uses Docker-in-Docker for macOS targets on Linux hosts, which may not work on GitHub Actions. `cargo-zigbuild` with Zig as the cross-linker is an alternative. Which is more maintainable?
+1. ~~**`CARGO_BUILD_JOBS: 1` tax**: Single-job compilation avoids OOM on the free GitHub runner (7GB RAM) but significantly slows builds. Would a larger runner (16GB) justify the cost to restore parallel compilation?~~ **Resolved:** `CARGO_BUILD_JOBS=1` is required because free GitHub runners have limited RAM (7GB). Public repos get free CI minutes. No paid runners needed for MVP.
+2. **Cross-compilation strategy**: ~~`cross` uses Docker-in-Docker for macOS targets on Linux hosts, which may not work on GitHub Actions. `cargo-zigbuild` with Zig as the cross-linker is an alternative. Which is more maintainable?~~ **Resolved:** use `cross` (Docker-based) for Linux x86_64 targets. Use `cargo-zigbuild` for macOS arm64 cross-compilation from Linux CI runners. This avoids Docker-in-Docker issues on GitHub Actions while supporting both target platforms.
 3. **Homebrew formula automation**: `cargo-release` can tag versions and push to `skevetter/homebrew-tap` in one command. Should the release workflow trigger on git tags (`v*`) or on a manual dispatch?
-4. **Docker base image**: The systemd integration requires a base image that ships systemd. Should the Docker image target a systemd-enabled distribution (Debian with systemd), or should it run `nous serve` directly without systemd?
-5. **`cargo clean` between steps**: Step 8 (`cargo clean --profile dev`) removes debug artifacts to free disk before the release build. This means a CI failure in the release step cannot reuse debug build artifacts for diagnosis. Is this trade-off acceptable?
+4. **Docker base image**: ~~The systemd integration requires a base image that ships systemd. Should the Docker image target a systemd-enabled distribution (Debian with systemd), or should it run `nous serve` directly without systemd?~~ **Resolved:** the Docker image runs `nous serve` directly without systemd. No systemd-enabled base image needed. The container CMD is `["nous", "serve", "--transport", "http"]`. Process supervision (if needed) uses the container orchestrator (k8s, Docker Compose), not an in-container init system.
+5. **`cargo clean` between steps**: ~~Step 8 (`cargo clean --profile dev`) removes debug artifacts to free disk before the release build. This means a CI failure in the release step cannot reuse debug build artifacts for diagnosis. Is this trade-off acceptable?~~ **Resolved:** keep `cargo clean --profile dev` between steps as-is. The disk space savings outweigh the diagnostic cost of losing debug artifacts, given that CI failures in the release build step are rare and reproducible locally.
 
 ---
 
@@ -577,7 +579,7 @@ Key decisions made during the design of these cross-cutting concerns, recorded s
 | OTLP as a separate binary | `nous-otlp` is its own process and crate | Embed OTLP ingest in `nous-cli` | Keeps the main process dependency surface small; operators who don't need observability don't run it |
 | MCP transport default | stdio (implicit trust) | HTTP with auth tokens | Stdio matches the usage pattern of LLM agent frameworks; HTTP adds deployment complexity for no benefit in the single-user case |
 | Test DB isolation | `NamedTempFile` / unique path per test | Shared in-memory SQLite | In-memory mode doesn't load the `sqlite-vec` and `fts5` extensions; file-backed mode exercises the real schema |
-| CI single-job build | `CARGO_BUILD_JOBS: 1` | Full parallel compilation | GitHub-hosted `ubuntu-latest` runner has 7GB RAM; bundled SQLCipher + ONNX Runtime exhaust it under parallel compilation |
+| CI single-job build | `CARGO_BUILD_JOBS: 1` on free runners | Paid runners with more RAM | Free GitHub runners (7GB RAM) are sufficient for MVP; public repos get unlimited CI minutes; no budget needed for CI infrastructure |
 
 ## 7. Cross-Reference Index
 
@@ -590,11 +592,20 @@ Key decisions made during the design of these cross-cutting concerns, recorded s
 | `agent_id` in rooms/tasks, `room_participants` | §1.3, §3.3 | `04-features-p0-p1.md` | §3.1, §3.2 |
 | Room notification subscriber model | §3.3 | `04-features-p0-p1.md` | §3.1 Notification flow |
 | Task `assignee_id`, schedule action dispatch | §1.3, §3.3 | `04-features-p0-p1.md` | §3.2 |
+| `task_events` audit table | §3.3 | `04-features-p0-p1.md` | §5.1 Data Model |
 | Scheduler namespace, schedule_e2e flakiness | §1.3, §4.3, §4.5 | `05-features-p2-p4.md` | §5 Schedule Engine |
+| `trigger_at` column for one-shot schedules | §4.5 (mock clock) | `05-features-p2-p4.md` | §5.6, §7 Q7 |
 | Org hierarchy, namespace per org unit | §1.2 (future RBAC) | `05-features-p2-p4.md` | §4 Org Hierarchy |
+| `agent_workspace_access` table | §1 Auth | `06-features-p5-p7.md` | §7 Q6 |
+| `GET /health` endpoint | §2.5 Q5 | `03-api-interfaces.md` | Route table |
+| `Arc<dyn Clock>` trait for testing | §4.5 Q3 | `05-features-p2-p4.md` | §5.3 Scheduler Runtime |
+| `proptest` for cron parser | §4.5 Q1 | `05-features-p2-p4.md` | §5.2 CronExpr Parser |
+| Cross-compilation (`cross` + `cargo-zigbuild`) | §5.4 Q2 | `.github/workflows/ci.yml` | Release workflow |
+| Docker `CMD ["nous", "serve"]` | §5.4 Q4 | `05-features-p2-p4.md` | §5.2 Docker design |
 | `NousError` source | §3 all | `crates/nous-shared/src/error.rs` | — |
-| OTLP DB schema | §2 all | `crates/nous-otlp/src/db.rs` | `OTLP_MIGRATIONS` |
+| OTLP DB schema (unencrypted) | §2 all | `crates/nous-otlp/src/db.rs` | `OTLP_MIGRATIONS` |
 | OTLP HTTP server routing | §2.2 | `crates/nous-otlp/src/server.rs` | `router()` |
-| CI workflow | §5 all | `.github/workflows/ci.yml` | — |
+| `nous-otlp` → `NousError` migration | §3.5 Q4 | `crates/nous-otlp/src/main.rs` | — |
+| CI workflow (free runners, CARGO_BUILD_JOBS=1) | §5 all | `.github/workflows/ci.yml` | — |
 | systemd service | §5.2 | `systemd/nous-cli.service` | — |
 | Workspace member list | §4.2, §5.3 | `Cargo.toml` (root) | `[workspace].members` |
