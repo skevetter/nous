@@ -20,7 +20,7 @@ async fn test_state() -> (AppState, TempDir) {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
-        embedder: Arc::new(MockEmbedder::new()),
+        embedder: Some(Arc::new(MockEmbedder::new())),
     };
     (state, tmp)
 }

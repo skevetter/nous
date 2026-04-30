@@ -8,7 +8,6 @@ use serde_json::Value;
 use nous_core::agents;
 use nous_core::inventory;
 use nous_core::memory;
-use nous_core::memory::embed::Embedder;
 use nous_core::messages::{
     post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
     SearchMessagesRequest,
@@ -2615,7 +2614,11 @@ pub async fn dispatch(
                 ));
             }
 
-            let embedder = memory::OnnxEmbeddingModel::load(None)?;
+            let embedder = state.embedder.as_ref().ok_or_else(|| {
+                nous_core::error::NousError::Internal(
+                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
+                )
+            })?;
             let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
             let embeddings = embedder.embed(&texts)?;
 
@@ -2635,14 +2638,19 @@ pub async fn dispatch(
         }
         "memory_search_hybrid" => {
             let query = require_str(args, "query")?;
-            let query_embedding = state
-                .embedder
-                .embed(&[query])?
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    nous_core::error::NousError::Internal("embedder returned no results".into())
-                })?;
+            let embedder = state.embedder.as_ref().ok_or_else(|| {
+                nous_core::error::NousError::Internal(
+                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
+                )
+            })?;
+            let query_embedding =
+                embedder
+                    .embed(&[query])?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        nous_core::error::NousError::Internal("embedder returned no results".into())
+                    })?;
 
             let limit = args
                 .get("limit")
@@ -2704,15 +2712,18 @@ pub async fn dispatch(
                 .map(|v| v as usize)
                 .unwrap_or(64);
 
+            let embedder = state.embedder.as_ref().ok_or_else(|| {
+                nous_core::error::NousError::Internal(
+                    "embedding model not available — install all-MiniLM-L6-v2.onnx to ~/.nous/models/".into(),
+                )
+            })?;
+
             let mem = memory::get_memory_by_id(&state.pool, memory_id).await?;
 
-            // Chunk
             let chunker = memory::Chunker::new(chunk_size, overlap);
             let chunks = chunker.chunk(memory_id, &mem.content);
             memory::store_chunks(&state.vec_pool, &chunks)?;
 
-            // Embed
-            let embedder = memory::OnnxEmbeddingModel::load(None)?;
             let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
             let embeddings = embedder.embed(&texts)?;
 
@@ -2720,7 +2731,6 @@ pub async fn dispatch(
                 memory::store_chunk_embedding(&state.vec_pool, &chunk.id, embedding)?;
             }
 
-            // Also store a full-document embedding for the memory itself
             let full_embeddings = embedder.embed(&[&mem.content])?;
             if let Some(full_emb) = full_embeddings.first() {
                 memory::store_embedding(&state.pool, &state.vec_pool, memory_id, full_emb).await?;

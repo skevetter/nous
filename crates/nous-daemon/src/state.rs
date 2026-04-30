@@ -10,5 +10,5 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub vec_pool: VecPool,
     pub registry: Arc<NotificationRegistry>,
-    pub embedder: Arc<dyn Embedder>,
+    pub embedder: Option<Arc<dyn Embedder>>,
 }
