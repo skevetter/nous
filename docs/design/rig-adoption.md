@@ -184,11 +184,11 @@ rig-bedrock = "0.4.5"
 ```
 
 `rig-bedrock` uses `aws-sdk-bedrockruntime` + `aws-config` under the hood. The
-`Client::from_env()` constructor calls `aws-config`'s
-`aws_config::from_env().load().await`, which honours the same
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
-`AWS_REGION`, and `AWS_PROFILE` variables the current `LlmClient::from_env`
-reads. **No migration of env var names is required.**
+`Client::from_env()` constructor reads `aws-config`'s credential chain
+synchronously, which reads the same `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, and `AWS_PROFILE`
+variables the current `LlmClient::from_env` reads. **No migration of env var
+names is required.**
 
 Cross-region inference profiles (`us.*` model IDs) are passed straight through
 to the Bedrock Converse API as the `modelId` parameter — rig-bedrock does not
