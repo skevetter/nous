@@ -13,7 +13,7 @@ use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
 
 #[derive(Parser)]
-#[command(name = "nous", about = "The nous platform CLI")]
+#[command(name = "nous", about = "The nous platform CLI", version)]
 struct Cli {
     #[arg(long, global = true, help = "Override daemon port")]
     port: Option<u16>,
