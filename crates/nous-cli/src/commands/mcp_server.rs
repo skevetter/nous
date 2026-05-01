@@ -64,6 +64,7 @@ async fn execute(tools_filter: Option<String>, port: Option<u16>) -> Result<(), 
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
+        llm_client: None,
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);

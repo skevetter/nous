@@ -49,6 +49,7 @@ async fn execute(port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: process_registry.clone(),
+        llm_client: None,
     };
 
     let _scheduler_handle = Scheduler::spawn(
