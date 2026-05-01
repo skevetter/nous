@@ -98,14 +98,7 @@ async fn test_model_override_from_metadata() {
 
     let result = state
         .process_registry
-        .invoke(
-            &state,
-            &agent_id,
-            "hello",
-            None,
-            Some(metadata),
-            false,
-        )
+        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
         .await;
 
     assert!(result.is_err());
@@ -127,14 +120,7 @@ async fn test_preamble_extraction_from_metadata() {
 
     let result = state
         .process_registry
-        .invoke(
-            &state,
-            &agent_id,
-            "hello",
-            None,
-            Some(metadata),
-            false,
-        )
+        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
         .await;
 
     assert!(result.is_err());
@@ -279,14 +265,7 @@ async fn test_metadata_with_extra_fields_does_not_break_dispatch() {
 
     let result = state
         .process_registry
-        .invoke(
-            &state,
-            &agent_id,
-            "hello",
-            None,
-            Some(metadata),
-            false,
-        )
+        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
         .await;
 
     let err = result.unwrap_err();

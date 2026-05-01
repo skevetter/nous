@@ -76,9 +76,28 @@ enum Commands {
         /// Comma-separated tool prefixes to expose (e.g. "chat,task" exposes room_ and task_ tools)
         #[arg(long)]
         tools: Option<String>,
+        /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
+        #[arg(long)]
+        model: Option<String>,
+        /// AWS region for Bedrock
+        #[arg(long)]
+        region: Option<String>,
+        /// AWS profile name
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Start the HTTP daemon
-    Serve,
+    Serve {
+        /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
+        #[arg(long)]
+        model: Option<String>,
+        /// AWS region for Bedrock
+        #[arg(long)]
+        region: Option<String>,
+        /// AWS profile name
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -122,11 +141,20 @@ async fn main() {
         Commands::Worktree { command } => {
             commands::worktree::run(command, port).await;
         }
-        Commands::McpServer { tools } => {
-            commands::mcp_server::run(tools, port).await;
+        Commands::McpServer {
+            tools,
+            model,
+            region,
+            profile,
+        } => {
+            commands::mcp_server::run(tools, model, region, profile, port).await;
         }
-        Commands::Serve => {
-            commands::serve::run(port).await;
+        Commands::Serve {
+            model,
+            region,
+            profile,
+        } => {
+            commands::serve::run(model, region, profile, port).await;
         }
     }
 }
