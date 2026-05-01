@@ -186,7 +186,7 @@ async fn execute_schedule(
             },
         };
 
-        if last_result.status == "success" || last_result.status == "timeout" {
+        if last_result.status == "completed" || last_result.status == "timeout" {
             break;
         }
 
@@ -387,7 +387,7 @@ fn truncate_output(output: &str, max_bytes: usize) -> String {
 fn evaluate_outcome(output: String, desired_outcome: &Option<String>) -> DispatchResult {
     let Some(pattern) = desired_outcome else {
         return DispatchResult {
-            status: "success".to_string(),
+            status: "completed".to_string(),
             output: Some(output),
             error: None,
             exit_code: None,
@@ -406,7 +406,7 @@ fn evaluate_outcome(output: String, desired_outcome: &Option<String>) -> Dispatc
 
     if matches {
         DispatchResult {
-            status: "success".to_string(),
+            status: "completed".to_string(),
             output: Some(output),
             error: None,
             exit_code: None,
