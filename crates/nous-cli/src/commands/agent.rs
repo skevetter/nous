@@ -610,11 +610,53 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         AgentCommands::Invoke {
             id,
             prompt,
-            timeout: _,
-            is_async: _,
+            timeout,
+            is_async,
         } => {
-            let invocation =
-                agents::processes::create_invocation(pool, &id, &prompt, None).await?;
+            let url = format!(
+                "http://{}:{}/mcp/call",
+                config.host, config.port
+            );
+            let mut args = serde_json::json!({
+                "agent_id": id,
+                "prompt": prompt,
+            });
+            if let Some(t) = timeout {
+                args["timeout_secs"] = serde_json::json!(t);
+            }
+            if is_async {
+                args["async"] = serde_json::json!(true);
+            }
+            let body = serde_json::json!({
+                "name": "agent_invoke",
+                "arguments": args,
+            });
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("daemon unreachable at {url}: {e}"))?;
+            let status_code = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("failed to read response: {e}"))?;
+            if !status_code.is_success() {
+                return Err(format!("daemon returned {status_code}: {text}").into());
+            }
+            let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
+            if mcp_resp.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+                let msg = mcp_resp["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("unknown error");
+                return Err(msg.to_string().into());
+            }
+            let content_text = mcp_resp["content"][0]["text"]
+                .as_str()
+                .unwrap_or("{}");
+            let invocation: serde_json::Value = serde_json::from_str(content_text)?;
             println!("{}", serde_json::to_string_pretty(&invocation)?);
         }
         AgentCommands::InvokeResult { invocation_id } => {
