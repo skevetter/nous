@@ -1518,7 +1518,9 @@ name = "nous-daemon"
 version = "0.7.0"
 dependencies = [
  "axum",
+ "chrono",
  "http-body-util",
+ "libc",
  "nous-core",
  "regex",
  "reqwest",

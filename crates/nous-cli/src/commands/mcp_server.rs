@@ -4,6 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::routes::mcp::{dispatch, get_tool_schemas};
 use nous_daemon::state::AppState;
 use serde_json::Value;
@@ -59,6 +60,7 @@ async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error:
         embedder,
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
+        process_registry: Arc::new(ProcessRegistry::new()),
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);

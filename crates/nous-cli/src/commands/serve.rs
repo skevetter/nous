@@ -5,6 +5,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
@@ -35,6 +36,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         };
 
     let shutdown = CancellationToken::new();
+    let process_registry = Arc::new(ProcessRegistry::new());
 
     let state = AppState {
         pool: pools.fts.clone(),
@@ -43,6 +45,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         embedder,
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
+        process_registry: process_registry.clone(),
     };
 
     let _scheduler_handle = Scheduler::spawn(
@@ -55,10 +58,17 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, nous_daemon::app(state))
+
+    // 1. HTTP server stops (graceful_shutdown)
+    axum::serve(listener, nous_daemon::app(state.clone()))
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await?;
 
+    // 2. ProcessRegistry.shutdown() — stops all agent processes
+    process_registry.shutdown(&state).await;
+
+    // 3. Scheduler stops via CancellationToken (already cancelled above)
+    // 4. DB pools close
     pools.close().await;
     Ok(())
 }

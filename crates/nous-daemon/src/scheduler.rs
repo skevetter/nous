@@ -245,7 +245,7 @@ async fn execute_schedule(
 }
 
 fn should_retry(action_type: &str) -> bool {
-    matches!(action_type, "shell" | "http")
+    matches!(action_type, "shell" | "http" | "agent_invoke")
 }
 
 struct DispatchResult {
@@ -264,6 +264,7 @@ async fn dispatch_action(
         "mcp_tool" => dispatch_mcp_tool(state, &schedule.action_payload).await,
         "shell" => dispatch_shell(&schedule.action_payload, config).await,
         "http" => dispatch_http(&schedule.action_payload).await,
+        "agent_invoke" => dispatch_agent_invoke(state, &schedule.action_payload).await,
         other => Err(NousError::Validation(format!(
             "unknown action_type: {other}"
         ))),
@@ -370,6 +371,32 @@ async fn dispatch_http(payload: &str) -> Result<String, NousError> {
             "http {status}: {text}"
         )))
     }
+}
+
+#[derive(Deserialize)]
+struct AgentInvokePayload {
+    agent_id: String,
+    prompt: String,
+    timeout_secs: Option<i64>,
+}
+
+async fn dispatch_agent_invoke(state: &AppState, payload: &str) -> Result<String, NousError> {
+    let parsed: AgentInvokePayload = serde_json::from_str(payload)
+        .map_err(|e| NousError::Validation(format!("invalid agent_invoke payload: {e}")))?;
+
+    let invocation = state
+        .process_registry
+        .invoke(
+            state,
+            &parsed.agent_id,
+            &parsed.prompt,
+            parsed.timeout_secs,
+            None,
+            false, // synchronous for schedule actions
+        )
+        .await?;
+
+    Ok(serde_json::to_string(&invocation).unwrap_or_default())
 }
 
 fn truncate_output(output: &str, max_bytes: usize) -> String {

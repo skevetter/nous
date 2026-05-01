@@ -1280,6 +1280,129 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+        // --- NOUS-026: Agent lifecycle management tools ---
+        ToolSchema {
+            name: "agent_spawn",
+            description: "Spawn an agent process (claude, shell, or http)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID to spawn process for" },
+                    "command": { "type": "string", "description": "Command to run (overrides agent config)" },
+                    "process_type": { "type": "string", "description": "Process type: claude, shell, http (default: shell)" },
+                    "working_dir": { "type": "string", "description": "Working directory" },
+                    "env": { "type": "object", "description": "Environment variables as key-value pairs" },
+                    "timeout_secs": { "type": "integer", "description": "Process timeout in seconds" },
+                    "restart_policy": { "type": "string", "description": "Restart policy: never, on-failure, always (default: never)" },
+                    "max_restarts": { "type": "integer", "description": "Max restart attempts (default: 3)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_stop",
+            description: "Stop a running agent process (SIGTERM then SIGKILL after grace period)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "force": { "type": "boolean", "description": "Force kill immediately (SIGKILL)" },
+                    "grace_secs": { "type": "integer", "description": "Grace period before SIGKILL (default: 10)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_restart",
+            description: "Stop and re-spawn an agent process",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "command": { "type": "string", "description": "New command (overrides previous)" },
+                    "working_dir": { "type": "string", "description": "New working directory" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_invoke",
+            description: "Send work to an agent (executes prompt synchronously or async)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "prompt": { "type": "string", "description": "Work prompt/command to execute" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds (default: 300)" },
+                    "metadata": { "type": "object", "description": "Arbitrary metadata for the invocation" },
+                    "async": { "type": "boolean", "description": "If true, return immediately with invocation ID" }
+                },
+                "required": ["agent_id", "prompt"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_invoke_result",
+            description: "Get the result of an async invocation",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "invocation_id": { "type": "string", "description": "Invocation ID" }
+                },
+                "required": ["invocation_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_invocations",
+            description: "List invocation history for an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "status": { "type": "string", "description": "Filter by status: pending, running, completed, failed, timeout, cancelled" },
+                    "limit": { "type": "integer", "description": "Max results (default: 20)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_process_status",
+            description: "Get current process info (PID, uptime, DB record) for an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_logs",
+            description: "Get recent stdout/stderr and process history for an agent",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID" },
+                    "limit": { "type": "integer", "description": "Max process records (default: 5)" }
+                },
+                "required": ["agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_update",
+            description: "Update agent config (process_type, spawn_command, working_dir, auto_restart, metadata)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "process_type": { "type": "string", "description": "Process type: claude, shell, http" },
+                    "spawn_command": { "type": "string", "description": "Default spawn command" },
+                    "working_dir": { "type": "string", "description": "Default working directory" },
+                    "auto_restart": { "type": "boolean", "description": "Auto-restart on crash" },
+                    "metadata": { "type": "string", "description": "JSON metadata string" }
+                },
+                "required": ["id"]
+            }),
+        },
     ]
 }
 
@@ -2873,6 +2996,142 @@ pub async fn dispatch(
             let path = args.get("path").and_then(|v| v.as_str());
             let artifact = agents::update_artifact(&state.pool, id, name, path).await?;
             Ok(serde_json::to_value(artifact).unwrap())
+        }
+        // --- NOUS-026: Agent lifecycle management tools ---
+        "agent_spawn" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let agent = agents::get_agent_by_id(&state.pool, agent_id).await?;
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .or(agent.spawn_command.as_deref())
+                .ok_or_else(|| {
+                    nous_core::error::NousError::Validation(
+                        "command is required (not set on agent config either)".into(),
+                    )
+                })?
+                .to_string();
+            let process_type = args
+                .get("process_type")
+                .and_then(|v| v.as_str())
+                .or(agent.process_type.as_deref())
+                .unwrap_or("shell");
+            let working_dir = args
+                .get("working_dir")
+                .and_then(|v| v.as_str())
+                .or(agent.working_dir.as_deref());
+            let env = args.get("env").filter(|v| !v.is_null()).cloned();
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64());
+            let restart_policy = args
+                .get("restart_policy")
+                .and_then(|v| v.as_str())
+                .unwrap_or(if agent.auto_restart { "on-failure" } else { "never" });
+            let max_restarts = args
+                .get("max_restarts")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32)
+                .unwrap_or(3);
+            let process = state
+                .process_registry
+                .spawn(
+                    state,
+                    agent_id,
+                    &command,
+                    process_type,
+                    working_dir,
+                    env,
+                    timeout_secs,
+                    restart_policy,
+                    max_restarts,
+                )
+                .await?;
+            Ok(serde_json::to_value(process).unwrap())
+        }
+        "agent_stop" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let grace_secs = args
+                .get("grace_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10);
+            let process = state
+                .process_registry
+                .stop(state, agent_id, force, grace_secs)
+                .await?;
+            Ok(serde_json::to_value(process).unwrap())
+        }
+        "agent_restart" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let command = args.get("command").and_then(|v| v.as_str());
+            let working_dir = args.get("working_dir").and_then(|v| v.as_str());
+            let process = state
+                .process_registry
+                .restart(state, agent_id, command, working_dir)
+                .await?;
+            Ok(serde_json::to_value(process).unwrap())
+        }
+        "agent_invoke" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let prompt = require_str(args, "prompt")?;
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64());
+            let metadata = args.get("metadata").filter(|v| !v.is_null()).cloned();
+            let is_async = args.get("async").and_then(|v| v.as_bool()).unwrap_or(false);
+            let invocation = state
+                .process_registry
+                .invoke(state, agent_id, prompt, timeout_secs, metadata, is_async)
+                .await?;
+            Ok(serde_json::to_value(invocation).unwrap())
+        }
+        "agent_invoke_result" => {
+            let invocation_id = require_str(args, "invocation_id")?;
+            let invocation =
+                agents::processes::get_invocation(&state.pool, invocation_id).await?;
+            Ok(serde_json::to_value(invocation).unwrap())
+        }
+        "agent_invocations" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let status = args.get("status").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let invocations =
+                agents::processes::list_invocations(&state.pool, agent_id, status, limit).await?;
+            Ok(serde_json::to_value(invocations).unwrap())
+        }
+        "agent_process_status" => {
+            let agent_id = require_str(args, "agent_id")?;
+            // Get runtime status from process registry
+            let runtime_status = state.process_registry.get_status(agent_id).await;
+            // Get DB record
+            let db_process = agents::processes::get_active_process(&state.pool, agent_id).await?;
+            Ok(serde_json::json!({
+                "runtime": runtime_status,
+                "process": db_process,
+            }))
+        }
+        "agent_logs" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let processes =
+                agents::processes::list_processes(&state.pool, agent_id, limit).await?;
+            Ok(serde_json::to_value(processes).unwrap())
+        }
+        "agent_update" => {
+            let id = require_str(args, "id")?;
+            let process_type = args.get("process_type").and_then(|v| v.as_str());
+            let spawn_command = args.get("spawn_command").and_then(|v| v.as_str());
+            let working_dir = args.get("working_dir").and_then(|v| v.as_str());
+            let auto_restart = args.get("auto_restart").and_then(|v| v.as_bool());
+            let metadata = args.get("metadata").and_then(|v| v.as_str());
+            let agent = agents::processes::update_agent(
+                &state.pool,
+                id,
+                process_type,
+                spawn_command,
+                working_dir,
+                auto_restart,
+                metadata,
+            )
+            .await?;
+            Ok(serde_json::to_value(agent).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"
