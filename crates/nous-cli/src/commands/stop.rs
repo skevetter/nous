@@ -11,6 +11,8 @@ fn pid_file_path() -> PathBuf {
 }
 
 fn process_alive(pid: i32) -> bool {
+    // SAFETY: kill(2) with signal 0 performs permission checks without sending a signal.
+    // Safe to call with any pid; returns error codes for invalid/missing processes.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
@@ -38,15 +40,17 @@ pub async fn run() {
         }
     };
 
-    if !process_alive(pid) {
-        let _ = fs::remove_file(&pid_path);
-        eprintln!("daemon not running (stale PID file removed)");
-        return;
-    }
-
+    // SAFETY: kill(2) is safe to call with any pid; returns error codes for invalid pids.
+    // We send SIGTERM directly and interpret the result to avoid a TOCTOU race.
     let ret = unsafe { libc::kill(pid, libc::SIGTERM) };
     if ret != 0 {
-        let err = std::io::Error::last_os_error();
+        let errno = unsafe { *libc::__errno_location() };
+        if errno == libc::ESRCH {
+            let _ = fs::remove_file(&pid_path);
+            eprintln!("daemon not running (stale PID file removed)");
+            return;
+        }
+        let err = std::io::Error::from_raw_os_error(errno);
         eprintln!("Error sending SIGTERM to pid {pid}: {err}");
         std::process::exit(1);
     }
@@ -58,7 +62,7 @@ pub async fn run() {
     while start.elapsed() < timeout {
         if !process_alive(pid) {
             let _ = fs::remove_file(&pid_path);
-            eprintln!("daemon stopped");
+            println!("daemon stopped");
             return;
         }
         thread::sleep(poll_interval);
