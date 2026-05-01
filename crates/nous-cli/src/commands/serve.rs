@@ -12,14 +12,24 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-pub async fn run(port: Option<u16>) {
-    if let Err(e) = execute(port).await {
+pub async fn run(
+    model: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
+    port: Option<u16>,
+) {
+    if let Err(e) = execute(model, region, profile, port).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-async fn execute(port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute(
+    model: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
+    port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::load()?;
     if let Some(p) = port {
         config.port = p;
@@ -38,20 +48,21 @@ async fn execute(port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-    use nous_daemon::llm_client::{build_client, DEFAULT_MODEL};
+    use nous_daemon::llm_client::{build_client, LlmConfig};
+
+    let llm_config = LlmConfig::resolve(model, region, profile);
 
     let has_credentials = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
         || std::env::var("AWS_PROFILE").is_ok()
         || std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_ok();
 
     let (llm_client, default_model) = if has_credentials {
-        let client = build_client().await;
-        let model = std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-        tracing::info!(region = %std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".into()), model = %model, "LLM client configured for Bedrock");
-        (Some(Arc::new(client)), model)
+        let client = build_client(&llm_config).await;
+        tracing::info!(region = %llm_config.region, model = %llm_config.model, "LLM client configured for Bedrock");
+        (Some(Arc::new(client)), llm_config.model)
     } else {
         tracing::warn!("LLM client not available (no AWS credentials found in environment)");
-        (None, DEFAULT_MODEL.to_string())
+        (None, llm_config.model)
     };
 
     let shutdown = CancellationToken::new();
