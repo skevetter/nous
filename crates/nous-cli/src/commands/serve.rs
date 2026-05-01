@@ -20,11 +20,20 @@ fn pid_file_path() -> std::path::PathBuf {
 }
 
 fn write_pid_file(pid: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let path = pid_file_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, pid.to_string())
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(&path)?;
+    write!(file, "{pid}")
 }
 
 fn remove_pid_file() {
@@ -41,7 +50,10 @@ pub async fn run(
     foreground_daemon: bool,
 ) {
     if daemon && !foreground_daemon {
-        daemonize(model, region, profile, port);
+        if let Err(e) = daemonize(model, region, profile, port) {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
@@ -57,8 +69,8 @@ fn daemonize(
     region: Option<String>,
     profile: Option<String>,
     port: Option<u16>,
-) {
-    let exe = std::env::current_exe().expect("failed to get current executable path");
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
 
     let mut args = vec!["serve".to_string(), "--foreground-daemon".to_string()];
 
@@ -82,28 +94,36 @@ fn daemonize(
     let log_dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
         .join("nous");
-    std::fs::create_dir_all(&log_dir).expect("failed to create config directory");
+    std::fs::create_dir_all(&log_dir)?;
 
-    let log_file =
-        std::fs::File::create(log_dir.join("nous-daemon.log")).expect("failed to create log file");
-    let stderr_file = log_file
-        .try_clone()
-        .expect("failed to clone log file handle");
+    let log_file = std::fs::File::create(log_dir.join("nous-daemon.log"))?;
+    let stderr_file = log_file.try_clone()?;
 
-    let child = std::process::Command::new(exe)
+    let mut child = std::process::Command::new(exe)
         .args(&args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(stderr_file))
-        .spawn()
-        .expect("failed to spawn daemon process");
+        .spawn()?;
 
-    let pid = child.id();
-    write_pid_file(pid).expect("failed to write PID file");
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
-    eprintln!("nous daemon started (pid: {pid})");
-    eprintln!("PID file: {}", pid_file_path().display());
-    eprintln!("Log file: {}", log_dir.join("nous-daemon.log").display());
+    match child.try_wait()? {
+        Some(status) => {
+            let log_path = log_dir.join("nous-daemon.log");
+            eprintln!("daemon exited immediately with {status}");
+            eprintln!("check log: {}", log_path.display());
+            std::process::exit(1);
+        }
+        None => {
+            let pid = child.id();
+            eprintln!("nous daemon started (pid: {pid})");
+            eprintln!("PID file: {}", pid_file_path().display());
+            eprintln!("Log file: {}", log_dir.join("nous-daemon.log").display());
+        }
+    }
+
+    Ok(())
 }
 
 async fn execute(
@@ -185,9 +205,6 @@ async fn execute(
                 _ = tokio::signal::ctrl_c() => {}
             }
             tracing::info!("shutdown signal received");
-            if is_daemon {
-                remove_pid_file();
-            }
             shutdown.cancel();
         });
     }
