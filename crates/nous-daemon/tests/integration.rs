@@ -2025,6 +2025,180 @@ async fn mcp_artifact_update() {
     assert_eq!(fetched.path.as_deref(), Some("/new/path"));
 }
 
+// --- Agent invoke via MCP tool call ---
+
+#[tokio::test]
+async fn mcp_agent_invoke_shell_e2e() {
+    let (state, _tmp) = test_state().await;
+
+    // Register agent
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_register",
+                        "arguments": { "name": "mcp-invoke-shell", "type": "engineer" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let agent: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let agent_id = agent["id"].as_str().unwrap();
+
+    // Set process_type to shell via agent_update
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_update",
+                        "arguments": { "id": agent_id, "process_type": "shell" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(
+        resp.get("is_error").is_none(),
+        "agent_update error: {resp:?}"
+    );
+
+    // Invoke via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_invoke",
+                        "arguments": {
+                            "agent_id": agent_id,
+                            "prompt": "echo mcp-invoke-ok",
+                            "timeout_secs": 30
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(
+        resp.get("is_error").is_none(),
+        "agent_invoke error: {resp:?}"
+    );
+    let invocation: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(invocation["status"], "completed");
+    assert!(invocation["result"]
+        .as_str()
+        .unwrap()
+        .contains("mcp-invoke-ok"));
+}
+
+#[tokio::test]
+async fn mcp_agent_invoke_claude_no_client_returns_error() {
+    let (state, _tmp) = test_state().await;
+
+    // Register agent
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_register",
+                        "arguments": { "name": "mcp-invoke-claude", "type": "engineer" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let resp: Value = json_body(response).await;
+    let agent: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let agent_id = agent["id"].as_str().unwrap();
+
+    // Set process_type to claude
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_update",
+                        "arguments": { "id": agent_id, "process_type": "claude" }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Invoke — should fail because llm_client is None
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "agent_invoke",
+                        "arguments": {
+                            "agent_id": agent_id,
+                            "prompt": "hello"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert_eq!(resp["is_error"], true);
+    let err_text = resp["content"][0]["text"].as_str().unwrap();
+    assert!(
+        err_text.contains("internal error") || err_text.contains("LLM client"),
+        "expected error in MCP response, got: {err_text}"
+    );
+}
+
 #[tokio::test]
 async fn memory_search_hybrid_falls_back_to_fts5_when_no_embedder() {
     let (state, _tmp) = test_state_no_embedder().await;

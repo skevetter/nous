@@ -1,3 +1,4 @@
+use nous_core::agents::processes;
 use nous_core::agents::{
     self, AgentStatus, AgentType, ArtifactType, CreateTemplateRequest, InstantiateRequest,
     ListAgentsFilter, ListArtifactsFilter, RecordVersionRequest, RegisterAgentRequest,
@@ -1308,6 +1309,40 @@ async fn test_agent_new_fields_default() {
     assert!(agent.current_version_id.is_none());
     assert!(!agent.upgrade_available);
     assert!(agent.template_id.is_none());
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_process_type_claude_round_trip() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "claude-rt".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(agent.process_type.is_none());
+
+    let updated = processes::update_agent(pool, &agent.id, Some("claude"), None, None, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(updated.process_type.as_deref(), Some("claude"));
+
+    let fetched = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert_eq!(fetched.process_type.as_deref(), Some("claude"));
 
     pools.close().await;
 }
