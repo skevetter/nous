@@ -1,4 +1,5 @@
 pub mod error;
+pub mod llm_client;
 pub mod process_manager;
 pub mod routes;
 pub mod scheduler;
