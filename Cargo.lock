@@ -1519,6 +1519,8 @@ dependencies = [
  "axum",
  "http-body-util",
  "nous-core",
+ "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

@@ -4,6 +4,8 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_core::schedules::SystemClock;
+use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
@@ -61,6 +63,13 @@ async fn main() {
         shutdown: shutdown.clone(),
     };
 
+    let scheduler_handle = Scheduler::spawn(
+        state.clone(),
+        SchedulerConfig::default(),
+        Arc::new(SystemClock),
+        shutdown.clone(),
+    );
+
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
@@ -68,4 +77,6 @@ async fn main() {
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
         .unwrap();
+
+    scheduler_handle.await.unwrap();
 }

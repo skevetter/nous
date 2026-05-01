@@ -1,5 +1,6 @@
 pub mod error;
 pub mod routes;
+pub mod scheduler;
 pub mod state;
 
 use axum::routing::{delete, get, post};
