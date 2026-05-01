@@ -20,4 +20,5 @@ pub struct AppState {
     pub shutdown: CancellationToken,
     pub process_registry: Arc<ProcessRegistry>,
     pub llm_client: Option<Arc<LlmClient>>,
+    pub default_model: String,
 }

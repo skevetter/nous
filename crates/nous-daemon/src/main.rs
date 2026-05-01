@@ -38,14 +38,19 @@ async fn main() {
             }
         };
 
-    let llm_client = match nous_daemon::llm_client::LlmClient::from_env() {
+    use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
+    use rig::client::ProviderClient;
+
+    let (llm_client, default_model) = match LlmClient::from_env() {
         Ok(client) => {
             tracing::info!("LLM client configured for Bedrock");
-            Some(Arc::new(client))
+            let model =
+                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+            (Some(Arc::new(client)), model)
         }
         Err(e) => {
             tracing::info!("LLM client not available: {e}");
-            None
+            (None, DEFAULT_MODEL.to_string())
         }
     };
 
@@ -75,6 +80,7 @@ async fn main() {
         shutdown: shutdown.clone(),
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
+        default_model,
     };
 
     let scheduler_handle = Scheduler::spawn(

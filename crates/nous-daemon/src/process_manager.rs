@@ -216,7 +216,11 @@ impl ProcessRegistry {
         };
 
         if let Some((exit_code, output)) = result {
-            let status = if exit_code == Some(0) { "stopped" } else { "crashed" };
+            let status = if exit_code == Some(0) {
+                "stopped"
+            } else {
+                "crashed"
+            };
             let _ = processes::update_process_status(
                 &state.pool,
                 &process_id,
@@ -238,7 +242,8 @@ impl ProcessRegistry {
                 if should_restart {
                     if let Ok(proc) = processes::get_process_by_id(&state.pool, &process_id).await {
                         if proc.restart_count < max_restarts {
-                            let _ = processes::increment_restart_count(&state.pool, &process_id).await;
+                            let _ =
+                                processes::increment_restart_count(&state.pool, &process_id).await;
                             tracing::info!(
                                 agent_id = %agent_id,
                                 restart_count = proc.restart_count + 1,
@@ -254,7 +259,12 @@ impl ProcessRegistry {
         }
 
         // Remove from handles
-        state.process_registry.handles.lock().await.remove(&agent_id);
+        state
+            .process_registry
+            .handles
+            .lock()
+            .await
+            .remove(&agent_id);
     }
 
     async fn wait_for_exit(state: &AppState, agent_id: &str) -> (Option<i32>, Option<String>) {
@@ -338,15 +348,8 @@ impl ProcessRegistry {
         handles.remove(agent_id);
         drop(handles);
 
-        processes::update_process_status(
-            &state.pool,
-            &process_id,
-            "stopped",
-            exit_code,
-            None,
-            None,
-        )
-        .await
+        processes::update_process_status(&state.pool, &process_id, "stopped", exit_code, None, None)
+            .await
     }
 
     pub async fn restart(
@@ -362,31 +365,38 @@ impl ProcessRegistry {
             handles.get(agent_id).map(|h| h.process_id.clone())
         };
 
-        let (old_command, old_working_dir, old_process_type, old_env, old_timeout, old_policy, old_max_restarts) =
-            if let Some(ref pid) = current {
-                let proc = processes::get_process_by_id(&state.pool, pid).await?;
-                (
-                    proc.command,
-                    proc.working_dir,
-                    proc.process_type,
-                    proc.env_json,
-                    proc.timeout_secs,
-                    proc.restart_policy,
-                    proc.max_restarts,
-                )
-            } else {
-                // No running process, check agent config
-                let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
-                (
-                    agent.spawn_command.unwrap_or_default(),
-                    agent.working_dir,
-                    agent.process_type.unwrap_or_else(|| "shell".to_string()),
-                    Some("{}".to_string()),
-                    None,
-                    "never".to_string(),
-                    3,
-                )
-            };
+        let (
+            old_command,
+            old_working_dir,
+            old_process_type,
+            old_env,
+            old_timeout,
+            old_policy,
+            old_max_restarts,
+        ) = if let Some(ref pid) = current {
+            let proc = processes::get_process_by_id(&state.pool, pid).await?;
+            (
+                proc.command,
+                proc.working_dir,
+                proc.process_type,
+                proc.env_json,
+                proc.timeout_secs,
+                proc.restart_policy,
+                proc.max_restarts,
+            )
+        } else {
+            // No running process, check agent config
+            let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+            (
+                agent.spawn_command.unwrap_or_default(),
+                agent.working_dir,
+                agent.process_type.unwrap_or_else(|| "shell".to_string()),
+                Some("{}".to_string()),
+                None,
+                "never".to_string(),
+                3,
+            )
+        };
 
         // Stop if running
         if current.is_some() {
@@ -422,7 +432,9 @@ impl ProcessRegistry {
         metadata: Option<serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
-        let metadata_str = metadata.as_ref().and_then(|v| serde_json::to_string(v).ok());
+        let metadata_str = metadata
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
 
         let invocation =
             processes::create_invocation(&state.pool, agent_id, prompt, metadata_str.as_deref())
@@ -436,15 +448,30 @@ impl ProcessRegistry {
         let agent = match nous_core::agents::get_agent_by_id(&state.pool, agent_id).await {
             Ok(a) => a,
             Err(e) => {
-                let _ = processes::update_invocation(&state.pool, &invocation.id, "failed", None, Some(&e.to_string()), None).await;
+                let _ = processes::update_invocation(
+                    &state.pool,
+                    &invocation.id,
+                    "failed",
+                    None,
+                    Some(&e.to_string()),
+                    None,
+                )
+                .await;
                 return Err(e);
             }
         };
 
         let result = match agent.process_type.as_deref() {
             Some("claude") => {
-                self.invoke_claude(state, &invocation, prompt, timeout_secs, &metadata, is_async)
-                    .await
+                self.invoke_claude(
+                    state,
+                    &invocation,
+                    prompt,
+                    timeout_secs,
+                    &metadata,
+                    is_async,
+                )
+                .await
             }
             Some("shell") | None => {
                 self.invoke_shell(state, &invocation, prompt, timeout_secs, is_async)
@@ -456,7 +483,15 @@ impl ProcessRegistry {
         };
 
         if let Err(ref e) = result {
-            let _ = processes::update_invocation(&state.pool, &invocation.id, "failed", None, Some(&e.to_string()), None).await;
+            let _ = processes::update_invocation(
+                &state.pool,
+                &invocation.id,
+                "failed",
+                None,
+                Some(&e.to_string()),
+                None,
+            )
+            .await;
         }
         result
     }
@@ -509,21 +544,36 @@ impl ProcessRegistry {
                 let update_result = match result {
                     Ok(Ok(output)) => {
                         processes::update_invocation(
-                            &state_clone.pool, &inv_id, "completed",
-                            Some(&output), None, Some(duration_ms),
-                        ).await
+                            &state_clone.pool,
+                            &inv_id,
+                            "completed",
+                            Some(&output),
+                            None,
+                            Some(duration_ms),
+                        )
+                        .await
                     }
                     Ok(Err(err)) => {
                         processes::update_invocation(
-                            &state_clone.pool, &inv_id, "failed",
-                            None, Some(&err), Some(duration_ms),
-                        ).await
+                            &state_clone.pool,
+                            &inv_id,
+                            "failed",
+                            None,
+                            Some(&err),
+                            Some(duration_ms),
+                        )
+                        .await
                     }
                     Err(_) => {
                         processes::update_invocation(
-                            &state_clone.pool, &inv_id, "timeout",
-                            None, Some("invocation timed out"), Some(duration_ms),
-                        ).await
+                            &state_clone.pool,
+                            &inv_id,
+                            "timeout",
+                            None,
+                            Some("invocation timed out"),
+                            Some(duration_ms),
+                        )
+                        .await
                     }
                 };
                 if let Err(e) = update_result {
@@ -615,18 +665,25 @@ impl ProcessRegistry {
         metadata: &Option<serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
-        let llm_client = state.llm_client.as_ref().ok_or_else(|| {
-            NousError::Config(
-                "LLM client not configured — set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
-                    .into(),
-            )
+        use rig::client::completion::CompletionClient;
+        use rig::completion::Prompt as _;
+
+        let client = state.llm_client.as_ref().ok_or_else(|| {
+            NousError::Config("LLM client not configured — set AWS credentials".into())
         })?;
 
         let model = metadata
             .as_ref()
             .and_then(|m| m.get("model"))
             .and_then(|v| v.as_str())
-            .unwrap_or(&llm_client.default_model)
+            .unwrap_or(&state.default_model)
+            .to_string();
+
+        let preamble = metadata
+            .as_ref()
+            .and_then(|m| m.get("preamble"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
             .to_string();
 
         if is_async {
@@ -634,11 +691,15 @@ impl ProcessRegistry {
             let prompt_owned = prompt.to_string();
             let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
             let state_clone = state.clone();
-            let llm = llm_client.clone();
+            let client = client.clone();
             tokio::spawn(async move {
+                let agent = if preamble.is_empty() {
+                    client.agent(&model).build()
+                } else {
+                    client.agent(&model).preamble(&preamble).build()
+                };
                 let start = std::time::Instant::now();
-                let result =
-                    tokio::time::timeout(timeout, llm.invoke(&model, &prompt_owned)).await;
+                let result = tokio::time::timeout(timeout, agent.prompt(&prompt_owned)).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
                 let update_result = match result {
                     Ok(Ok(output)) => {
@@ -682,9 +743,15 @@ impl ProcessRegistry {
             return Ok(invocation.clone());
         }
 
+        let agent = if preamble.is_empty() {
+            client.agent(&model).build()
+        } else {
+            client.agent(&model).preamble(&preamble).build()
+        };
+
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
-        let result = tokio::time::timeout(timeout, llm_client.invoke(&model, prompt)).await;
+        let result = tokio::time::timeout(timeout, agent.prompt(prompt)).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
         match result {

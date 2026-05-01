@@ -154,6 +154,7 @@ mod tests {
             shutdown: CancellationToken::new(),
             process_registry: Arc::new(process_manager::ProcessRegistry::new()),
             llm_client: None,
+            default_model: "test-model".to_string(),
         };
         (state, tmp)
     }

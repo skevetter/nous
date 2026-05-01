@@ -3025,7 +3025,11 @@ pub async fn dispatch(
             let restart_policy = args
                 .get("restart_policy")
                 .and_then(|v| v.as_str())
-                .unwrap_or(if agent.auto_restart { "on-failure" } else { "never" });
+                .unwrap_or(if agent.auto_restart {
+                    "on-failure"
+                } else {
+                    "never"
+                });
             let max_restarts = args
                 .get("max_restarts")
                 .and_then(|v| v.as_i64())
@@ -3084,8 +3088,7 @@ pub async fn dispatch(
         }
         "agent_invoke_result" => {
             let invocation_id = require_str(args, "invocation_id")?;
-            let invocation =
-                agents::processes::get_invocation(&state.pool, invocation_id).await?;
+            let invocation = agents::processes::get_invocation(&state.pool, invocation_id).await?;
             Ok(serde_json::to_value(invocation).unwrap())
         }
         "agent_invocations" => {
@@ -3099,10 +3102,11 @@ pub async fn dispatch(
         "agent_process_status" => {
             let agent_id = require_str(args, "agent_id")?;
             let runtime_status = state.process_registry.get_status(agent_id).await;
-            let db_process = match agents::processes::get_active_process(&state.pool, agent_id).await? {
-                Some(p) => Some(p),
-                None => agents::processes::get_latest_process(&state.pool, agent_id).await?,
-            };
+            let db_process =
+                match agents::processes::get_active_process(&state.pool, agent_id).await? {
+                    Some(p) => Some(p),
+                    None => agents::processes::get_latest_process(&state.pool, agent_id).await?,
+                };
             Ok(serde_json::json!({
                 "runtime": runtime_status,
                 "process": db_process,
@@ -3111,8 +3115,7 @@ pub async fn dispatch(
         "agent_logs" => {
             let agent_id = require_str(args, "agent_id")?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let processes =
-                agents::processes::list_processes(&state.pool, agent_id, limit).await?;
+            let processes = agents::processes::list_processes(&state.pool, agent_id, limit).await?;
             Ok(serde_json::to_value(processes).unwrap())
         }
         "agent_update" => {

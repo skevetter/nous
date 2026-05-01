@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use nous_core::schedules::SystemClock;
 use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_core::schedules::SystemClock;
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
@@ -50,6 +50,7 @@ async fn execute(port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
         shutdown: shutdown.clone(),
         process_registry: process_registry.clone(),
         llm_client: None,
+        default_model: nous_daemon::llm_client::DEFAULT_MODEL.to_string(),
     };
 
     let _scheduler_handle = Scheduler::spawn(

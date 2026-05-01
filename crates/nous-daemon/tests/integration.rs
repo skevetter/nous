@@ -27,6 +27,7 @@ async fn test_state() -> (AppState, TempDir) {
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
+        default_model: "test-model".to_string(),
     };
     (state, tmp)
 }
@@ -44,6 +45,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
+        default_model: "test-model".to_string(),
     };
     (state, tmp)
 }

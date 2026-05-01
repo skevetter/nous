@@ -27,6 +27,7 @@ async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir
         shutdown: shutdown.clone(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
+        default_model: "test-model".to_string(),
     };
     (state, clock, shutdown, tmp)
 }
@@ -130,7 +131,10 @@ async fn test_once_schedule_fires_and_disables() {
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
         .unwrap();
-    assert!(!runs.is_empty(), "expected a run recorded for @once schedule");
+    assert!(
+        !runs.is_empty(),
+        "expected a run recorded for @once schedule"
+    );
     assert_eq!(runs[0].status, "completed");
 
     let updated = get_schedule(&state.pool, &schedule.id).await.unwrap();
@@ -224,7 +228,10 @@ async fn test_failed_action_recorded() {
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
         .unwrap();
-    assert!(!runs.is_empty(), "expected a run recorded for failed action");
+    assert!(
+        !runs.is_empty(),
+        "expected a run recorded for failed action"
+    );
     assert_eq!(runs[0].status, "failed");
     assert!(
         runs[0].error.is_some(),
@@ -265,14 +272,13 @@ async fn test_shell_timeout() {
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
         .unwrap();
-    assert!(!runs.is_empty(), "expected a run recorded for timed-out action");
+    assert!(
+        !runs.is_empty(),
+        "expected a run recorded for timed-out action"
+    );
     assert_eq!(runs[0].status, "timeout");
     assert!(
-        runs[0]
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("timed out"),
+        runs[0].error.as_deref().unwrap_or("").contains("timed out"),
         "expected timeout error message"
     );
 }
