@@ -8,5 +8,6 @@ pub mod memory;
 pub mod model;
 pub mod schedule;
 pub mod serve;
+pub mod stop;
 pub mod task;
 pub mod worktree;
