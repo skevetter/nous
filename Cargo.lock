@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "nous-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "axum",
  "clap",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "nous-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "nous-daemon"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "axum",
  "http-body-util",
