@@ -526,7 +526,7 @@ pub async fn mark_stale_runs_failed(pool: &SqlitePool) -> Result<u64, NousError>
 
 fn compute_next_run(cron_expr: &str, trigger_at: Option<i64>, now: i64) -> Option<i64> {
     if let Some(t) = trigger_at {
-        if t > now {
+        if t >= now {
             return Some(t);
         }
         return None;
