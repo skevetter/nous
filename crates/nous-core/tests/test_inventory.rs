@@ -416,6 +416,7 @@ async fn test_update_item_name() {
             path: None,
             metadata: None,
             tags: None,
+            status: None,
         },
     )
     .await
@@ -455,6 +456,7 @@ async fn test_update_item_tags() {
             path: None,
             metadata: None,
             tags: Some(vec!["new-tag-1".into(), "new-tag-2".into()]),
+            status: None,
         },
     )
     .await
@@ -494,6 +496,7 @@ async fn test_update_item_metadata() {
             path: None,
             metadata: Some(r#"{"v":"2","extra":"field"}"#.into()),
             tags: None,
+            status: None,
         },
     )
     .await
@@ -537,6 +540,7 @@ async fn test_update_deleted_item_fails() {
             path: None,
             metadata: None,
             tags: None,
+            status: None,
         },
     )
     .await;

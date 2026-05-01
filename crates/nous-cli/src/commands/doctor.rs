@@ -105,8 +105,28 @@ async fn check_database(data_dir: &std::path::Path) -> bool {
         }
     };
 
+    // Check tasks subsystem
+    check_subsystem_table(&pools.fts, "tasks").await;
+
+    // Check inventory subsystem
+    check_subsystem_table(&pools.fts, "inventory").await;
+
     pools.close().await;
     migration_ok
+}
+
+async fn check_subsystem_table(pool: &sqlx::SqlitePool, table: &str) {
+    match sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(pool)
+        .await
+    {
+        Ok(count) => {
+            println!("[OK] {table} table accessible ({count} rows)");
+        }
+        Err(e) => {
+            println!("[FAIL] {table} table not accessible: {e}");
+        }
+    }
 }
 
 fn check_port(port: u16) {

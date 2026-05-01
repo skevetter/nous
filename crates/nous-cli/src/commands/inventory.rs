@@ -208,6 +208,7 @@ async fn execute(cmd: InventoryCommands) -> Result<(), Box<dyn std::error::Error
                     path,
                     metadata,
                     tags: tags_vec,
+                    status: None,
                 },
             )
             .await?;

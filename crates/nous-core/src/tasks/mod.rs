@@ -565,8 +565,27 @@ pub async fn add_note(
     let row = row.ok_or_else(|| NousError::NotFound(format!("task '{task_id}' not found")))?;
     let room_id: Option<String> = row.try_get("room_id").map_err(NousError::Sqlite)?;
 
-    let room_id = room_id
-        .ok_or_else(|| NousError::NoLinkedRoom(format!("task '{task_id}' has no linked room")))?;
+    let room_id = match room_id {
+        Some(rid) => rid,
+        None => {
+            // Auto-create a room for this task
+            let room_name = format!("task-{task_id}");
+            let room = rooms::create_room(
+                pool,
+                &room_name,
+                Some(&format!("Auto-created discussion room for task {task_id}")),
+                None,
+            )
+            .await?;
+            // Link the room to the task
+            sqlx::query("UPDATE tasks SET room_id = ? WHERE id = ?")
+                .bind(&room.id)
+                .bind(task_id)
+                .execute(pool)
+                .await?;
+            room.id
+        }
+    };
 
     let metadata = serde_json::json!({
         "topics": [format!("task:{task_id}")]
@@ -930,9 +949,19 @@ pub async fn create_from_template(
         .map(|l| l.to_vec())
         .unwrap_or(template.default_labels);
 
-    let description = overrides_description
-        .map(|s| s.to_string())
-        .or(template.description_template);
+    // Substitute variables in description_template too
+    let description = if let Some(desc_override) = overrides_description {
+        Some(desc_override.to_string())
+    } else if let Some(mut desc) = template.description_template {
+        if let Some(vars) = title_vars {
+            for (key, value) in vars {
+                desc = desc.replace(&format!("{{{{{key}}}}}"), value);
+            }
+        }
+        Some(desc)
+    } else {
+        None
+    };
 
     create_task(
         pool,

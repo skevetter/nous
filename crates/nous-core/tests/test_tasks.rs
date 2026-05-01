@@ -771,7 +771,7 @@ async fn test_unlink_nonexistent_fails() {
 }
 
 #[tokio::test]
-async fn test_add_note_requires_room() {
+async fn test_add_note_auto_creates_room() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations("porter unicode61").await.unwrap();
@@ -789,8 +789,15 @@ async fn test_add_note_requires_room() {
     )
     .await
     .unwrap();
+    assert!(task.room_id.is_none());
+
+    // add_note should auto-create a room and succeed
     let result = tasks::add_note(&pools.fts, &task.id, "agent-1", "Hello").await;
-    assert!(matches!(result, Err(NousError::NoLinkedRoom(_))));
+    assert!(result.is_ok());
+
+    // Verify the task now has a room_id
+    let updated_task = tasks::get_task(&pools.fts, &task.id).await.unwrap();
+    assert!(updated_task.room_id.is_some());
 
     pools.close().await;
 }

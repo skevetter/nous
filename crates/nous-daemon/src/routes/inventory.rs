@@ -127,6 +127,7 @@ pub async fn update(
             path: body.path,
             metadata: body.metadata,
             tags: body.tags,
+            status: None,
         },
     )
     .await?;

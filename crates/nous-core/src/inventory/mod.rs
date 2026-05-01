@@ -158,6 +158,7 @@ pub struct UpdateItemRequest {
     pub path: Option<String>,
     pub metadata: Option<String>,
     pub tags: Option<Vec<String>>,
+    pub status: Option<InventoryStatus>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -271,6 +272,10 @@ pub async fn list_items(
     if let Some(ref s) = filter.status {
         conditions.push("status = ?".to_string());
         binds.push(s.as_str().to_string());
+    } else {
+        // By default, exclude soft-deleted items
+        conditions.push("status != ?".to_string());
+        binds.push("deleted".to_string());
     }
 
     if let Some(ref agent_id) = filter.owner_agent_id {
@@ -350,6 +355,18 @@ pub async fn update_item(
                 .unwrap_or_else(|_| "[]".to_string());
         sets.push("tags = ?".to_string());
         binds.push(tags_json);
+    }
+
+    if let Some(ref status) = req.status {
+        sets.push("status = ?".to_string());
+        binds.push(status.as_str().to_string());
+        if *status == InventoryStatus::Archived {
+            let now = chrono::Utc::now()
+                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string();
+            sets.push("archived_at = COALESCE(archived_at, ?)".to_string());
+            binds.push(now);
+        }
     }
 
     if sets.is_empty() {

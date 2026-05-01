@@ -686,7 +686,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: "inventory_update",
-            description: "Update an inventory item (name, path, tags, metadata)",
+            description: "Update an inventory item (name, path, tags, metadata, status)",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -694,7 +694,8 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                     "name": { "type": "string", "description": "New name" },
                     "path": { "type": "string", "description": "New path" },
                     "tags": { "type": "array", "items": { "type": "string" }, "description": "New tags (replaces existing)" },
-                    "metadata": { "type": "string", "description": "New JSON metadata (replaces existing)" }
+                    "metadata": { "type": "string", "description": "New JSON metadata (replaces existing)" },
+                    "status": { "type": "string", "description": "New status: active, archived, deleted" }
                 },
                 "required": ["id"]
             }),
@@ -2125,6 +2126,11 @@ pub async fn dispatch(
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect()
             });
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .transpose()?;
             let item = inventory::update_item(
                 &state.pool,
                 inventory::UpdateItemRequest {
@@ -2133,6 +2139,7 @@ pub async fn dispatch(
                     path,
                     metadata,
                     tags,
+                    status,
                 },
             )
             .await?;
