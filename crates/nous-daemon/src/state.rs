@@ -7,6 +7,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::llm_client::LlmClient;
 use crate::process_manager::ProcessRegistry;
 
 #[derive(Clone)]
@@ -18,4 +19,5 @@ pub struct AppState {
     pub schedule_notify: Arc<Notify>,
     pub shutdown: CancellationToken,
     pub process_registry: Arc<ProcessRegistry>,
+    pub llm_client: Option<Arc<LlmClient>>,
 }

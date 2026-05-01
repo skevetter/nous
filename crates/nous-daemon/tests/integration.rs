@@ -26,6 +26,7 @@ async fn test_state() -> (AppState, TempDir) {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
+        llm_client: None,
     };
     (state, tmp)
 }
@@ -42,6 +43,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
+        llm_client: None,
     };
     (state, tmp)
 }

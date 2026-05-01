@@ -422,7 +422,7 @@ impl ProcessRegistry {
         metadata: Option<serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
-        let metadata_str = metadata.map(|v| serde_json::to_string(&v).unwrap_or_default());
+        let metadata_str = metadata.as_ref().and_then(|v| serde_json::to_string(v).ok());
 
         let invocation =
             processes::create_invocation(&state.pool, agent_id, prompt, metadata_str.as_deref())
@@ -433,6 +433,31 @@ impl ProcessRegistry {
             processes::update_invocation(&state.pool, &invocation.id, "running", None, None, None)
                 .await?;
 
+        let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+
+        match agent.process_type.as_deref() {
+            Some("claude") => {
+                self.invoke_claude(state, &invocation, prompt, timeout_secs, &metadata, is_async)
+                    .await
+            }
+            Some("shell") | None => {
+                self.invoke_shell(state, &invocation, prompt, timeout_secs, is_async)
+                    .await
+            }
+            Some(other) => Err(NousError::Config(format!(
+                "unsupported process_type '{other}'"
+            ))),
+        }
+    }
+
+    async fn invoke_shell(
+        &self,
+        state: &AppState,
+        invocation: &Invocation,
+        prompt: &str,
+        timeout_secs: Option<i64>,
+        is_async: bool,
+    ) -> Result<Invocation, NousError> {
         if is_async {
             let inv_id = invocation.id.clone();
             let prompt_owned = prompt.to_string();
@@ -494,17 +519,13 @@ impl ProcessRegistry {
                     tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
                 }
             });
-            return Ok(invocation);
+            return Ok(invocation.clone());
         }
 
-        // Synchronous: execute inline. For shell process type, run the prompt as a shell command.
-        // For other types, we just mark as completed with a note.
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
 
         let result = tokio::time::timeout(timeout, async {
-            // If there's a running process, pipe the prompt to it.
-            // Otherwise, execute prompt directly as a shell command.
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(prompt)
@@ -556,6 +577,124 @@ impl ProcessRegistry {
                     "failed",
                     None,
                     Some(&err),
+                    Some(duration_ms),
+                )
+                .await
+            }
+            Err(_) => {
+                processes::update_invocation(
+                    &state.pool,
+                    &invocation.id,
+                    "timeout",
+                    None,
+                    Some("invocation timed out"),
+                    Some(duration_ms),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn invoke_claude(
+        &self,
+        state: &AppState,
+        invocation: &Invocation,
+        prompt: &str,
+        timeout_secs: Option<i64>,
+        metadata: &Option<serde_json::Value>,
+        is_async: bool,
+    ) -> Result<Invocation, NousError> {
+        let llm_client = state.llm_client.as_ref().ok_or_else(|| {
+            NousError::Config(
+                "LLM client not configured — set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+                    .into(),
+            )
+        })?;
+
+        let model = metadata
+            .as_ref()
+            .and_then(|m| m.get("model"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&llm_client.default_model)
+            .to_string();
+
+        if is_async {
+            let inv_id = invocation.id.clone();
+            let prompt_owned = prompt.to_string();
+            let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+            let state_clone = state.clone();
+            let llm = llm_client.clone();
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let result =
+                    tokio::time::timeout(timeout, llm.invoke(&model, &prompt_owned)).await;
+                let duration_ms = start.elapsed().as_millis() as i64;
+                let update_result = match result {
+                    Ok(Ok(output)) => {
+                        processes::update_invocation(
+                            &state_clone.pool,
+                            &inv_id,
+                            "completed",
+                            Some(&output),
+                            None,
+                            Some(duration_ms),
+                        )
+                        .await
+                    }
+                    Ok(Err(err)) => {
+                        processes::update_invocation(
+                            &state_clone.pool,
+                            &inv_id,
+                            "failed",
+                            None,
+                            Some(&err.to_string()),
+                            Some(duration_ms),
+                        )
+                        .await
+                    }
+                    Err(_) => {
+                        processes::update_invocation(
+                            &state_clone.pool,
+                            &inv_id,
+                            "timeout",
+                            None,
+                            Some("invocation timed out"),
+                            Some(duration_ms),
+                        )
+                        .await
+                    }
+                };
+                if let Err(e) = update_result {
+                    tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
+                }
+            });
+            return Ok(invocation.clone());
+        }
+
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+        let result = tokio::time::timeout(timeout, llm_client.invoke(&model, prompt)).await;
+        let duration_ms = start.elapsed().as_millis() as i64;
+
+        match result {
+            Ok(Ok(output)) => {
+                processes::update_invocation(
+                    &state.pool,
+                    &invocation.id,
+                    "completed",
+                    Some(&output),
+                    None,
+                    Some(duration_ms),
+                )
+                .await
+            }
+            Ok(Err(err)) => {
+                processes::update_invocation(
+                    &state.pool,
+                    &invocation.id,
+                    "failed",
+                    None,
+                    Some(&err.to_string()),
                     Some(duration_ms),
                 )
                 .await
