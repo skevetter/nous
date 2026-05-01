@@ -15,6 +15,9 @@ use commands::worktree::WorktreeCommands;
 #[derive(Parser)]
 #[command(name = "nous", about = "The nous platform CLI")]
 struct Cli {
+    #[arg(long, global = true, help = "Override daemon port")]
+    port: Option<u16>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -86,42 +89,44 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    let port = cli.port;
+
     match cli.command {
         Commands::Doctor => {
-            commands::doctor::run().await;
+            commands::doctor::run(port).await;
         }
         Commands::Agent { command } => {
-            commands::agent::run(command).await;
+            commands::agent::run(command, port).await;
         }
         Commands::Artifact { command } => {
-            commands::artifact::run(command).await;
+            commands::artifact::run(command, port).await;
         }
         Commands::Chat { command } => {
-            commands::chat::run(command).await;
+            commands::chat::run(command, port).await;
         }
         Commands::Inventory { command } => {
-            commands::inventory::run(command).await;
+            commands::inventory::run(command, port).await;
         }
         Commands::Memory { command } => {
-            commands::memory::run(command).await;
+            commands::memory::run(command, port).await;
         }
         Commands::Model { command } => {
-            commands::model::run(command).await;
+            commands::model::run(command, port).await;
         }
         Commands::Task { command } => {
-            commands::task::run(command).await;
+            commands::task::run(command, port).await;
         }
         Commands::Schedule { command } => {
-            commands::schedule::run(command).await;
+            commands::schedule::run(command, port).await;
         }
         Commands::Worktree { command } => {
-            commands::worktree::run(command).await;
+            commands::worktree::run(command, port).await;
         }
         Commands::McpServer { tools } => {
-            commands::mcp_server::run(tools).await;
+            commands::mcp_server::run(tools, port).await;
         }
         Commands::Serve => {
-            commands::serve::run().await;
+            commands::serve::run(port).await;
         }
     }
 }

@@ -12,8 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-pub async fn run(tools_filter: Option<String>) {
-    if let Err(e) = execute(tools_filter).await {
+pub async fn run(tools_filter: Option<String>, port: Option<u16>) {
+    if let Err(e) = execute(tools_filter, port).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -37,8 +37,11 @@ fn build_prefixes(filter: &str) -> Vec<&str> {
     filter.split(',').map(prefix_to_tool_prefix).collect()
 }
 
-async fn execute(tools_filter: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
+async fn execute(tools_filter: Option<String>, port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = Config::load()?;
+    if let Some(p) = port {
+        config.port = p;
+    }
     config.ensure_dirs()?;
 
     let pools = DbPools::connect(&config.data_dir).await?;
