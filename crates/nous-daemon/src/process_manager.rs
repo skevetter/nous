@@ -714,12 +714,14 @@ impl ProcessRegistry {
                         .await
                     }
                     Ok(Err(err)) => {
+                        let error_detail = format!("Bedrock error (model={model}): {err:?}");
+                        tracing::error!(inv_id = %inv_id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
                         processes::update_invocation(
                             &state_clone.pool,
                             &inv_id,
                             "failed",
                             None,
-                            Some(&err.to_string()),
+                            Some(&error_detail),
                             Some(duration_ms),
                         )
                         .await
@@ -767,12 +769,14 @@ impl ProcessRegistry {
                 .await
             }
             Ok(Err(err)) => {
+                let error_detail = format!("Bedrock error (model={model}): {err:?}");
+                tracing::error!(invocation_id = %invocation.id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
                 processes::update_invocation(
                     &state.pool,
                     &invocation.id,
                     "failed",
                     None,
-                    Some(&err.to_string()),
+                    Some(&error_detail),
                     Some(duration_ms),
                 )
                 .await

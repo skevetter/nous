@@ -59,20 +59,20 @@ async fn execute(
             }
         };
 
-    use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
-    use rig::client::ProviderClient;
+    use nous_daemon::llm_client::{build_client, DEFAULT_MODEL};
 
-    let (llm_client, default_model) = match LlmClient::from_env() {
-        Ok(client) => {
-            tracing::info!("LLM client configured for Bedrock");
-            let model =
-                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-            (Some(Arc::new(client)), model)
-        }
-        Err(e) => {
-            tracing::warn!("LLM client not available (no AWS credentials): {e}");
-            (None, DEFAULT_MODEL.to_string())
-        }
+    let has_credentials = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
+        || std::env::var("AWS_PROFILE").is_ok()
+        || std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_ok();
+
+    let (llm_client, default_model) = if has_credentials {
+        let client = build_client().await;
+        let model = std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        tracing::info!(region = %std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".into()), model = %model, "LLM client configured for Bedrock");
+        (Some(Arc::new(client)), model)
+    } else {
+        tracing::warn!("LLM client not available (no AWS credentials found in environment)");
+        (None, DEFAULT_MODEL.to_string())
     };
 
     let state = AppState {
