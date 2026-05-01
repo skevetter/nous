@@ -433,9 +433,15 @@ impl ProcessRegistry {
             processes::update_invocation(&state.pool, &invocation.id, "running", None, None, None)
                 .await?;
 
-        let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+        let agent = match nous_core::agents::get_agent_by_id(&state.pool, agent_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = processes::update_invocation(&state.pool, &invocation.id, "failed", None, Some(&e.to_string()), None).await;
+                return Err(e);
+            }
+        };
 
-        match agent.process_type.as_deref() {
+        let result = match agent.process_type.as_deref() {
             Some("claude") => {
                 self.invoke_claude(state, &invocation, prompt, timeout_secs, &metadata, is_async)
                     .await
@@ -447,7 +453,12 @@ impl ProcessRegistry {
             Some(other) => Err(NousError::Config(format!(
                 "unsupported process_type '{other}'"
             ))),
+        };
+
+        if let Err(ref e) = result {
+            let _ = processes::update_invocation(&state.pool, &invocation.id, "failed", None, Some(&e.to_string()), None).await;
         }
+        result
     }
 
     async fn invoke_shell(
