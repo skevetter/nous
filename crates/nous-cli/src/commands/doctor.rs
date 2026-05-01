@@ -6,24 +6,27 @@ use nous_core::db::DbPools;
 
 use super::model;
 
-const DAEMON_PORT: u16 = 8377;
-
-pub async fn run() {
+pub async fn run(port: Option<u16>) {
     println!("nous doctor v{}", env!("CARGO_PKG_VERSION"));
     println!("==================");
 
     let mut has_failure = false;
 
-    let data_dir = match check_config() {
-        Ok(config) => Some(config.data_dir),
+    let config = match check_config() {
+        Ok(mut config) => {
+            if let Some(p) = port {
+                config.port = p;
+            }
+            Some(config)
+        }
         Err(()) => {
             has_failure = true;
             None
         }
     };
 
-    if let Some(ref dir) = data_dir {
-        if !check_storage(dir) {
+    if let Some(ref cfg) = config {
+        if !check_storage(&cfg.data_dir) {
             has_failure = true;
         }
     } else {
@@ -31,8 +34,8 @@ pub async fn run() {
         has_failure = true;
     }
 
-    if let Some(ref dir) = data_dir {
-        if !check_database(dir).await {
+    if let Some(ref cfg) = config {
+        if !check_database(&cfg.data_dir).await {
             has_failure = true;
         }
     } else {
@@ -40,7 +43,8 @@ pub async fn run() {
         has_failure = true;
     }
 
-    check_port(DAEMON_PORT);
+    let daemon_port = config.as_ref().map(|c| c.port).unwrap_or(8377);
+    check_port(daemon_port);
     check_embedding_model();
 
     if has_failure {

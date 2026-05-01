@@ -169,15 +169,18 @@ pub enum TemplateCommands {
     },
 }
 
-pub async fn run(cmd: TaskCommands) {
-    if let Err(e) = execute(cmd).await {
+pub async fn run(cmd: TaskCommands, port: Option<u16>) {
+    if let Err(e) = execute(cmd, port).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
 
-async fn execute(cmd: TaskCommands) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
+async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = Config::load()?;
+    if let Some(p) = port {
+        config.port = p;
+    }
     config.ensure_dirs()?;
     let pools = DbPools::connect(&config.data_dir).await?;
     pools.run_migrations(&config.search.tokenizer).await?;

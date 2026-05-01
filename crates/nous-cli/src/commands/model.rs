@@ -17,7 +17,7 @@ const TOKENIZER_URL: &str =
 const EXPECTED_MODEL_SIZE_MIN: u64 = 80_000_000;
 const EXPECTED_TOKENIZER_SIZE_MIN: u64 = 600_000;
 
-pub async fn run(command: ModelCommands) {
+pub async fn run(command: ModelCommands, _port: Option<u16>) {
     match command {
         ModelCommands::Download => download().await,
     }
