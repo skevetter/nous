@@ -30,6 +30,26 @@ pub enum AgentCommands {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Update agent config (process type, spawn command, working dir, etc.)
+    Update {
+        /// Agent ID
+        id: String,
+        /// Process type: shell, claude, http
+        #[arg(long)]
+        process_type: Option<String>,
+        /// Default spawn command
+        #[arg(long)]
+        spawn_command: Option<String>,
+        /// Working directory
+        #[arg(long)]
+        working_dir: Option<String>,
+        /// Auto-restart on failure
+        #[arg(long)]
+        auto_restart: Option<bool>,
+        /// JSON metadata string
+        #[arg(long)]
+        metadata: Option<String>,
+    },
     /// Deregister an agent (remove from registry)
     Deregister {
         /// Agent ID or name
@@ -346,6 +366,26 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     metadata,
                     status: agent_status,
                 },
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&agent)?);
+        }
+        AgentCommands::Update {
+            id,
+            process_type,
+            spawn_command,
+            working_dir,
+            auto_restart,
+            metadata,
+        } => {
+            let agent = agents::processes::update_agent(
+                pool,
+                &id,
+                process_type.as_deref(),
+                spawn_command.as_deref(),
+                working_dir.as_deref(),
+                auto_restart,
+                metadata.as_deref(),
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&agent)?);
