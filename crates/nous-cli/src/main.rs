@@ -6,6 +6,7 @@ use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
 use commands::inventory::InventoryCommands;
+use commands::llm::LlmCommands;
 use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
 use commands::schedule::ScheduleCommands;
@@ -40,6 +41,11 @@ enum Commands {
     Chat {
         #[command(subcommand)]
         command: ChatCommands,
+    },
+    /// LLM operations
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommands,
     },
     /// Inventory management (P5 artifact registry)
     Inventory {
@@ -103,6 +109,9 @@ async fn main() {
         }
         Commands::Chat { command } => {
             commands::chat::run(command, port).await;
+        }
+        Commands::Llm { command } => {
+            commands::llm::run(command).await;
         }
         Commands::Inventory { command } => {
             commands::inventory::run(command, port).await;

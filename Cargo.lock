@@ -2289,6 +2289,8 @@ dependencies = [
  "nous-core",
  "nous-daemon",
  "reqwest 0.12.28",
+ "rig-bedrock",
+ "rig-core",
  "serde_json",
  "sqlx",
  "tokio",
