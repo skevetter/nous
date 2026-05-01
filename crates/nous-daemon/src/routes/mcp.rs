@@ -3098,10 +3098,11 @@ pub async fn dispatch(
         }
         "agent_process_status" => {
             let agent_id = require_str(args, "agent_id")?;
-            // Get runtime status from process registry
             let runtime_status = state.process_registry.get_status(agent_id).await;
-            // Get DB record
-            let db_process = agents::processes::get_active_process(&state.pool, agent_id).await?;
+            let db_process = match agents::processes::get_active_process(&state.pool, agent_id).await? {
+                Some(p) => Some(p),
+                None => agents::processes::get_latest_process(&state.pool, agent_id).await?,
+            };
             Ok(serde_json::json!({
                 "runtime": runtime_status,
                 "process": db_process,

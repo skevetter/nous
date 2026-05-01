@@ -157,6 +157,22 @@ pub async fn get_active_process(
         .map_err(NousError::Sqlite)
 }
 
+pub async fn get_latest_process(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<Option<Process>, NousError> {
+    let row = sqlx::query(
+        "SELECT * FROM agent_processes WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|r| Process::from_row(&r))
+        .transpose()
+        .map_err(NousError::Sqlite)
+}
+
 pub async fn update_process_status(
     pool: &SqlitePool,
     process_id: &str,

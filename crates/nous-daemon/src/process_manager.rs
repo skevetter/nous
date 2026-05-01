@@ -14,7 +14,7 @@ use crate::state::AppState;
 pub struct ProcessHandle {
     pub process_id: String,
     pub agent_id: String,
-    pub child: tokio::process::Child,
+    pub child: Option<tokio::process::Child>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub cancel: CancellationToken,
 }
@@ -124,7 +124,7 @@ impl ProcessRegistry {
         let handle = ProcessHandle {
             process_id: process.id.clone(),
             agent_id: agent_id.to_string(),
-            child,
+            child: Some(child),
             started_at: chrono::Utc::now(),
             cancel: cancel.clone(),
         };
@@ -199,7 +199,9 @@ impl ProcessRegistry {
                             ).await;
                             // Kill the child from handles
                             if let Some(mut handle) = state.process_registry.handles.lock().await.remove(&agent_id) {
-                                let _ = handle.child.kill().await;
+                                if let Some(mut child) = handle.child.take() {
+                                    let _ = child.kill().await;
+                                }
                             }
                             return;
                         }
@@ -256,18 +258,17 @@ impl ProcessRegistry {
     }
 
     async fn wait_for_exit(state: &AppState, agent_id: &str) -> (Option<i32>, Option<String>) {
-        let mut handles = state.process_registry.handles.lock().await;
-        if let Some(handle) = handles.get_mut(agent_id) {
-            // Read output from child
-            let child = &mut handle.child;
+        // Take the child out of the handle so we release the lock before awaiting.
+        // The handle entry stays in the map so stop() can still find the process.
+        let child = {
+            let mut handles = state.process_registry.handles.lock().await;
+            handles.get_mut(agent_id).and_then(|h| h.child.take())
+        };
 
+        if let Some(mut child) = child {
             let status = child.wait().await;
             let exit_code = status.ok().and_then(|s| s.code());
-
-            // Try to read any remaining output
-            let output = None; // stdout was piped but we read it async
-
-            (exit_code, output)
+            (exit_code, None)
         } else {
             (None, None)
         }
@@ -301,37 +302,38 @@ impl ProcessRegistry {
         // Cancel the monitor task
         handle.cancel.cancel();
 
-        if force {
-            // SIGKILL
-            let _ = handle.child.kill().await;
-        } else {
-            // Try SIGTERM, then wait grace period, then SIGKILL
-            #[cfg(unix)]
-            {
-                if let Some(pid) = handle.child.id() {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+        let exit_code = if let Some(mut child) = handle.child.take() {
+            if force {
+                let _ = child.kill().await;
+            } else {
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = child.id() {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGTERM);
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill().await;
+                }
+
+                let grace = Duration::from_secs(grace_secs);
+                match tokio::time::timeout(grace, child.wait()).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let _ = child.kill().await;
                     }
                 }
             }
-            #[cfg(not(unix))]
-            {
-                let _ = handle.child.kill().await;
-            }
-
-            let child = &mut handle.child;
-            let grace = Duration::from_secs(grace_secs);
-            match tokio::time::timeout(grace, child.wait()).await {
-                Ok(_) => {} // exited within grace period
-                Err(_) => {
-                    // Force kill after grace period
-                    let _ = handle.child.kill().await;
-                }
-            }
-        }
-
-        let exit_status = handle.child.try_wait().ok().flatten();
-        let exit_code = exit_status.and_then(|s| s.code());
+            child.try_wait().ok().flatten().and_then(|s| s.code())
+        } else {
+            // Child already taken by monitor wait_for_exit(). Process killed via kill_on_drop when monitor future drops.
+            // Brief yield to let the kill propagate.
+            tokio::task::yield_now().await;
+            None
+        };
 
         handles.remove(agent_id);
         drop(handles);
@@ -432,7 +434,66 @@ impl ProcessRegistry {
                 .await?;
 
         if is_async {
-            // Return immediately, let the caller poll for results
+            let inv_id = invocation.id.clone();
+            let prompt_owned = prompt.to_string();
+            let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let result = tokio::time::timeout(timeout, async {
+                    let output = Command::new("sh")
+                        .arg("-c")
+                        .arg(&prompt_owned)
+                        .kill_on_drop(true)
+                        .output()
+                        .await;
+                    match output {
+                        Ok(out) => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let combined = if stderr.is_empty() {
+                                stdout.to_string()
+                            } else {
+                                format!("{stdout}\n{stderr}")
+                            };
+                            if out.status.success() {
+                                Ok(combined)
+                            } else {
+                                Err(format!(
+                                    "exit code {}: {combined}",
+                                    out.status.code().unwrap_or(-1)
+                                ))
+                            }
+                        }
+                        Err(e) => Err(format!("failed to execute: {e}")),
+                    }
+                })
+                .await;
+                let duration_ms = start.elapsed().as_millis() as i64;
+                let update_result = match result {
+                    Ok(Ok(output)) => {
+                        processes::update_invocation(
+                            &state_clone.pool, &inv_id, "completed",
+                            Some(&output), None, Some(duration_ms),
+                        ).await
+                    }
+                    Ok(Err(err)) => {
+                        processes::update_invocation(
+                            &state_clone.pool, &inv_id, "failed",
+                            None, Some(&err), Some(duration_ms),
+                        ).await
+                    }
+                    Err(_) => {
+                        processes::update_invocation(
+                            &state_clone.pool, &inv_id, "timeout",
+                            None, Some("invocation timed out"), Some(duration_ms),
+                        ).await
+                    }
+                };
+                if let Err(e) = update_result {
+                    tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
+                }
+            });
             return Ok(invocation);
         }
 
@@ -520,7 +581,7 @@ impl ProcessRegistry {
             Some(ProcessStatus {
                 process_id: handle.process_id.clone(),
                 agent_id: handle.agent_id.clone(),
-                pid: handle.child.id(),
+                pid: handle.child.as_ref().and_then(|c| c.id()),
                 uptime_secs: uptime.num_seconds(),
             })
         } else {
