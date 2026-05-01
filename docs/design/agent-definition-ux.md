@@ -135,7 +135,7 @@ The `taps/` subdirectory is populated by `nous tap add`; its contents are manage
 
 ### 3.2 Agent Definition File Format
 
-An agent definition is a TOML file. Fields map directly to the `agents::RegisterAgentRequest` and `agents::UpdateAgentRequest` structures in `crates/nous-core/src/agents/mod.rs`.
+An agent definition is a TOML file. Fields map directly to the `agents::RegisterAgentRequest` structure in `crates/nous-core/src/agents/mod.rs`.
 
 ```toml
 # ~/.config/nous/agents/reviewer.toml
