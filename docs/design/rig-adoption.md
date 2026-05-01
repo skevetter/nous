@@ -98,8 +98,8 @@ built from that client.
   `tool_use` blocks back to the Rust function automatically.
 - **Multi-turn**: pass a `Vec<Message>` history through `agent.chat(...)` or
   manage context windows via `.dynamic_context(...)`.
-- **Streaming**: call `agent.stream(prompt).await` returning
-  `StreamingPrompt`; iterate with `while let Some(chunk) = stream.next().await`.
+- **Streaming**: call `agent.stream_prompt(prompt).await` returning
+  `StreamingPromptRequest`; iterate with `while let Some(chunk) = stream.next().await`.
 - **Structured extraction**: `client.extractor::<T>(model)` for typed JSON output.
 
 ### What does NOT change
@@ -111,6 +111,8 @@ built from that client.
 
 ## 3. rig API Mapping
 
+> **Note**: Import paths below are based on rig-core 0.36 / rig-bedrock 0.4.5 public API. Verify against your pinned version with `cargo doc --open` before use.
+
 ### Core traits
 
 | rig type | Crate | Role in our system |
@@ -121,7 +123,7 @@ built from that client.
 | `Agent<M>` | `rig-core` | Built agent; call `.prompt(text).await` → `Result<String, ...>` |
 | `Prompt` trait | `rig-core` | `Agent` implements this; `.prompt(text).await` is the primary call site |
 | `CompletionModel` trait | `rig-core` | Lower-level trait; `Agent` uses it internally but callers stay at the `Prompt` level |
-| `Tool` trait | `rig-core` | Implement or `#[derive(Tool)]` to register function-calling tools with an agent |
+| `Tool` trait | `rig-core` | Implement or annotate with `#[rig_tool]` (from `rig-derive` crate) to register function-calling tools with an agent |
 
 ### Agent builder — method reference
 
@@ -129,7 +131,7 @@ built from that client.
 use rig::client::CompletionClient;
 use rig_bedrock::client::Client;
 
-let bedrock = Client::from_env().await;   // uses aws-config credential chain
+let bedrock = Client::from_env();   // synchronous — reads AWS env vars immediately
 
 let agent = bedrock
     .agent("us.anthropic.claude-sonnet-4-20250514-v1:0")
@@ -200,8 +202,8 @@ Bedrock. The three providers to enable in the follow-on iterations:
 | Provider | Crate | `Cargo.toml` |
 |---|---|---|
 | AWS Bedrock | `rig-bedrock` (separate crate) | `rig-bedrock = "0.4.5"` |
-| Anthropic direct | via `rig-core` built-in provider | `rig-core = { version = "0.11", features = [] }` + `ANTHROPIC_API_KEY` |
-| OpenAI | via `rig-core` built-in provider | `rig-core = { version = "0.11", features = [] }` + `OPENAI_API_KEY` |
+| Anthropic direct | via `rig-core` built-in provider | `rig-core = { version = "0.36", features = [] }` + `ANTHROPIC_API_KEY` |
+| OpenAI | via `rig-core` built-in provider | `rig-core = { version = "0.36", features = [] }` + `OPENAI_API_KEY` |
 
 `rig-core` ships 25 built-in providers. Anthropic and OpenAI are available
 without extra crates:
@@ -229,6 +231,7 @@ selects the provider at dispatch time (see Section 8).
 | Feature flag | Adds |
 |---|---|
 | *(none needed for basic Agent)* | Core agents, completion, tools, streaming included by default |
+| `derive` | Enables `#[rig_tool]` attribute macro from `rig-derive` — required when annotating functions as tools |
 | `lancedb` | Vector store integration (not needed for this migration) |
 | `fastembed` | Local embedding (not needed — we use OnnxEmbeddingModel) |
 
@@ -302,7 +305,7 @@ let llm_client = match nous_daemon::llm_client::LlmClient::from_env() {
 use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
 use rig::client::ProviderClient;
 
-let (llm_client, default_model) = match LlmClient::from_env().await {
+let (llm_client, default_model) = match LlmClient::from_env() {
     Ok(client) => {
         tracing::info!("LLM client configured for Bedrock");
         let model = std::env::var("NOUS_LLM_MODEL")
@@ -317,9 +320,6 @@ let (llm_client, default_model) = match LlmClient::from_env().await {
 ```
 
 Add `default_model` to the `AppState { … }` initializer on line 69.
-
-Note: `Client::from_env()` is async (it calls `aws-config`'s async loader).
-The `main` function is already `#[tokio::main]` so `.await` is fine.
 
 ### Step 5 — Update `process_manager.rs` (`invoke_claude`, lines 609–725)
 
@@ -370,15 +370,26 @@ async fn invoke_claude(
 
 ### Step 6 — Update the CLI `AppState` constructors
 
-`main.rs` in `crates/nous-cli` and test helper constructors in
-`crates/nous-daemon` that build `AppState` directly must add the
-`default_model` field. Search for `AppState {` across the workspace:
+Seven sites across the workspace build `AppState` directly and must add the
+`default_model` field:
+
+| File | Line | Notes |
+|---|---|---|
+| `crates/nous-cli/src/commands/serve.rs` | 44 | CLI serve command |
+| `crates/nous-cli/src/commands/mcp_server.rs` | 59 | CLI MCP server command |
+| `crates/nous-daemon/src/lib.rs` | 148 | Test helper constructor |
+| `crates/nous-daemon/src/main.rs` | 69 | Daemon entry point (already updated in Step 4) |
+| `crates/nous-daemon/tests/integration.rs` | 21 | Integration test fixture |
+| `crates/nous-daemon/tests/integration.rs` | 38 | Second integration test fixture |
+| `crates/nous-daemon/tests/test_scheduler.rs` | 21 | Scheduler test fixture |
+
+Search for any additional `AppState {` constructors introduced since this doc was written:
 
 ```bash
-grep -rn "AppState {" crates/
+grep -rn --include='*.rs' "AppState {" crates/
 ```
 
-Add `default_model: DEFAULT_MODEL.to_string()` (or a test-appropriate value)
+Add `default_model: DEFAULT_MODEL.to_string()` (or a test-appropriate value such as `"test-model".to_string()`)
 to each constructor.
 
 ### Step 7 — Delete dead code
@@ -435,7 +446,7 @@ so non-Bedrock CI jobs skip it.
 
 ### Version compatibility risks
 
-- `rig-bedrock` 0.4.5 targets `rig-core` ~0.9–0.11. Check that workspace-level
+- `rig-bedrock` 0.4.5 targets `rig-core` ^0.36.0. Check that workspace-level
   `serde` and `serde_json` versions satisfy both trees (they do at current
   workspace versions `1.x`).
 - `tokio = "1"` (workspace) is compatible with rig-core's `tokio` requirement.
@@ -447,79 +458,109 @@ so non-Bedrock CI jobs skip it.
 
 ### What the existing tests cover
 
-`crates/nous-daemon/src/llm_client.rs` lines 157–370 contain 11 unit tests:
+`crates/nous-daemon/src/llm_client.rs` lines 157–370 contain 15 unit tests:
 
-- `test_converse_url` / `test_converse_url_different_region` — pure URL
-  construction, deleted with the module.
-- `test_build_request_body*` — pure JSON construction, deleted with the module.
-- `test_parse_converse_response*` — pure JSON parsing, deleted with the module.
-- `test_sign_request*` — validates `Authorization` header shape, deleted with
-  the module.
-- `test_from_env_*` — env-var parsing, replaced by rig-bedrock's own tests.
+| Test function | Group | Fate |
+|---|---|---|
+| `test_converse_url` | URL construction | deleted with module |
+| `test_converse_url_different_region` | URL construction | deleted with module |
+| `test_build_request_body` | JSON construction | deleted with module |
+| `test_build_request_body_special_chars` | JSON construction | deleted with module |
+| `test_parse_converse_response_valid` | JSON parsing | deleted with module |
+| `test_parse_converse_response_empty_content` | JSON parsing | deleted with module |
+| `test_parse_converse_response_missing_output` | JSON parsing | deleted with module |
+| `test_parse_converse_response_invalid_json` | JSON parsing | deleted with module |
+| `test_sign_request_produces_auth_header` | SigV4 signing | deleted with module |
+| `test_sign_request_with_session_token` | SigV4 signing | deleted with module |
+| `test_from_env_missing_access_key` | env-var parsing | replaced by rig-bedrock's own tests |
+| `test_from_env_missing_secret_key` | env-var parsing | replaced by rig-bedrock's own tests |
+| `test_from_env_success_with_defaults` | env-var parsing | replaced by rig-bedrock's own tests |
+| `test_from_env_custom_region_and_model` | env-var parsing | replaced by rig-bedrock's own tests |
+| `test_from_env_fallback_to_default_region` | env-var parsing | replaced by rig-bedrock's own tests |
 
 None of these tests make real network calls. After replacing `llm_client.rs`,
 these tests are gone. The coverage goal is to replace them with equivalent
 tests that verify the dispatch layer, not rig's internals.
 
-### Unit tests — mock provider via rig's `MockCompletionModel`
+### Unit tests — mock provider via `FakeClient`
 
-rig-core exposes a mock provider under `rig::providers::mock` (in test builds).
-Use it to test `invoke_claude` without real credentials:
+`rig::providers::mock` does not exist in rig-core 0.36. Implement a thin
+`FakeClient` that satisfies the `CompletionModel` trait directly — this is the
+guaranteed-to-compile approach and isolates the timeout/async/status-update
+logic from network behaviour:
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use rig::providers::mock::MockCompletionModel;
-    use rig::client::CompletionClient;
+    use rig::completion::{CompletionModel, CompletionRequest, CompletionResponse};
+    use rig::message::AssistantContent;
+    use std::sync::Arc;
+
+    struct FakeClient {
+        response: String,
+    }
+
+    impl CompletionModel for FakeClient {
+        type Response = CompletionResponse<()>;
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<()>, rig::completion::CompletionError> {
+            Ok(CompletionResponse {
+                choice: rig::completion::ModelChoice::Message(
+                    AssistantContent::text(&self.response)
+                ),
+                raw_response: (),
+            })
+        }
+    }
 
     #[tokio::test]
     async fn invoke_claude_returns_model_output() {
-        let mock = MockCompletionModel::new("expected output");
-        // build an AppState with mock wrapped in Option<Arc<...>>
+        let fake = Arc::new(FakeClient { response: "expected output".into() });
+        // build AppState with llm_client: Some(fake) (wrapped per AppState type)
         // call invoke_claude with is_async = false
         // assert invocation.output == "expected output"
     }
 
     #[tokio::test]
     async fn invoke_claude_propagates_error() {
-        let mock = MockCompletionModel::failing("provider error");
+        // FakeClient returning Err exercises the error path
         // assert invocation.status == "failed"
     }
 }
 ```
 
-If `rig::providers::mock` is not available in rig-core 0.11, implement a thin
-wrapper that implements `CompletionClient` and `CompletionModel` directly:
+> **Note**: The `CompletionResponse` and `AssistantContent` field names above
+> are based on rig-core 0.36 public API. Verify exact field names with
+> `cargo doc -p rig-core --open` before use. rig-core may expose a mock
+> convenience type in a future release, which would simplify this pattern.
 
-```rust
-struct FakeClient { response: String }
-// impl CompletionClient for FakeClient { … }
-```
-
-This pattern isolates the timeout/async/status-update logic from network
-behaviour.
+This pattern keeps test setup in-process with no network calls or credential
+requirements.
 
 ### Integration tests — `temp-env` + real `from_env`
 
-Keep the `temp_env` approach from the deleted tests. Add a test that verifies
-`LlmClient::from_env().await` returns `Err` when `AWS_ACCESS_KEY_ID` is unset:
+Add a test that verifies `LlmClient::from_env()` returns `Err` when
+`AWS_ACCESS_KEY_ID` is unset. Use `#[tokio::test]` with an inner synchronous
+`temp_env::with_vars` scope — the `|| async { }.boxed()` closure pattern from
+older `temp_env` versions does not compile with current async Rust:
 
 ```rust
 #[tokio::test]
 async fn from_env_fails_without_credentials() {
-    temp_env::with_vars(
+    let result = temp_env::with_vars(
         [("AWS_ACCESS_KEY_ID", None::<&str>),
          ("AWS_SECRET_ACCESS_KEY", None::<&str>)],
-        || async {
-            let result = LlmClient::from_env().await;
-            assert!(result.is_err());
-        }.boxed()
+        || LlmClient::from_env(),
     );
+    assert!(result.is_err());
 }
 ```
 
-`rig_bedrock::client::Client::from_env()` returns an error when
-`aws-config` cannot resolve credentials, matching the old `LlmClient::from_env`
+`rig_bedrock::client::Client::from_env()` is synchronous and returns an error
+when required AWS env vars are absent, matching the old `LlmClient::from_env`
 behaviour.
 
 ### End-to-end — guarded by `#[ignore]`
@@ -530,7 +571,7 @@ Real API calls require credentials. Mark them with `#[ignore]` so CI skips them:
 #[tokio::test]
 #[ignore = "requires live AWS credentials"]
 async fn live_agent_round_trip() {
-    let client = LlmClient::from_env().await.unwrap();
+    let client = LlmClient::from_env().unwrap();
     let agent = client.agent(DEFAULT_MODEL).build();
     let output = agent.prompt("Say 'ok'").await.unwrap();
     assert!(!output.is_empty());
