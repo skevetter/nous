@@ -97,6 +97,24 @@ enum Commands {
         /// AWS profile name
         #[arg(long)]
         profile: Option<String>,
+        /// Run as a background daemon
+        #[arg(long)]
+        daemon: bool,
+        /// Internal flag: indicates this process IS the daemon (skip re-fork)
+        #[arg(long, hide = true)]
+        foreground_daemon: bool,
+    },
+    /// Start the HTTP daemon in the background (alias for `serve --daemon`)
+    Start {
+        /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
+        #[arg(long)]
+        model: Option<String>,
+        /// AWS region for Bedrock
+        #[arg(long)]
+        region: Option<String>,
+        /// AWS profile name
+        #[arg(long)]
+        profile: Option<String>,
     },
 }
 
@@ -153,8 +171,17 @@ async fn main() {
             model,
             region,
             profile,
+            daemon,
+            foreground_daemon,
         } => {
-            commands::serve::run(model, region, profile, port).await;
+            commands::serve::run(model, region, profile, port, daemon, foreground_daemon).await;
+        }
+        Commands::Start {
+            model,
+            region,
+            profile,
+        } => {
+            commands::serve::run(model, region, profile, port, true, false).await;
         }
     }
 }
