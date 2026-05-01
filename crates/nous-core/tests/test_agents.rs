@@ -541,7 +541,7 @@ async fn test_search_agents() {
     let results = agents::search_agents(pool, "engineer", Some("search-ns"), None)
         .await
         .unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 
     pools.close().await;
 }
