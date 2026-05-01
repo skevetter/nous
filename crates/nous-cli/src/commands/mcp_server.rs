@@ -59,6 +59,22 @@ async fn execute(
             }
         };
 
+    use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
+    use rig::client::ProviderClient;
+
+    let (llm_client, default_model) = match LlmClient::from_env() {
+        Ok(client) => {
+            tracing::info!("LLM client configured for Bedrock");
+            let model =
+                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+            (Some(Arc::new(client)), model)
+        }
+        Err(e) => {
+            tracing::warn!("LLM client not available (no AWS credentials): {e}");
+            (None, DEFAULT_MODEL.to_string())
+        }
+    };
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
@@ -67,8 +83,8 @@ async fn execute(
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
-        llm_client: None,
-        default_model: nous_daemon::llm_client::DEFAULT_MODEL.to_string(),
+        llm_client,
+        default_model,
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
