@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use nous_core::db::{create_vec_pool, DbPools, VecPool, EMBEDDING_DIMENSION};
 use nous_core::memory::{self, MemoryType, SaveMemoryRequest};
 use tempfile::TempDir;
