@@ -329,7 +329,7 @@ impl ProcessRegistry {
             }
             child.try_wait().ok().flatten().and_then(|s| s.code())
         } else {
-            // Child already taken by monitor — cancel dropped it (kill_on_drop).
+            // Child already taken by monitor wait_for_exit(). Process killed via kill_on_drop when monitor future drops.
             // Brief yield to let the kill propagate.
             tokio::task::yield_now().await;
             None
@@ -470,7 +470,7 @@ impl ProcessRegistry {
                 })
                 .await;
                 let duration_ms = start.elapsed().as_millis() as i64;
-                let _ = match result {
+                let update_result = match result {
                     Ok(Ok(output)) => {
                         processes::update_invocation(
                             &state_clone.pool, &inv_id, "completed",
@@ -490,6 +490,9 @@ impl ProcessRegistry {
                         ).await
                     }
                 };
+                if let Err(e) = update_result {
+                    tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
+                }
             });
             return Ok(invocation);
         }
