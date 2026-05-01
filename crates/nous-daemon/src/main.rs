@@ -5,6 +5,7 @@ use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::SystemClock;
+use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
@@ -61,6 +62,7 @@ async fn main() {
         embedder,
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
+        process_registry: Arc::new(ProcessRegistry::new()),
     };
 
     let scheduler_handle = Scheduler::spawn(

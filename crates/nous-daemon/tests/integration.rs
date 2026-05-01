@@ -25,6 +25,7 @@ async fn test_state() -> (AppState, TempDir) {
         embedder: Some(Arc::new(MockEmbedder::new())),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
+        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
     };
     (state, tmp)
 }
@@ -40,6 +41,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         embedder: None,
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
+        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
     };
     (state, tmp)
 }

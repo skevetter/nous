@@ -173,6 +173,85 @@ pub enum AgentCommands {
         #[command(subcommand)]
         command: TemplateCommands,
     },
+    /// Spawn an agent process
+    Spawn {
+        /// Agent ID
+        id: String,
+        /// Command to run
+        #[arg(long)]
+        command: Option<String>,
+        /// Process type: claude, shell, http
+        #[arg(long, default_value = "shell")]
+        r#type: String,
+        /// Working directory
+        #[arg(long)]
+        working_dir: Option<String>,
+        /// Timeout in seconds
+        #[arg(long)]
+        timeout: Option<i64>,
+        /// Restart policy: never, on-failure, always
+        #[arg(long, default_value = "never")]
+        restart: String,
+    },
+    /// Stop a running agent process
+    Stop {
+        /// Agent ID
+        id: String,
+        /// Force kill immediately (SIGKILL)
+        #[arg(long)]
+        force: bool,
+        /// Grace period in seconds before SIGKILL
+        #[arg(long, default_value = "10")]
+        grace: u64,
+    },
+    /// Restart an agent process
+    Restart {
+        /// Agent ID
+        id: String,
+        /// New command
+        #[arg(long)]
+        command: Option<String>,
+    },
+    /// Send work to an agent
+    Invoke {
+        /// Agent ID
+        id: String,
+        /// Work prompt
+        #[arg(long)]
+        prompt: String,
+        /// Timeout in seconds
+        #[arg(long)]
+        timeout: Option<i64>,
+        /// Return immediately with invocation ID
+        #[arg(long, name = "async")]
+        is_async: bool,
+    },
+    /// Get result of an async invocation
+    InvokeResult {
+        /// Invocation ID
+        invocation_id: String,
+    },
+    /// List invocation history for an agent
+    Invocations {
+        /// Agent ID
+        id: String,
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+        /// Max results
+        #[arg(long, default_value = "20")]
+        limit: u32,
+    },
+    /// List all running agent processes
+    Ps,
+    /// Get logs/process history for an agent
+    Logs {
+        /// Agent ID
+        id: String,
+        /// Max process records
+        #[arg(long, default_value = "5")]
+        lines: u32,
+    },
 }
 
 #[derive(Subcommand)]
@@ -444,6 +523,120 @@ async fn execute(cmd: AgentCommands) -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&agent)?);
             }
         },
+        AgentCommands::Spawn {
+            id,
+            command,
+            r#type,
+            working_dir,
+            timeout,
+            restart,
+        } => {
+            let agent = agents::get_agent_by_id(pool, &id).await?;
+            let cmd = command
+                .or(agent.spawn_command)
+                .ok_or("command is required (not set on agent config either)")?;
+            let pt = if r#type == "shell" {
+                agent.process_type.unwrap_or_else(|| "shell".to_string())
+            } else {
+                r#type
+            };
+            let process = agents::processes::create_process(
+                pool,
+                &id,
+                &pt,
+                &cmd,
+                working_dir.as_deref().or(agent.working_dir.as_deref()),
+                None,
+                timeout,
+                Some(&restart),
+                None,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&process)?);
+        }
+        AgentCommands::Stop { id, force: _, grace: _ } => {
+            // CLI stop updates DB status; runtime stop requires daemon
+            if let Some(process) = agents::processes::get_active_process(pool, &id).await? {
+                let process = agents::processes::update_process_status(
+                    pool,
+                    &process.id,
+                    "stopped",
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&process)?);
+            } else {
+                eprintln!("no active process for agent '{id}'");
+            }
+        }
+        AgentCommands::Restart { id, command } => {
+            // Stop existing
+            if let Some(process) = agents::processes::get_active_process(pool, &id).await? {
+                agents::processes::update_process_status(
+                    pool,
+                    &process.id,
+                    "stopped",
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+            }
+            // Get agent config for defaults
+            let agent = agents::get_agent_by_id(pool, &id).await?;
+            let cmd = command
+                .or(agent.spawn_command)
+                .ok_or("command is required (not set on agent config either)")?;
+            let pt = agent.process_type.unwrap_or_else(|| "shell".to_string());
+            let process = agents::processes::create_process(
+                pool,
+                &id,
+                &pt,
+                &cmd,
+                agent.working_dir.as_deref(),
+                None,
+                None,
+                Some("never"),
+                None,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&process)?);
+        }
+        AgentCommands::Invoke {
+            id,
+            prompt,
+            timeout: _,
+            is_async: _,
+        } => {
+            let invocation =
+                agents::processes::create_invocation(pool, &id, &prompt, None).await?;
+            println!("{}", serde_json::to_string_pretty(&invocation)?);
+        }
+        AgentCommands::InvokeResult { invocation_id } => {
+            let invocation =
+                agents::processes::get_invocation(pool, &invocation_id).await?;
+            println!("{}", serde_json::to_string_pretty(&invocation)?);
+        }
+        AgentCommands::Invocations { id, status, limit } => {
+            let invocations = agents::processes::list_invocations(
+                pool,
+                &id,
+                status.as_deref(),
+                Some(limit),
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&invocations)?);
+        }
+        AgentCommands::Ps => {
+            let processes = agents::processes::list_all_active_processes(pool).await?;
+            println!("{}", serde_json::to_string_pretty(&processes)?);
+        }
+        AgentCommands::Logs { id, lines } => {
+            let processes = agents::processes::list_processes(pool, &id, Some(lines)).await?;
+            println!("{}", serde_json::to_string_pretty(&processes)?);
+        }
     }
 
     pools.close().await;

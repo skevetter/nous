@@ -1,4 +1,5 @@
 pub mod error;
+pub mod process_manager;
 pub mod routes;
 pub mod scheduler;
 pub mod state;
@@ -150,6 +151,7 @@ mod tests {
             embedder: Some(Arc::new(MockEmbedder::new())),
             schedule_notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
+            process_registry: Arc::new(process_manager::ProcessRegistry::new()),
         };
         (state, tmp)
     }
@@ -430,7 +432,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 96);
+        assert_eq!(tools.len(), 105);
     }
 
     #[tokio::test]

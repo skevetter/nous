@@ -1,3 +1,5 @@
+pub mod processes;
+
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
@@ -197,13 +199,18 @@ pub struct Agent {
     pub current_version_id: Option<String>,
     pub upgrade_available: bool,
     pub template_id: Option<String>,
+    pub process_type: Option<String>,
+    pub spawn_command: Option<String>,
+    pub working_dir: Option<String>,
+    pub auto_restart: bool,
     pub created_at: String,
     pub updated_at: String,
 }
 
 impl Agent {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+    pub(crate) fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
         let upgrade_flag: i32 = row.try_get("upgrade_available")?;
+        let auto_restart_flag: i32 = row.try_get("auto_restart")?;
         Ok(Self {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
@@ -217,6 +224,10 @@ impl Agent {
             current_version_id: row.try_get("current_version_id")?,
             upgrade_available: upgrade_flag != 0,
             template_id: row.try_get("template_id")?,
+            process_type: row.try_get("process_type")?,
+            spawn_command: row.try_get("spawn_command")?,
+            working_dir: row.try_get("working_dir")?,
+            auto_restart: auto_restart_flag != 0,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -467,6 +478,9 @@ pub fn deregister_agent<'a>(
                 deregister_agent(pool, &child.id, true).await?;
             }
         }
+
+        // Clean up process records before deleting (NO CASCADE on agent_processes FK)
+        processes::cleanup_agent_processes(pool, &id).await?;
 
         sqlx::query("DELETE FROM agents WHERE id = ?")
             .bind(&id)
@@ -888,6 +902,8 @@ pub struct AgentInspection {
     pub current_version: Option<AgentVersion>,
     pub template: Option<AgentTemplate>,
     pub version_count: i64,
+    pub active_process: Option<processes::Process>,
+    pub recent_invocations: Vec<processes::Invocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -996,11 +1012,16 @@ pub async fn inspect_agent(pool: &SqlitePool, id: &str) -> Result<AgentInspectio
             .fetch_one(pool)
             .await?;
 
+    let active_process = processes::get_active_process(pool, id).await?;
+    let recent_invocations = processes::list_invocations(pool, id, None, Some(5)).await?;
+
     Ok(AgentInspection {
         agent,
         current_version,
         template,
         version_count,
+        active_process,
+        recent_invocations,
     })
 }
 
@@ -1202,6 +1223,31 @@ pub async fn instantiate_from_template(
         .execute(pool)
         .await?;
 
+    // Copy spawn config from template's default_config if present
+    if let Ok(config_val) = serde_json::from_str::<serde_json::Value>(&template.default_config) {
+        let process_type = config_val.get("process_type").and_then(|v| v.as_str());
+        let spawn_command = config_val.get("spawn_command").and_then(|v| v.as_str());
+        let working_dir = config_val.get("working_dir").and_then(|v| v.as_str());
+        let auto_restart = config_val.get("auto_restart").and_then(|v| v.as_bool());
+
+        if process_type.is_some()
+            || spawn_command.is_some()
+            || working_dir.is_some()
+            || auto_restart.is_some()
+        {
+            processes::update_agent(
+                pool,
+                &agent.id,
+                process_type,
+                spawn_command,
+                working_dir,
+                auto_restart,
+                None,
+            )
+            .await?;
+        }
+    }
+
     get_agent_by_id(pool, &agent.id).await
 }
 
@@ -1236,10 +1282,12 @@ pub async fn list_stale_agents(
     let cutoff = chrono::Utc::now() - chrono::Duration::seconds(threshold_secs as i64);
     let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
+    // Skip agents with running processes — they are alive even if heartbeat is stale
     let rows = sqlx::query(
-        "SELECT * FROM agents WHERE namespace = ? AND last_seen_at IS NOT NULL \
-         AND last_seen_at < ? AND status NOT IN ('archived', 'inactive', 'done') \
-         ORDER BY last_seen_at",
+        "SELECT a.* FROM agents a WHERE a.namespace = ? AND a.last_seen_at IS NOT NULL \
+         AND a.last_seen_at < ? AND a.status NOT IN ('archived', 'inactive', 'done') \
+         AND NOT EXISTS (SELECT 1 FROM agent_processes p WHERE p.agent_id = a.id AND p.status IN ('running','starting')) \
+         ORDER BY a.last_seen_at",
     )
     .bind(ns)
     .bind(&cutoff_str)

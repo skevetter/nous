@@ -25,6 +25,7 @@ async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir
         embedder: Some(Arc::new(MockEmbedder::new())),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
+        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
     };
     (state, clock, shutdown, tmp)
 }

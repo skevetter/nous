@@ -218,7 +218,7 @@ const MIGRATIONS: &[Migration] = &[
               trigger_at INTEGER, \
               timezone TEXT NOT NULL DEFAULT 'UTC', \
               enabled INTEGER NOT NULL DEFAULT 1, \
-              action_type TEXT NOT NULL CHECK(action_type IN ('mcp_tool','shell','http')), \
+              action_type TEXT NOT NULL CHECK(action_type IN ('mcp_tool','shell','http','agent_invoke')), \
               action_payload TEXT NOT NULL, \
               desired_outcome TEXT, \
               max_retries INTEGER NOT NULL DEFAULT 3, \
@@ -406,7 +406,7 @@ const MIGRATIONS: &[Migration] = &[
         sql: "CREATE TABLE IF NOT EXISTS search_events (\
               id INTEGER PRIMARY KEY, \
               query_text TEXT NOT NULL, \
-              search_type TEXT NOT NULL CHECK(search_type IN ('fts','vector','hybrid')), \
+              search_type TEXT NOT NULL CHECK(search_type IN ('fts','vector','hybrid','fts5_fallback')), \
               result_count INTEGER NOT NULL, \
               latency_ms INTEGER NOT NULL, \
               workspace_id TEXT, \
@@ -415,6 +415,65 @@ const MIGRATIONS: &[Migration] = &[
               ); \
               CREATE INDEX IF NOT EXISTS idx_search_events_type ON search_events(search_type); \
               CREATE INDEX IF NOT EXISTS idx_search_events_created ON search_events(created_at);",
+    },
+    // --- NOUS-026: Agent lifecycle management tables ---
+    Migration {
+        version: "023",
+        name: "agent_processes",
+        sql: "CREATE TABLE IF NOT EXISTS agent_processes (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT NOT NULL REFERENCES agents(id), \
+              process_type TEXT NOT NULL CHECK(process_type IN ('claude','shell','http')), \
+              command TEXT NOT NULL, \
+              working_dir TEXT, \
+              env_json TEXT DEFAULT '{}', \
+              pid INTEGER, \
+              status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','starting','running','stopping','stopped','failed','crashed')), \
+              exit_code INTEGER, \
+              started_at TEXT, \
+              stopped_at TEXT, \
+              last_output TEXT, \
+              max_output_bytes INTEGER NOT NULL DEFAULT 65536, \
+              restart_policy TEXT NOT NULL DEFAULT 'never' CHECK(restart_policy IN ('never','on-failure','always')), \
+              restart_count INTEGER NOT NULL DEFAULT 0, \
+              max_restarts INTEGER NOT NULL DEFAULT 3, \
+              timeout_secs INTEGER, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_agent_proc_agent ON agent_processes(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_agent_proc_status ON agent_processes(status); \
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proc_active ON agent_processes(agent_id) WHERE status IN ('pending','starting','running','stopping');",
+    },
+    Migration {
+        version: "024",
+        name: "agent_invocations",
+        sql: "CREATE TABLE IF NOT EXISTS agent_invocations (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, \
+              process_id TEXT REFERENCES agent_processes(id) ON DELETE SET NULL, \
+              prompt TEXT NOT NULL, \
+              result TEXT, \
+              status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','timeout','cancelled')), \
+              error TEXT, \
+              started_at TEXT, \
+              completed_at TEXT, \
+              duration_ms INTEGER, \
+              metadata_json TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_invoc_agent ON agent_invocations(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_invoc_status ON agent_invocations(status); \
+              CREATE INDEX IF NOT EXISTS idx_invoc_created ON agent_invocations(created_at DESC);",
+    },
+    Migration {
+        version: "025",
+        name: "agent_process_config",
+        // Note: The agents_au trigger auto-updates updated_at on these changes — this is acceptable and documented.
+        sql: "ALTER TABLE agents ADD COLUMN process_type TEXT; \
+              ALTER TABLE agents ADD COLUMN spawn_command TEXT; \
+              ALTER TABLE agents ADD COLUMN working_dir TEXT; \
+              ALTER TABLE agents ADD COLUMN auto_restart INTEGER NOT NULL DEFAULT 0;",
     },
 ];
 
