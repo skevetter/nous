@@ -557,7 +557,11 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             .await?;
             println!("{}", serde_json::to_string_pretty(&process)?);
         }
-        AgentCommands::Stop { id, force: _, grace: _ } => {
+        AgentCommands::Stop {
+            id,
+            force: _,
+            grace: _,
+        } => {
             // CLI stop updates DB status; runtime stop requires daemon
             if let Some(process) = agents::processes::get_active_process(pool, &id).await? {
                 let process = agents::processes::update_process_status(
@@ -613,10 +617,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             timeout,
             is_async,
         } => {
-            let url = format!(
-                "http://{}:{}/mcp/call",
-                config.host, config.port
-            );
+            let url = format!("http://{}:{}/mcp/call", config.host, config.port);
             let mut args = serde_json::json!({
                 "agent_id": id,
                 "prompt": prompt,
@@ -647,31 +648,99 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 return Err(format!("daemon returned {status_code}: {text}").into());
             }
             let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
-            if mcp_resp.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if mcp_resp
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let msg = mcp_resp["content"][0]["text"]
                     .as_str()
                     .unwrap_or("unknown error");
                 return Err(msg.to_string().into());
             }
-            let content_text = mcp_resp["content"][0]["text"]
-                .as_str()
-                .unwrap_or("{}");
+            let content_text = mcp_resp["content"][0]["text"].as_str().unwrap_or("{}");
             let invocation: serde_json::Value = serde_json::from_str(content_text)?;
             println!("{}", serde_json::to_string_pretty(&invocation)?);
         }
         AgentCommands::InvokeResult { invocation_id } => {
-            let invocation =
-                agents::processes::get_invocation(pool, &invocation_id).await?;
+            let url = format!("http://{}:{}/mcp/call", config.host, config.port);
+            let body = serde_json::json!({
+                "name": "agent_invoke_result",
+                "arguments": {
+                    "invocation_id": invocation_id,
+                },
+            });
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("daemon unreachable at {url}: {e}"))?;
+            let status_code = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("failed to read response: {e}"))?;
+            if !status_code.is_success() {
+                return Err(format!("daemon returned {status_code}: {text}").into());
+            }
+            let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
+            if mcp_resp
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let msg = mcp_resp["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("unknown error");
+                return Err(msg.to_string().into());
+            }
+            let content_text = mcp_resp["content"][0]["text"].as_str().unwrap_or("{}");
+            let invocation: serde_json::Value = serde_json::from_str(content_text)?;
             println!("{}", serde_json::to_string_pretty(&invocation)?);
         }
         AgentCommands::Invocations { id, status, limit } => {
-            let invocations = agents::processes::list_invocations(
-                pool,
-                &id,
-                status.as_deref(),
-                Some(limit),
-            )
-            .await?;
+            let url = format!("http://{}:{}/mcp/call", config.host, config.port);
+            let mut args = serde_json::json!({
+                "agent_id": id,
+            });
+            if let Some(s) = status {
+                args["status"] = serde_json::json!(s);
+            }
+            args["limit"] = serde_json::json!(limit);
+            let body = serde_json::json!({
+                "name": "agent_invocations",
+                "arguments": args,
+            });
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("daemon unreachable at {url}: {e}"))?;
+            let status_code = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| format!("failed to read response: {e}"))?;
+            if !status_code.is_success() {
+                return Err(format!("daemon returned {status_code}: {text}").into());
+            }
+            let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
+            if mcp_resp
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let msg = mcp_resp["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or("unknown error");
+                return Err(msg.to_string().into());
+            }
+            let content_text = mcp_resp["content"][0]["text"].as_str().unwrap_or("{}");
+            let invocations: serde_json::Value = serde_json::from_str(content_text)?;
             println!("{}", serde_json::to_string_pretty(&invocations)?);
         }
         AgentCommands::Ps => {
