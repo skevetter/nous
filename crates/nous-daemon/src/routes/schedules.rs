@@ -70,6 +70,7 @@ pub async fn create(
         &clock,
     )
     .await?;
+    state.schedule_notify.notify_one();
     Ok((StatusCode::CREATED, Json(schedule)))
 }
 
@@ -120,6 +121,7 @@ pub async fn update(
         &clock,
     )
     .await?;
+    state.schedule_notify.notify_one();
     Ok(Json(schedule))
 }
 
@@ -128,6 +130,7 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     nous_core::schedules::delete_schedule(&state.pool, &id).await?;
+    state.schedule_notify.notify_one();
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -4,8 +4,12 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_core::schedules::SystemClock;
+use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() {
@@ -33,17 +37,46 @@ async fn main() {
             }
         };
 
+    let shutdown = CancellationToken::new();
+
+    {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to register SIGTERM handler");
+            tokio::select! {
+                _ = sigterm.recv() => {}
+                _ = tokio::signal::ctrl_c() => {}
+            }
+            tracing::info!("shutdown signal received");
+            shutdown.cancel();
+        });
+    }
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder,
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: shutdown.clone(),
     };
+
+    let scheduler_handle = Scheduler::spawn(
+        state.clone(),
+        SchedulerConfig::default(),
+        Arc::new(SystemClock),
+        shutdown.clone(),
+    );
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, nous_daemon::app(state))
+        .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
         .unwrap();
+
+    scheduler_handle.await.unwrap();
 }

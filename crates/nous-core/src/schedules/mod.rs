@@ -469,6 +469,61 @@ pub async fn schedule_health(pool: &SqlitePool) -> Result<serde_json::Value, Nou
     }))
 }
 
+pub async fn list_due_schedules(pool: &SqlitePool, now: i64) -> Result<Vec<Schedule>, NousError> {
+    let rows = sqlx::query("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ?")
+        .bind(now)
+        .fetch_all(pool)
+        .await?;
+    rows.iter()
+        .map(Schedule::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)
+}
+
+pub async fn advance_next_run_at(
+    pool: &SqlitePool,
+    id: &str,
+    clock: &dyn Clock,
+) -> Result<Option<i64>, NousError> {
+    let schedule = get_schedule(pool, id).await?;
+
+    if schedule.cron_expr.starts_with("@once") {
+        if let Some(t) = schedule.trigger_at {
+            if t <= clock.now_utc() {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        }
+    }
+
+    let parsed = CronExpr::parse(&schedule.cron_expr)?;
+    let next = parsed.next_run(clock.now_utc());
+
+    match next {
+        Some(ts) => {
+            let now = clock.now_utc();
+            sqlx::query("UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?")
+                .bind(ts)
+                .bind(now)
+                .bind(id)
+                .execute(pool)
+                .await?;
+            Ok(Some(ts))
+        }
+        None => Ok(None),
+    }
+}
+
+pub async fn mark_stale_runs_failed(pool: &SqlitePool) -> Result<u64, NousError> {
+    let result = sqlx::query(
+        "UPDATE schedule_runs SET status = 'failed', error = 'process restarted' WHERE status = 'running'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 fn compute_next_run(cron_expr: &str, trigger_at: Option<i64>, now: i64) -> Option<i64> {
     if let Some(t) = trigger_at {
         if t > now {

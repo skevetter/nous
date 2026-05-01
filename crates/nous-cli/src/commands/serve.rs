@@ -6,6 +6,8 @@ use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::state::AppState;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 pub async fn run() {
     if let Err(e) = execute().await {
@@ -35,6 +37,8 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder,
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
     };
 
     let addr = format!("{}:{}", config.host, config.port);

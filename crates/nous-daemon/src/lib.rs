@@ -1,5 +1,6 @@
 pub mod error;
 pub mod routes;
+pub mod scheduler;
 pub mod state;
 
 use axum::routing::{delete, get, post};
@@ -134,6 +135,8 @@ mod tests {
     use nous_core::notifications::NotificationRegistry;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
     async fn test_state() -> (AppState, TempDir) {
@@ -145,6 +148,8 @@ mod tests {
             vec_pool: pools.vec.clone(),
             registry: Arc::new(NotificationRegistry::new()),
             embedder: Some(Arc::new(MockEmbedder::new())),
+            schedule_notify: Arc::new(Notify::new()),
+            shutdown: CancellationToken::new(),
         };
         (state, tmp)
     }
