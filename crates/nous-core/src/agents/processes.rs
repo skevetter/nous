@@ -246,10 +246,7 @@ pub async fn update_process_status(
     get_process_by_id(pool, process_id).await
 }
 
-pub async fn increment_restart_count(
-    pool: &SqlitePool,
-    process_id: &str,
-) -> Result<(), NousError> {
+pub async fn increment_restart_count(pool: &SqlitePool, process_id: &str) -> Result<(), NousError> {
     sqlx::query("UPDATE agent_processes SET restart_count = restart_count + 1 WHERE id = ?")
         .bind(process_id)
         .execute(pool)

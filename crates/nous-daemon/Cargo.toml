@@ -4,15 +4,14 @@ version = "0.7.0"
 edition.workspace = true
 
 [dependencies]
-aws-credential-types = "1.2"
-aws-sigv4 = "1.4"
 axum = "0.8"
 chrono = { workspace = true }
-http = "1"
 libc = "0.2"
 nous-core = { path = "../nous-core" }
 regex = "1"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+rig-bedrock = "0.4.5"
+rig-core = "0.36"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

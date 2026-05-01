@@ -24,6 +24,7 @@ async fn test_state() -> (AppState, TempDir) {
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client: None,
+        default_model: "test-model".to_string(),
     };
     (state, tmp)
 }
@@ -243,6 +244,7 @@ async fn async_shell_invoke_returns_running_then_completes() {
 #[ignore]
 async fn real_bedrock_claude_invoke() {
     use nous_daemon::llm_client::LlmClient;
+    use rig::client::ProviderClient;
 
     let (mut state, _tmp) = test_state().await;
 

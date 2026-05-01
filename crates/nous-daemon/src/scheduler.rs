@@ -113,9 +113,7 @@ async fn run_loop(
     }
 
     tracing::info!("scheduler shutting down, waiting for in-flight tasks");
-    let _ = semaphore
-        .acquire_many(config.max_concurrent as u32)
-        .await;
+    let _ = semaphore.acquire_many(config.max_concurrent as u32).await;
     tracing::info!("scheduler stopped");
 }
 
@@ -367,9 +365,7 @@ async fn dispatch_http(payload: &str) -> Result<String, NousError> {
     if status.is_success() {
         Ok(text)
     } else {
-        Err(NousError::Internal(format!(
-            "http {status}: {text}"
-        )))
+        Err(NousError::Internal(format!("http {status}: {text}")))
     }
 }
 

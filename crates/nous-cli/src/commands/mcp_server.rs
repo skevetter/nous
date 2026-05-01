@@ -37,7 +37,10 @@ fn build_prefixes(filter: &str) -> Vec<&str> {
     filter.split(',').map(prefix_to_tool_prefix).collect()
 }
 
-async fn execute(tools_filter: Option<String>, port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute(
+    tools_filter: Option<String>,
+    port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::load()?;
     if let Some(p) = port {
         config.port = p;
@@ -65,6 +68,7 @@ async fn execute(tools_filter: Option<String>, port: Option<u16>) -> Result<(), 
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client: None,
+        default_model: nous_daemon::llm_client::DEFAULT_MODEL.to_string(),
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);

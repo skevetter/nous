@@ -113,7 +113,10 @@ pub async fn run(cmd: InventoryCommands, port: Option<u16>) {
     }
 }
 
-async fn execute(cmd: InventoryCommands, port: Option<u16>) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute(
+    cmd: InventoryCommands,
+    port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::load()?;
     if let Some(p) = port {
         config.port = p;
