@@ -91,7 +91,7 @@ impl Config {
     }
 }
 
-fn config_file_path() -> PathBuf {
+pub fn config_file_path() -> PathBuf {
     if let Some(config_dir) = dirs::config_dir() {
         config_dir.join("nous").join("config.toml")
     } else {
