@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
+use sha2::{Digest, Sha256};
 
 use nous_core::agents;
 use nous_core::config::Config;
@@ -6,6 +9,22 @@ use nous_core::db::DbPools;
 
 #[derive(Subcommand)]
 pub enum AgentCommands {
+    /// Add an agent from a TOML definition file
+    Add {
+        /// Path to the TOML definition file
+        file: String,
+    },
+    /// Remove an agent by name or ID
+    Remove {
+        /// Agent name or UUID
+        name_or_id: String,
+        /// Namespace (for name resolution; defaults to 'default')
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Cascade delete children
+        #[arg(long)]
+        cascade: bool,
+    },
     /// Register a new agent in the org hierarchy
     Register {
         /// Agent name (must be unique within namespace)
@@ -383,6 +402,114 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
     let pool = &pools.fts;
 
     match cmd {
+        AgentCommands::Add { file } => {
+            let path = PathBuf::from(&file);
+            let toml_content = std::fs::read(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            let def = agents::definition::load_definition(&path)?;
+
+            let agent_type: agents::AgentType = def.agent.r#type.parse()?;
+            let agent = agents::register_agent(
+                pool,
+                agents::RegisterAgentRequest {
+                    name: def.agent.name,
+                    agent_type,
+                    parent_id: None,
+                    namespace: def.agent.namespace,
+                    room: None,
+                    metadata: None,
+                    status: Some(agents::AgentStatus::Idle),
+                },
+            )
+            .await?;
+
+            if let Some(process) = &def.process {
+                agents::processes::update_agent(
+                    pool,
+                    &agent.id,
+                    process.r#type.as_deref(),
+                    process.spawn_command.as_deref(),
+                    process.working_dir.as_deref(),
+                    process.auto_restart,
+                    None,
+                )
+                .await?;
+            }
+
+            if let Some(skills) = &def.skills {
+                let skills_dir = dirs::config_dir()
+                    .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+                    .ok_or("cannot determine config directory")?
+                    .join("nous")
+                    .join("skills");
+                let resolved =
+                    agents::definition::resolve_skills(&skills.refs, &skills_dir)?;
+
+                let mut hasher = Sha256::new();
+                for s in &resolved {
+                    hasher.update(s.content.as_bytes());
+                }
+                let hex_hash = format!("{:x}", hasher.finalize());
+
+                let config_hash = format!("{:x}", Sha256::digest(&toml_content));
+
+                let skills_json: Vec<serde_json::Value> = resolved
+                    .iter()
+                    .map(|s| {
+                        let h = format!("{:x}", Sha256::digest(s.content.as_bytes()));
+                        serde_json::json!({
+                            "name": s.name,
+                            "path": s.path.to_string_lossy(),
+                            "hash": h,
+                        })
+                    })
+                    .collect();
+                let skills_json_str = serde_json::to_string(&skills_json)?;
+
+                agents::record_version(
+                    pool,
+                    agents::RecordVersionRequest {
+                        agent_id: agent.id.clone(),
+                        skill_hash: hex_hash,
+                        config_hash,
+                        skills_json: Some(skills_json_str),
+                    },
+                )
+                .await?;
+            }
+
+            if let Some(metadata) = &def.metadata {
+                let metadata_json = serde_json::to_string(metadata)?;
+                agents::processes::update_agent(
+                    pool,
+                    &agent.id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(&metadata_json),
+                )
+                .await?;
+            }
+
+            let final_agent = agents::get_agent_by_id(pool, &agent.id).await?;
+            println!("{}", serde_json::to_string_pretty(&final_agent)?);
+        }
+        AgentCommands::Remove {
+            name_or_id,
+            namespace,
+            cascade,
+        } => {
+            let resolved_id = if looks_like_uuid(&name_or_id) {
+                name_or_id
+            } else {
+                let agent =
+                    agents::lookup_agent(pool, &name_or_id, namespace.as_deref()).await?;
+                agent.id
+            };
+            let result = agents::deregister_agent(pool, &resolved_id, cascade).await?;
+            println!("{{\"result\": \"{result}\"}}");
+        }
         AgentCommands::Register {
             name,
             r#type,
@@ -1001,7 +1128,7 @@ fn parse_volume_spec(spec: &str) -> Result<nous_core::agents::sandbox::VolumeMou
 }
 
 fn looks_like_uuid(s: &str) -> bool {
-    s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
+    uuid::Uuid::parse_str(s).is_ok()
 }
 
 const VALID_NETWORK_POLICIES: &[&str] = &["none", "public-only", "allow-all"];

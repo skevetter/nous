@@ -10,6 +10,9 @@ path = "src/main.rs"
 [features]
 sandbox = ["nous-daemon/sandbox"]
 
+[dev-dependencies]
+tempfile = "3"
+
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
@@ -24,4 +27,6 @@ sqlx = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
 tracing-subscriber = { workspace = true }

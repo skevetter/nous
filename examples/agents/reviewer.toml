@@ -1,0 +1,25 @@
+# Example: Code review agent definition
+[agent]
+name       = "reviewer"
+type       = "engineer"
+version    = "1.2.0"
+namespace  = "eng"
+description = "Performs code review on feature branches"
+
+[process]
+type         = "claude"
+spawn_command = "claude --model claude-sonnet-4-6"
+working_dir  = "~"
+auto_restart = false
+restart_policy = "on-failure"
+
+[skills]
+refs = [
+  "code-review",
+  "git-workflow",
+]
+
+[metadata]
+model   = "global.anthropic.claude-sonnet-4-6-v1"
+timeout = 3600
+tags    = ["review", "quality"]
