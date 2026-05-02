@@ -143,6 +143,47 @@ pub async fn create_process(
     get_process_by_id(pool, &id).await
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn create_sandbox_process(
+    pool: &SqlitePool,
+    agent_id: &str,
+    sandbox_image: &str,
+    sandbox_cpus: Option<u32>,
+    sandbox_memory_mib: Option<u32>,
+    sandbox_network_policy: Option<&str>,
+    sandbox_volumes_json: Option<&str>,
+    sandbox_name: Option<&str>,
+    timeout_secs: Option<i64>,
+    restart_policy: Option<&str>,
+) -> Result<Process, NousError> {
+    super::get_agent_by_id(pool, agent_id).await?;
+
+    let id = Uuid::now_v7().to_string();
+    let policy = restart_policy.unwrap_or("never");
+    let name = sandbox_name.unwrap_or(agent_id);
+
+    sqlx::query(
+        "INSERT INTO agent_processes (id, agent_id, process_type, command, status, restart_policy, timeout_secs, \
+         sandbox_image, sandbox_cpus, sandbox_memory_mib, sandbox_network_policy, sandbox_volumes_json, sandbox_name) \
+         VALUES (?, ?, 'sandbox', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(agent_id)
+    .bind(format!("sandbox:{sandbox_image}"))
+    .bind(policy)
+    .bind(timeout_secs)
+    .bind(sandbox_image)
+    .bind(sandbox_cpus.map(|v| v as i64))
+    .bind(sandbox_memory_mib.map(|v| v as i64))
+    .bind(sandbox_network_policy)
+    .bind(sandbox_volumes_json)
+    .bind(name)
+    .execute(pool)
+    .await?;
+
+    get_process_by_id(pool, &id).await
+}
+
 pub async fn get_process_by_id(pool: &SqlitePool, id: &str) -> Result<Process, NousError> {
     let row = sqlx::query("SELECT * FROM agent_processes WHERE id = ?")
         .bind(id)
