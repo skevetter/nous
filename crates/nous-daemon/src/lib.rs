@@ -2,6 +2,8 @@ pub mod error;
 pub mod llm_client;
 pub mod process_manager;
 pub mod routes;
+#[cfg(feature = "sandbox")]
+pub mod sandbox;
 pub mod scheduler;
 pub mod state;
 
