@@ -6,6 +6,7 @@ pub mod inventory;
 pub mod memory;
 pub mod messages;
 pub mod notifications;
+pub mod resources;
 pub mod rooms;
 pub mod schedules;
 pub mod tasks;

@@ -8,6 +8,7 @@ use commands::chat::ChatCommands;
 use commands::inventory::InventoryCommands;
 use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
+use commands::resource::ResourceCommands;
 use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
 use commands::skill::SkillCommands;
@@ -46,6 +47,11 @@ enum Commands {
     Inventory {
         #[command(subcommand)]
         command: InventoryCommands,
+    },
+    /// Unified resource management (replaces artifact + inventory)
+    Resource {
+        #[command(subcommand)]
+        command: ResourceCommands,
     },
     /// Memory operations (P6 persistent structured memory)
     Memory {
@@ -155,6 +161,9 @@ async fn main() {
         }
         Commands::Inventory { command } => {
             commands::inventory::run(command, port).await;
+        }
+        Commands::Resource { command } => {
+            commands::resource::run(command, port).await;
         }
         Commands::Memory { command } => {
             commands::memory::run(command, port).await;

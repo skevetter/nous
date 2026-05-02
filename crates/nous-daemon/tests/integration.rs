@@ -2349,3 +2349,278 @@ async fn sandbox_spawn_creates_entry_in_manager() {
     assert_eq!(handle.unwrap().status, "running");
     assert_eq!(handle.unwrap().image, "ubuntu:24.04");
 }
+
+// --- Resource HTTP route tests ---
+
+#[tokio::test]
+async fn e2e_resource_register_list_get_archive_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "res-owner".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            namespace: None,
+            parent_id: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Register resource
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/resources")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "test-worktree",
+                        "type": "worktree",
+                        "owner_agent_id": agent.id,
+                        "tags": ["ci", "test"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let resource: Value = json_body(response).await;
+    assert_eq!(resource["name"], "test-worktree");
+    assert_eq!(resource["resource_type"], "worktree");
+    assert_eq!(resource["ownership_policy"], "cascade-delete");
+    let res_id = resource["id"].as_str().unwrap().to_string();
+
+    // List resources
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/resources?owner_agent_id={}", agent.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list: Vec<Value> = serde_json::from_value(json_body(response).await).unwrap();
+    assert_eq!(list.len(), 1);
+
+    // Get resource
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/resources/{res_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let fetched: Value = json_body(response).await;
+    assert_eq!(fetched["name"], "test-worktree");
+
+    // Archive
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/resources/{res_id}/archive"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let archived: Value = json_body(response).await;
+    assert_eq!(archived["status"], "archived");
+
+    // Deregister (hard delete)
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/resources/{res_id}?hard=true"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify gone
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/resources/{res_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn e2e_resource_search_and_heartbeat() {
+    let (state, _tmp) = test_state().await;
+
+    // Register with tags
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/resources")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "search-target",
+                        "type": "file",
+                        "tags": ["production", "deploy"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let resource: Value = json_body(response).await;
+    let res_id = resource["id"].as_str().unwrap().to_string();
+
+    // Search by tags
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/resources/search?tags=production")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let results: Vec<Value> = serde_json::from_value(json_body(response).await).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["name"], "search-target");
+
+    // Heartbeat
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/resources/{res_id}/heartbeat"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let hb: Value = json_body(response).await;
+    assert!(hb["last_seen_at"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn mcp_resource_register_list_deregister() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "mcp-res-owner".into(),
+            agent_type: nous_core::agents::AgentType::Engineer,
+            namespace: None,
+            parent_id: None,
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // resource_register via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "resource_register",
+                        "arguments": {
+                            "name": "mcp-branch",
+                            "type": "branch",
+                            "owner_agent_id": agent.id
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    assert!(resp.get("is_error").is_none());
+    let resource: Value =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(resource["name"], "mcp-branch");
+    assert_eq!(resource["ownership_policy"], "cascade-delete");
+    let res_id = resource["id"].as_str().unwrap();
+
+    // resource_list via MCP
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "resource_list",
+                        "arguments": {
+                            "owner_agent_id": agent.id
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let resp: Value = json_body(response).await;
+    let resources: Vec<Value> =
+        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(resources.len(), 1);
+
+    // resource_deregister via MCP
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/call")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "resource_deregister",
+                        "arguments": {
+                            "id": res_id,
+                            "hard": true
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}

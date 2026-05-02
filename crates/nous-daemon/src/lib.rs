@@ -112,6 +112,23 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/inventory/{id}/archive", post(routes::inventory::archive))
         .route(
+            "/resources",
+            post(routes::resources::register).get(routes::resources::list),
+        )
+        .route("/resources/search", get(routes::resources::search))
+        .route("/resources/transfer", post(routes::resources::transfer))
+        .route(
+            "/resources/{id}",
+            get(routes::resources::get)
+                .put(routes::resources::update)
+                .delete(routes::resources::deregister),
+        )
+        .route("/resources/{id}/archive", post(routes::resources::archive))
+        .route(
+            "/resources/{id}/heartbeat",
+            post(routes::resources::heartbeat),
+        )
+        .route(
             "/schedules",
             post(routes::schedules::create).get(routes::schedules::list),
         )
@@ -439,7 +456,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 105);
+        assert_eq!(tools.len(), 114);
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@ pub mod mcp_server;
 pub mod memory;
 pub mod model;
 pub mod reload;
+pub mod resource;
 pub mod schedule;
 pub mod serve;
 pub mod skill;
