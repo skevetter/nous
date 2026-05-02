@@ -635,6 +635,10 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 let image =
                     sandbox_image.ok_or("--sandbox-image is required when --type sandbox")?;
 
+                if let Some(ref policy) = sandbox_network {
+                    validate_network_policy(policy).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                }
+
                 let volumes_json = if sandbox_volume.is_empty() {
                     None
                 } else {
@@ -893,7 +897,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     }
                     None => {
                         let processes =
-                            agents::processes::list_processes(pool, &id, Some(1)).await?;
+                            agents::processes::list_processes(pool, &id, Some(10)).await?;
                         let sandbox = processes.into_iter().find(|p| p.process_type == "sandbox");
                         match sandbox {
                             Some(p) => println!("{}", serde_json::to_string_pretty(&p)?),
@@ -996,4 +1000,87 @@ fn parse_volume_spec(spec: &str) -> Result<nous_core::agents::sandbox::VolumeMou
 
 fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
+}
+
+const VALID_NETWORK_POLICIES: &[&str] = &["none", "public-only", "allow-all"];
+
+fn validate_network_policy(policy: &str) -> Result<(), String> {
+    if VALID_NETWORK_POLICIES.contains(&policy) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid network policy: {policy}. Must be one of: none, public-only, allow-all"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_volume_spec_guest_only() {
+        let result = parse_volume_spec("/workspace").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, None);
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host() {
+        let result = parse_volume_spec("/workspace:/host/path").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host_ro() {
+        let result = parse_volume_spec("/workspace:/host/path:ro").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host_rw() {
+        let result = parse_volume_spec("/workspace:/host/path:rw").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_invalid_flag() {
+        let result = parse_volume_spec("/workspace:/host/path:invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid volume flag"));
+    }
+
+    #[test]
+    fn parse_volume_spec_too_many_parts() {
+        let result = parse_volume_spec("/a:/b:ro:extra");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid volume spec"));
+    }
+
+    #[test]
+    fn validate_network_policy_valid_values() {
+        assert!(validate_network_policy("none").is_ok());
+        assert!(validate_network_policy("public-only").is_ok());
+        assert!(validate_network_policy("allow-all").is_ok());
+    }
+
+    #[test]
+    fn validate_network_policy_invalid_values() {
+        let err = validate_network_policy("bridge").unwrap_err();
+        assert!(err.contains("invalid network policy: bridge"));
+        assert!(err.contains("none, public-only, allow-all"));
+
+        let err = validate_network_policy("").unwrap_err();
+        assert!(err.contains("invalid network policy"));
+
+        let err = validate_network_policy("NONE").unwrap_err();
+        assert!(err.contains("invalid network policy: NONE"));
+    }
 }
