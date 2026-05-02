@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -15,31 +15,44 @@ fn pid_file_path() -> PathBuf {
         .join("nous.pid")
 }
 
-fn cleanup_daemon() {
-    let pid_path = pid_file_path();
-    if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
+fn cleanup_daemon(pid_path: &Path) {
+    if let Ok(content) = fs::read_to_string(pid_path) {
+        if let Ok(pid) = content.trim().parse::<i32>() {
+            // SAFETY: kill(2) is safe to call with any pid
+            let ret = unsafe { libc::kill(pid, libc::SIGTERM) };
+            if ret == 0 {
+                for _ in 0..20 {
+                    thread::sleep(Duration::from_millis(100));
+                    // SAFETY: kill with signal 0 checks process existence
+                    if unsafe { libc::kill(pid, 0) } != 0 {
+                        break;
+                    }
+                }
+                // Fallback: SIGKILL if still alive
+                if unsafe { libc::kill(pid, 0) } == 0 {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                }
             }
-            thread::sleep(Duration::from_secs(2));
         }
     }
-    let _ = fs::remove_file(&pid_path);
+    let _ = fs::remove_file(pid_path);
 }
 
 struct DaemonGuard;
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        cleanup_daemon();
+        cleanup_daemon(&pid_file_path());
     }
 }
 
 #[test]
 #[ignore]
 fn test_full_daemon_lifecycle() {
-    cleanup_daemon();
+    cleanup_daemon(&pid_file_path());
     let _guard = DaemonGuard;
 
     // 1. Start daemon
@@ -138,7 +151,7 @@ fn test_full_daemon_lifecycle() {
 #[test]
 #[ignore]
 fn test_stop_when_not_running() {
-    cleanup_daemon();
+    cleanup_daemon(&pid_file_path());
 
     let output = Command::new(nous_bin())
         .arg("stop")
@@ -155,7 +168,7 @@ fn test_stop_when_not_running() {
 #[test]
 #[ignore]
 fn test_reload_when_not_running() {
-    cleanup_daemon();
+    cleanup_daemon(&pid_file_path());
 
     let output = Command::new(nous_bin())
         .arg("reload")
@@ -177,7 +190,7 @@ fn test_reload_when_not_running() {
 #[test]
 #[ignore]
 fn test_start_alias() {
-    cleanup_daemon();
+    cleanup_daemon(&pid_file_path());
     let _guard = DaemonGuard;
 
     // `nous start` should work same as `nous serve --daemon`
