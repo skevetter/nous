@@ -1,0 +1,20 @@
+# Example: Planning agent definition
+[agent]
+name       = "planner"
+type       = "manager"
+version    = "0.3.0"
+description = "Decomposes epics into actionable tasks"
+
+[process]
+type = "claude"
+spawn_command = "claude --model claude-opus-4-6"
+
+[skills]
+refs = [
+  "planning",
+]
+
+[metadata]
+model = "global.anthropic.claude-opus-4-6-v1"
+timeout = 7200
+tags = ["planning", "decomposition"]
