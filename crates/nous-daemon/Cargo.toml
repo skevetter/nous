@@ -11,6 +11,7 @@ libc = "0.2"
 nous-core = { path = "../nous-core" }
 regex = "1"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+aws-config = { version = "1.8", features = ["behavior-version-latest", "sso"] }
 rig-bedrock = "0.4.5"
 rig-core = "0.36"
 serde = { workspace = true }

@@ -707,7 +707,7 @@ impl ProcessRegistry {
         };
 
         let result = match agent.process_type.as_deref() {
-            Some("claude") => {
+            Some("claude") | Some("sandbox") => {
                 self.invoke_claude(
                     state,
                     &invocation,
