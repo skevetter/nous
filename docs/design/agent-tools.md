@@ -6,6 +6,21 @@
 
 ---
 
+## Table of Contents
+
+1. [Current State](#1-current-state)
+2. [Tool Architecture](#2-tool-architecture)
+3. [Default Tool Set](#3-default-tool-set)
+4. [Tool Declaration in Agent Forms](#4-tool-declaration-in-agent-forms)
+5. [Tool Execution Model](#5-tool-execution-model)
+6. [Tool Discovery & Registration](#6-tool-discovery--registration)
+7. [Custom Tools](#7-custom-tools)
+8. [Integration with rig](#8-integration-with-rig)
+9. [Migration Plan](#9-migration-plan)
+10. [Open Decisions](#10-open-decisions)
+
+---
+
 ## 1. Current State
 
 ### 1.1 MCP Tool Surface (nous-daemon)
@@ -32,25 +47,25 @@ Tool categories currently served:
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| Rooms & messaging | 7 | `room_create`, `room_post_message`, `room_search`, `room_wait` |
-| Tasks | 7 | `task_create`, `task_list`, `task_update`, `task_close` |
-| Agents | 15 | `agent_register`, `agent_list`, `agent_inspect`, `agent_heartbeat` |
-| Memory | 12 | `memory_save`, `memory_search`, `memory_search_hybrid`, `memory_relate` |
-| Schedules | 6 | `schedule_create`, `schedule_list`, `schedule_delete` |
+| Rooms & messaging | 13 | `room_create`, `room_post_message`, `room_search`, `room_wait`, `room_subscribe`, `room_inspect` |
+| Tasks | 19 | `task_create`, `task_list`, `task_update`, `task_close`, `task_depends_add`, `task_batch_close` |
+| Agents | 31 | `agent_register`, `agent_list`, `agent_inspect`, `agent_heartbeat`, `agent_spawn`, `agent_invoke` |
+| Memory | 19 | `memory_save`, `memory_search`, `memory_search_hybrid`, `memory_relate`, `memory_embed`, `memory_session_summary` |
+| Schedules | 7 | `schedule_create`, `schedule_list`, `schedule_delete`, `schedule_runs_list`, `schedule_health` |
 | Worktrees | 5 | `worktree_create`, `worktree_list`, `worktree_delete` |
-| Inventory | 6 | `inventory_register`, `inventory_list`, `inventory_search` |
-| Processes | 8+ | `process_create`, `process_start`, `process_stop`, `invocation_create` |
+| Inventory & artifacts | 11 | `inventory_register`, `inventory_list`, `inventory_search`, `artifact_register`, `artifact_update` |
 
 ### 1.2 Scheduled Actions
 
-The scheduler (`crates/nous-daemon/src/scheduler.rs:262`) dispatches three action types:
+The scheduler (`crates/nous-daemon/src/scheduler.rs:261`) dispatches four action types:
 
 ```rust
 match schedule.action_type.as_str() {
-    "mcp_tool" => dispatch_mcp_tool(state, &schedule.action_payload).await,
-    "shell"    => dispatch_shell(&schedule.action_payload).await,
-    "http"     => dispatch_http(state, &schedule.action_payload).await,
-    _          => Err(NousError::Validation("unsupported action type")),
+    "mcp_tool"       => dispatch_mcp_tool(state, &schedule.action_payload).await,
+    "shell"          => dispatch_shell(&schedule.action_payload, config).await,
+    "http"           => dispatch_http(&schedule.action_payload).await,
+    "agent_invoke"   => dispatch_agent_invoke(state, &schedule.action_payload).await,
+    other            => Err(NousError::Validation(format!("unknown action_type: {other}"))),
 }
 ```
 
@@ -187,6 +202,21 @@ pub struct ToolContext {
     pub permissions: ResolvedPermissions,
 }
 
+```
+
+**`ToolContext` fields:**
+
+| Field | Type | Populated When |
+|-------|------|----------------|
+| `agent_id` | `String` | Always — set from `agent.id` at spawn |
+| `agent_name` | `String` | Always — set from `agent.name` at spawn |
+| `namespace` | `String` | Always — set from `agent.namespace` at spawn |
+| `workspace_dir` | `Option<PathBuf>` | When the agent form specifies `[process].working_dir` |
+| `session_id` | `Option<String>` | When the invocation is tracked (i.e., `invocation.id` exists) |
+| `timeout` | `Duration` | Always — defaults to 30s, overridden by `[tools.execution].default_timeout_secs` |
+| `permissions` | `ResolvedPermissions` | Always — resolved from agent form `[tools.permissions]` merged with type defaults |
+
+```rust
 /// Resolved permission set for the calling agent.
 #[derive(Debug, Clone)]
 pub struct ResolvedPermissions {
@@ -358,10 +388,10 @@ impl Default for ExecutionPolicy {
 ## 3. Default Tool Set
 
 Every nous agent ships with a curated set of built-in tools, organized by category.
-Tools are registered in `crates/nous-core/src/tools/builtin/mod.rs`. The design draws
-on patterns from Claude Code (file ops + shell + web), LangChain (structured tool
-interface), and the Agent Skills Specification (progressive disclosure, skill-scoped
-tools).
+Tools are registered in `crates/nous-core/src/tools/builtin/mod.rs`. The built-in set
+provides file system operations, shell execution, HTTP requests, memory persistence,
+agent communication, and code analysis — covering the core capabilities agents need for
+autonomous software engineering tasks.
 
 ### 3.1 File System Tools
 
@@ -415,10 +445,29 @@ impl AgentTool for FsReadTool {
     }
 
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = args.get("path").and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
+        let path = PathBuf::from(path);
+
         // Validate path against ctx.permissions.allowed_paths
-        // Read file, apply offset/limit
-        // Return ToolContent::Text
-        todo!()
+        self.check_read_permission(&path, ctx)?;
+
+        let content = tokio::fs::read_to_string(&path).await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+        // Apply offset/limit for large files
+        let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
+        let lines: String = content.lines()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(ToolOutput {
+            content: vec![ToolContent::Text { text: lines }],
+            metadata: None,
+        })
     }
 }
 ```
@@ -821,12 +870,18 @@ async fn execute_sandboxed(
     ctx: &ToolContext,
     sandbox_config: &SandboxConfig,
 ) -> Result<ToolOutput, ToolError> {
-    // Build sandbox command using microsandbox crate
-    // Mount workspace_dir as volume
-    // Apply network policy from sandbox_config
-    // Execute tool.call() inside container
-    // Capture stdout/stderr as ToolOutput
-    todo!()
+    // Implementation in Phase 2 — see Section 9
+    // Integrates with SandboxConfig from sandbox.rs and create_sandbox_process()
+    let sandbox = SandboxBuilder::new(sandbox_config)
+        .mount(ctx.workspace_dir.as_deref().unwrap_or(Path::new(".")), "/workspace")
+        .network_policy(sandbox_config.network_policy)
+        .build()
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+    let output = sandbox.exec(|| tool.call_dyn(args, ctx)).await
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+    output
 }
 ```
 
@@ -1006,7 +1061,7 @@ At daemon startup, the default tools are registered before any agent is spawned:
 ```rust
 // crates/nous-daemon/src/main.rs (or a dedicated init module)
 
-pub fn register_builtin_tools(registry: &ToolRegistry) {
+pub async fn register_builtin_tools(registry: &ToolRegistry) {
     // Filesystem
     registry.register(FsReadTool).await;
     registry.register(FsWriteTool).await;
@@ -1128,8 +1183,9 @@ Following the Agent Skills Specification's three-stage progressive disclosure:
 
 3. **Execution**: The tool runs through the execution pipeline (Section 5).
 
-This minimizes context window consumption. An agent with 25 tools uses ~2,500 tokens
-for discovery versus ~12,500 tokens if full schemas were always loaded.
+This minimizes context window consumption. Per-tool estimates: ~100 tokens for discovery
+(name + description), ~500 tokens with full input schema. An agent with 25 tools uses
+~2,500 tokens for discovery versus ~12,500 tokens if full schemas were always loaded.
 
 ## 7. Custom Tools
 
@@ -1273,7 +1329,7 @@ impl AgentTool for DbQueryTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
             .iter()
-            .map(|row| /* convert to JSON */)
+            .map(|row| row_to_json(row)) // illustrative — actual impl uses sqlx::FromRow
             .collect();
 
         Ok(ToolOutput {
@@ -1625,15 +1681,15 @@ truncation.
 
 **Files created:**
 
-| File | Tools |
-|------|-------|
-| `crates/nous-core/src/tools/builtin/mod.rs` | Re-exports, `register_builtin_tools()` |
-| `crates/nous-core/src/tools/builtin/filesystem.rs` | `FsReadTool`, `FsWriteTool`, `FsEditTool`, `FsListTool`, `FsSearchTool`, `FsStatTool`, `FsMkdirTool`, `FsDeleteTool` |
-| `crates/nous-core/src/tools/builtin/shell.rs` | `ShellExecTool`, `ShellExecBackgroundTool`, `ShellReadOutputTool`, `ShellKillTool` |
-| `crates/nous-core/src/tools/builtin/http.rs` | `HttpRequestTool`, `HttpFetchTool` |
-| `crates/nous-core/src/tools/builtin/memory.rs` | `MemorySaveTool`, `MemorySearchTool`, `MemorySearchHybridTool`, `MemoryGetContextTool`, `MemoryRelateTool` |
-| `crates/nous-core/src/tools/builtin/comms.rs` | `RoomPostTool`, `RoomReadTool`, `RoomCreateTool`, `RoomWaitTool`, `TaskCreateTool`, `TaskUpdateTool` |
-| `crates/nous-core/src/tools/builtin/code.rs` | `CodeGrepTool`, `CodeGlobTool`, `CodeSymbolsTool` |
+| File | Tools | Count |
+|------|-------|-------|
+| `crates/nous-core/src/tools/builtin/mod.rs` | Re-exports, `register_builtin_tools()` | — |
+| `crates/nous-core/src/tools/builtin/filesystem.rs` | `FsReadTool`, `FsWriteTool`, `FsEditTool`, `FsListTool`, `FsSearchTool`, `FsStatTool`, `FsMkdirTool`, `FsDeleteTool` | 8 |
+| `crates/nous-core/src/tools/builtin/shell.rs` | `ShellExecTool`, `ShellExecBackgroundTool`, `ShellReadOutputTool`, `ShellKillTool` | 4 |
+| `crates/nous-core/src/tools/builtin/http.rs` | `HttpRequestTool`, `HttpFetchTool` | 2 |
+| `crates/nous-core/src/tools/builtin/memory.rs` | `MemorySaveTool`, `MemorySearchTool`, `MemorySearchHybridTool`, `MemoryGetContextTool`, `MemoryRelateTool` | 5 |
+| `crates/nous-core/src/tools/builtin/comms.rs` | `RoomPostTool`, `RoomReadTool`, `RoomCreateTool`, `RoomWaitTool`, `TaskCreateTool`, `TaskUpdateTool` | 6 |
+| `crates/nous-core/src/tools/builtin/code.rs` | `CodeGrepTool`, `CodeGlobTool`, `CodeSymbolsTool` | 3 |
 
 **Files modified:**
 
