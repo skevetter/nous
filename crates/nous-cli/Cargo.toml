@@ -7,6 +7,9 @@ edition.workspace = true
 name = "nous"
 path = "src/main.rs"
 
+[features]
+sandbox = ["nous-daemon/sandbox"]
+
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }

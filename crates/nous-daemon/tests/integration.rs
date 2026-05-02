@@ -28,6 +28,8 @@ async fn test_state() -> (AppState, TempDir) {
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
         default_model: "test-model".to_string(),
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: None,
     };
     (state, tmp)
 }
@@ -46,6 +48,8 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
         default_model: "test-model".to_string(),
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: None,
     };
     (state, tmp)
 }
@@ -2263,4 +2267,85 @@ async fn memory_search_hybrid_falls_back_to_fts5_when_no_embedder() {
         body["_warning"].as_str().unwrap(),
         "embedding unavailable, fell back to FTS5-only search"
     );
+}
+
+#[cfg(feature = "sandbox")]
+#[tokio::test]
+async fn sandbox_spawn_creates_entry_in_manager() {
+    use nous_core::agents::{self, AgentType, RegisterAgentRequest};
+    use nous_daemon::sandbox::SandboxManager;
+    use tokio::sync::Mutex;
+
+    let tmp = TempDir::new().unwrap();
+    let pools = DbPools::connect(tmp.path()).await.unwrap();
+    pools.run_migrations("porter unicode61").await.unwrap();
+
+    let sandbox_manager = Arc::new(Mutex::new(SandboxManager::new()));
+
+    let state = AppState {
+        pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
+        registry: Arc::new(NotificationRegistry::new()),
+        embedder: Some(Arc::new(MockEmbedder::new())),
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
+        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
+        llm_client: None,
+        default_model: "test-model".to_string(),
+        sandbox_manager: Some(sandbox_manager.clone()),
+    };
+
+    // Create an agent directly in DB with sandbox metadata
+    let agent = agents::register_agent(
+        &state.pool,
+        RegisterAgentRequest {
+            name: "sandbox-test-agent".into(),
+            agent_type: AgentType::Engineer,
+            parent_id: None,
+            namespace: None,
+            room: None,
+            metadata: Some(
+                r#"{"sandbox":{"image":"ubuntu:24.04","cpus":2,"memory_mib":512}}"#.into(),
+            ),
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Spawn sandbox process
+    let result = state
+        .process_registry
+        .spawn(
+            &state,
+            &agent.id,
+            "sandbox:ubuntu:24.04",
+            "sandbox",
+            None,
+            None,
+            Some(3600),
+            "never",
+            0,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "sandbox spawn should succeed: {:?}",
+        result.err()
+    );
+    let process = result.unwrap();
+    assert_eq!(process.process_type, "sandbox");
+    assert!(process.sandbox_image.is_some());
+    assert_eq!(process.sandbox_image.as_deref(), Some("ubuntu:24.04"));
+
+    // Verify entry exists in SandboxManager
+    let mgr = sandbox_manager.lock().await;
+    let handle = mgr.get(&agent.id);
+    assert!(
+        handle.is_some(),
+        "sandbox should be tracked in SandboxManager"
+    );
+    assert_eq!(handle.unwrap().status, "running");
+    assert_eq!(handle.unwrap().image, "ubuntu:24.04");
 }

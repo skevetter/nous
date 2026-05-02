@@ -81,6 +81,8 @@ async fn main() {
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
         default_model,
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: None,
     };
 
     let scheduler_handle = Scheduler::spawn(

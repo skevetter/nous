@@ -9,6 +9,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::llm_client::LlmClient;
 use crate::process_manager::ProcessRegistry;
+#[cfg(feature = "sandbox")]
+use crate::sandbox::SandboxManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,4 +23,13 @@ pub struct AppState {
     pub process_registry: Arc<ProcessRegistry>,
     pub llm_client: Option<Arc<LlmClient>>,
     pub default_model: String,
+    #[cfg(feature = "sandbox")]
+    pub sandbox_manager: Option<Arc<tokio::sync::Mutex<SandboxManager>>>,
+}
+
+impl AppState {
+    #[cfg(feature = "sandbox")]
+    pub fn sandbox_manager(&self) -> Option<&Arc<tokio::sync::Mutex<SandboxManager>>> {
+        self.sandbox_manager.as_ref()
+    }
 }

@@ -636,7 +636,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     sandbox_image.ok_or("--sandbox-image is required when --type sandbox")?;
 
                 if let Some(ref policy) = sandbox_network {
-                    validate_network_policy(policy).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                    validate_network_policy(policy)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 }
 
                 let volumes_json = if sandbox_volume.is_empty() {

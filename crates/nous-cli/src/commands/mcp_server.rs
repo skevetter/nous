@@ -95,6 +95,8 @@ async fn execute(
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
         default_model,
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: None,
     };
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
