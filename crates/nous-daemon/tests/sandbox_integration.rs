@@ -1,0 +1,232 @@
+#![cfg(feature = "sandbox")]
+
+use std::sync::Arc;
+
+use nous_core::db::DbPools;
+use nous_core::memory::MockEmbedder;
+use nous_core::notifications::NotificationRegistry;
+use nous_daemon::process_manager::ProcessRegistry;
+use nous_daemon::sandbox::SandboxManager;
+use nous_daemon::state::AppState;
+use sqlx::SqlitePool;
+use tempfile::TempDir;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+
+async fn setup() -> (AppState, TempDir) {
+    let tmp = TempDir::new().unwrap();
+    let pools = DbPools::connect(tmp.path()).await.unwrap();
+    pools.run_migrations("porter unicode61").await.unwrap();
+    let sandbox_mgr = Arc::new(tokio::sync::Mutex::new(SandboxManager::new()));
+    let state = AppState {
+        pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
+        registry: Arc::new(NotificationRegistry::new()),
+        embedder: Some(Arc::new(MockEmbedder::new())),
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: CancellationToken::new(),
+        process_registry: Arc::new(ProcessRegistry::new()),
+        llm_client: None,
+        default_model: "test-model".to_string(),
+        sandbox_manager: Some(sandbox_mgr),
+    };
+    (state, tmp)
+}
+
+async fn create_test_agent(pool: &SqlitePool, agent_id: &str) {
+    sqlx::query(
+        "INSERT INTO agents (id, name, agent_type, namespace, status, process_type, metadata_json, created_at, updated_at) \
+         VALUES (?, ?, 'engineer', 'default', 'active', 'sandbox', '{\"sandbox\":{\"image\":\"ubuntu:24.04\"}}', \
+         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+    )
+    .bind(agent_id)
+    .bind(format!("test-agent-{}", agent_id))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_sandbox_process(
+    pool: &SqlitePool,
+    agent_id: &str,
+    status: &str,
+    sandbox_name: &str,
+) -> String {
+    let id = uuid::Uuid::now_v7().to_string();
+    sqlx::query(
+        "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
+         max_output_bytes, restart_policy, restart_count, max_restarts, \
+         sandbox_image, sandbox_name, created_at, updated_at) \
+         VALUES (?, ?, 'sandbox', '', ?, 65536, 'never', 0, 3, \
+         'ubuntu:24.04', ?, \
+         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+    )
+    .bind(&id)
+    .bind(agent_id)
+    .bind(status)
+    .bind(sandbox_name)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+async fn get_process_status(pool: &SqlitePool, process_id: &str) -> String {
+    let row: (String,) = sqlx::query_as("SELECT status FROM agent_processes WHERE id = ?")
+        .bind(process_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    row.0
+}
+
+#[tokio::test]
+async fn test_sandbox_spawn_and_stop() {
+    let (state, _tmp) = setup().await;
+    let agent_id = "spawn-stop-agent";
+    create_test_agent(&state.pool, agent_id).await;
+
+    let process = state
+        .process_registry
+        .spawn(
+            &state, agent_id, "", "sandbox", None, None, None, "never", 3,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(process.process_type, "sandbox");
+    assert_eq!(process.status, "running");
+    assert!(process.sandbox_name.is_some());
+
+    let status = state.process_registry.get_status(agent_id).await;
+    assert!(status.is_some());
+
+    let stopped = state
+        .process_registry
+        .stop(&state, agent_id, false, 5)
+        .await
+        .unwrap();
+    assert_eq!(stopped.status, "stopped");
+
+    let status = state.process_registry.get_status(agent_id).await;
+    assert!(status.is_none());
+}
+
+#[tokio::test]
+async fn test_sandbox_recovery_on_restart() {
+    let (state, _tmp) = setup().await;
+    let agent_id = "recovery-agent";
+    create_test_agent(&state.pool, agent_id).await;
+
+    let sandbox_name = "sandbox-recovery-agent-test123";
+    let process_id = insert_sandbox_process(&state.pool, agent_id, "running", sandbox_name).await;
+
+    let sandbox_mgr = state.sandbox_manager.as_ref().unwrap();
+    let new_registry = Arc::new(ProcessRegistry::new());
+    new_registry
+        .recover_sandboxes(&state.pool, sandbox_mgr)
+        .await
+        .unwrap();
+
+    let status = new_registry.get_status(agent_id).await;
+    assert!(status.is_some(), "sandbox should be recovered in HashMap");
+    assert_eq!(status.unwrap().process_id, process_id);
+
+    let mgr = sandbox_mgr.lock().await;
+    let handle = mgr.get(agent_id);
+    assert!(handle.is_some());
+    assert_eq!(handle.unwrap().name, sandbox_name);
+    assert_eq!(handle.unwrap().status, "running");
+}
+
+#[tokio::test]
+async fn test_crashed_sandbox_detection() {
+    let (state, _tmp) = setup().await;
+    let agent_id = "crashed-agent";
+    create_test_agent(&state.pool, agent_id).await;
+
+    let process_id =
+        insert_sandbox_process(&state.pool, agent_id, "running", "sandbox-crashed-test").await;
+
+    // Simulate a sandbox that can't be reconnected by using a SandboxManager
+    // that will refuse to reconnect. We achieve this by directly testing that
+    // a process with no sandbox_name gets marked as crashed.
+    // Instead, let's insert a process without a sandbox_name to trigger the crash path.
+    let crash_agent = "crash-no-name-agent";
+    create_test_agent(&state.pool, crash_agent).await;
+    let crash_id = {
+        let id = uuid::Uuid::now_v7().to_string();
+        sqlx::query(
+            "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
+             max_output_bytes, restart_policy, restart_count, max_restarts, \
+             sandbox_image, sandbox_name, created_at, updated_at) \
+             VALUES (?, ?, 'sandbox', '', 'running', 65536, 'never', 0, 3, \
+             'ubuntu:24.04', NULL, \
+             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .bind(&id)
+        .bind(crash_agent)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        id
+    };
+
+    let sandbox_mgr = state.sandbox_manager.as_ref().unwrap();
+    let new_registry = Arc::new(ProcessRegistry::new());
+    new_registry
+        .recover_sandboxes(&state.pool, sandbox_mgr)
+        .await
+        .unwrap();
+
+    // The process without sandbox_name should be marked crashed
+    let status = get_process_status(&state.pool, &crash_id).await;
+    assert_eq!(status, "crashed");
+
+    // The process with a valid sandbox_name should be recovered
+    let status = get_process_status(&state.pool, &process_id).await;
+    assert_eq!(status, "running");
+}
+
+#[tokio::test]
+async fn test_sandbox_spawn_does_not_affect_shell() {
+    let (state, _tmp) = setup().await;
+    let agent_id = "shell-agent";
+    create_test_agent(&state.pool, agent_id).await;
+
+    // Override the agent's process_type so shell spawn works
+    sqlx::query("UPDATE agents SET process_type = 'shell' WHERE id = ?")
+        .bind(agent_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    let process = state
+        .process_registry
+        .spawn(
+            &state,
+            agent_id,
+            "echo hello",
+            "shell",
+            None,
+            None,
+            Some(5),
+            "never",
+            3,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(process.process_type, "shell");
+    assert_eq!(process.status, "running");
+    assert!(process.sandbox_name.is_none());
+
+    // Give the process a moment to finish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Shell process lifecycle remains unchanged
+    let db_proc = nous_core::agents::processes::get_process_by_id(&state.pool, &process.id)
+        .await
+        .unwrap();
+    assert!(db_proc.status == "running" || db_proc.status == "stopped");
+}

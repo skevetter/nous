@@ -191,6 +191,18 @@ async fn execute(
         ))),
     };
 
+    #[cfg(feature = "sandbox")]
+    {
+        if let Some(ref sandbox_mgr) = state.sandbox_manager {
+            if let Err(e) = process_registry
+                .recover_sandboxes(&pools.fts, sandbox_mgr)
+                .await
+            {
+                tracing::error!("sandbox recovery failed: {e}");
+            }
+        }
+    }
+
     let _scheduler_handle = Scheduler::spawn(
         state.clone(),
         SchedulerConfig::default(),

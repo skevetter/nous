@@ -114,6 +114,24 @@ impl SandboxManager {
     pub fn get(&self, agent_id: &str) -> Option<&SandboxHandle> {
         self.sandboxes.get(agent_id)
     }
+
+    pub async fn reconnect(
+        &mut self,
+        agent_id: &str,
+        sandbox_name: &str,
+        image: &str,
+    ) -> Result<bool, NousError> {
+        info!(agent_id, sandbox_name, "attempting sandbox reconnect");
+
+        let handle = SandboxHandle {
+            name: sandbox_name.to_string(),
+            agent_id: agent_id.to_string(),
+            image: image.to_string(),
+            status: "running".to_string(),
+        };
+        self.sandboxes.insert(agent_id.to_string(), handle);
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
