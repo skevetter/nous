@@ -475,6 +475,43 @@ const MIGRATIONS: &[Migration] = &[
               ALTER TABLE agents ADD COLUMN working_dir TEXT; \
               ALTER TABLE agents ADD COLUMN auto_restart INTEGER NOT NULL DEFAULT 0;",
     },
+    Migration {
+        version: "026",
+        name: "sandbox_support",
+        sql: "CREATE TABLE IF NOT EXISTS agent_processes_new (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              agent_id TEXT NOT NULL REFERENCES agents(id), \
+              process_type TEXT NOT NULL CHECK(process_type IN ('claude','shell','http','sandbox')), \
+              command TEXT NOT NULL, \
+              working_dir TEXT, \
+              env_json TEXT DEFAULT '{}', \
+              pid INTEGER, \
+              status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','starting','running','stopping','stopped','failed','crashed')), \
+              exit_code INTEGER, \
+              started_at TEXT, \
+              stopped_at TEXT, \
+              last_output TEXT, \
+              max_output_bytes INTEGER NOT NULL DEFAULT 65536, \
+              restart_policy TEXT NOT NULL DEFAULT 'never' CHECK(restart_policy IN ('never','on-failure','always')), \
+              restart_count INTEGER NOT NULL DEFAULT 0, \
+              max_restarts INTEGER NOT NULL DEFAULT 3, \
+              timeout_secs INTEGER, \
+              sandbox_image TEXT, \
+              sandbox_cpus INTEGER, \
+              sandbox_memory_mib INTEGER, \
+              sandbox_network_policy TEXT, \
+              sandbox_volumes_json TEXT, \
+              sandbox_name TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
+              ); \
+              INSERT INTO agent_processes_new SELECT *, NULL, NULL, NULL, NULL, NULL, NULL FROM agent_processes; \
+              DROP TABLE agent_processes; \
+              ALTER TABLE agent_processes_new RENAME TO agent_processes; \
+              CREATE INDEX IF NOT EXISTS idx_agent_proc_agent ON agent_processes(agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_agent_proc_status ON agent_processes(status); \
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proc_active ON agent_processes(agent_id) WHERE status IN ('pending','starting','running','stopping');",
+    },
 ];
 
 struct Migration {
