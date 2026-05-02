@@ -196,7 +196,7 @@ async fn execute(
 
     {
         let shutdown = shutdown.clone();
-        let current_port = config.port;
+        let mut current_port = config.port;
         tokio::spawn(async move {
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -217,6 +217,8 @@ async fn execute(
                         break;
                     }
                     _ = sighup.recv() => {
+                        // Currently validates config and detects port changes only.
+                        // No config values are hot-reloaded at runtime — restart required for all changes.
                         tracing::info!("SIGHUP received, reloading config");
                         match Config::load() {
                             Ok(new_config) => {
@@ -226,9 +228,9 @@ async fn execute(
                                         current_port,
                                         new_config.port
                                     );
-                                } else {
-                                    tracing::info!("config reloaded successfully (no restart required)");
                                 }
+                                current_port = new_config.port;
+                                tracing::info!("config reloaded successfully");
                             }
                             Err(e) => {
                                 tracing::error!("failed to reload config: {e}");
