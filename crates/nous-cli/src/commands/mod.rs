@@ -6,6 +6,7 @@ pub mod inventory;
 pub mod mcp_server;
 pub mod memory;
 pub mod model;
+pub mod reload;
 pub mod schedule;
 pub mod serve;
 pub mod status;
