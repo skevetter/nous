@@ -404,6 +404,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
     match cmd {
         AgentCommands::Add { file } => {
             let path = PathBuf::from(&file);
+            let toml_content = std::fs::read(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
             let def = agents::definition::load_definition(&path)?;
 
             let agent_type: agents::AgentType = def.agent.r#type.parse()?;
@@ -436,7 +438,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
 
             if let Some(skills) = &def.skills {
                 let skills_dir = dirs::config_dir()
-                    .unwrap_or_else(|| PathBuf::from("~"))
+                    .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+                    .ok_or("cannot determine config directory")?
                     .join("nous")
                     .join("skills");
                 let resolved =
@@ -448,7 +451,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 }
                 let hex_hash = format!("{:x}", hasher.finalize());
 
-                let config_hash = format!("{:x}", Sha256::digest(b""));
+                let config_hash = format!("{:x}", Sha256::digest(&toml_content));
 
                 let skills_json: Vec<serde_json::Value> = resolved
                     .iter()
@@ -1124,7 +1127,7 @@ fn parse_volume_spec(spec: &str) -> Result<nous_core::agents::sandbox::VolumeMou
 }
 
 fn looks_like_uuid(s: &str) -> bool {
-    s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
+    uuid::Uuid::parse_str(s).is_ok()
 }
 
 const VALID_NETWORK_POLICIES: &[&str] = &["none", "public-only", "allow-all"];

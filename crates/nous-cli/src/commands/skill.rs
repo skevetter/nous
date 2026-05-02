@@ -34,6 +34,7 @@ async fn execute(cmd: SkillCommands) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         SkillCommands::List => {
             let skills_dir = dirs::config_dir()
+                .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("nous")
                 .join("skills");
