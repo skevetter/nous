@@ -157,6 +157,8 @@ mod tests {
             process_registry: Arc::new(process_manager::ProcessRegistry::new()),
             llm_client: None,
             default_model: "test-model".to_string(),
+            #[cfg(feature = "sandbox")]
+            sandbox_manager: None,
         };
         (state, tmp)
     }

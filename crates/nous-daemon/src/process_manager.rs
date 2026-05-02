@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use nous_core::agents::processes::{self, Invocation, Process};
+#[cfg(feature = "sandbox")]
+use nous_core::agents::sandbox::SandboxConfig;
 use nous_core::error::NousError;
 
 use crate::state::AppState;
@@ -57,6 +59,13 @@ impl ProcessRegistry {
                     "agent '{agent_id}' already has a running process"
                 )));
             }
+        }
+
+        #[cfg(feature = "sandbox")]
+        if process_type == "sandbox" {
+            return self
+                .spawn_sandbox(state, agent_id, timeout_secs, restart_policy)
+                .await;
         }
 
         let env_json = env
@@ -164,6 +173,213 @@ impl ProcessRegistry {
         });
 
         Ok(process)
+    }
+
+    #[cfg(feature = "sandbox")]
+    async fn spawn_sandbox(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        timeout_secs: Option<i64>,
+        restart_policy: &str,
+    ) -> Result<Process, NousError> {
+        let sandbox_mgr = state.sandbox_manager().ok_or_else(|| {
+            NousError::Config("sandbox feature enabled but SandboxManager not initialized".into())
+        })?;
+
+        let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+        let config = Self::build_sandbox_config(&agent)?;
+
+        let volumes_json = config
+            .volumes
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
+
+        let process = processes::create_sandbox_process(
+            &state.pool,
+            agent_id,
+            &config.image,
+            config.cpus,
+            config.memory_mib,
+            config.network_policy.as_deref(),
+            volumes_json.as_deref(),
+            None,
+            timeout_secs,
+            Some(restart_policy),
+        )
+        .await?;
+
+        let sandbox_name = {
+            let mut mgr = sandbox_mgr.lock().await;
+            mgr.create(&config, agent_id).await?
+        };
+
+        // Update sandbox_name and status to running
+        sqlx::query(
+            "UPDATE agent_processes SET sandbox_name = ?, status = 'running', \
+             started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+        )
+        .bind(&sandbox_name)
+        .bind(&process.id)
+        .execute(&state.pool)
+        .await?;
+
+        let cancel = CancellationToken::new();
+        let handle = ProcessHandle {
+            process_id: process.id.clone(),
+            agent_id: agent_id.to_string(),
+            child: None,
+            started_at: chrono::Utc::now(),
+            cancel: cancel.clone(),
+        };
+
+        {
+            let mut handles = self.handles.lock().await;
+            handles.insert(agent_id.to_string(), handle);
+        }
+
+        let process_id = process.id.clone();
+        let agent_id_owned = agent_id.to_string();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            Self::monitor_sandbox(state_clone, process_id, agent_id_owned, cancel).await;
+        });
+
+        processes::get_process_by_id(&state.pool, &process.id).await
+    }
+
+    #[cfg(feature = "sandbox")]
+    fn build_sandbox_config(agent: &nous_core::agents::Agent) -> Result<SandboxConfig, NousError> {
+        let metadata: serde_json::Value = agent
+            .metadata_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+        let sandbox_obj = metadata.get("sandbox").cloned().unwrap_or_default();
+
+        let image = sandbox_obj
+            .get("image")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ubuntu:24.04")
+            .to_string();
+
+        let cpus = sandbox_obj
+            .get("cpus")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
+        let memory_mib = sandbox_obj
+            .get("memory_mib")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
+        let network_policy = sandbox_obj
+            .get("network_policy")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let max_duration_secs = sandbox_obj
+            .get("max_duration_secs")
+            .and_then(|v| v.as_u64());
+
+        let idle_timeout_secs = sandbox_obj
+            .get("idle_timeout_secs")
+            .and_then(|v| v.as_u64());
+
+        Ok(SandboxConfig {
+            image,
+            cpus,
+            memory_mib,
+            network_policy,
+            volumes: None,
+            secrets: None,
+            max_duration_secs,
+            idle_timeout_secs,
+        })
+    }
+
+    #[cfg(feature = "sandbox")]
+    async fn monitor_sandbox(
+        state: AppState,
+        process_id: String,
+        agent_id: String,
+        cancel: CancellationToken,
+    ) {
+        let poll_interval = Duration::from_secs(10);
+
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    break;
+                }
+                _ = tokio::time::sleep(poll_interval) => {
+                    let sandbox_mgr = match state.sandbox_manager() {
+                        Some(mgr) => mgr,
+                        None => break,
+                    };
+
+                    let status = {
+                        let mgr = sandbox_mgr.lock().await;
+                        mgr.get(&agent_id).map(|h| h.status.clone())
+                    };
+
+                    match status {
+                        Some(ref s) if s != "running" => {
+                            let _ = processes::update_process_status(
+                                &state.pool,
+                                &process_id,
+                                "crashed",
+                                None,
+                                Some(&format!("sandbox status: {s}")),
+                                None,
+                            ).await;
+                            state.process_registry.handles.lock().await.remove(&agent_id);
+                            return;
+                        }
+                        Some(_) => {
+                            let mgr = sandbox_mgr.lock().await;
+                            if let Ok(metrics) = mgr.metrics(&agent_id).await {
+                                let summary = format!(
+                                    "cpu={:.1}% mem={}MiB disk={}MiB",
+                                    metrics.cpu_usage_percent,
+                                    metrics.memory_used_mib,
+                                    metrics.disk_used_mib,
+                                );
+                                let _ = processes::update_process_status(
+                                    &state.pool,
+                                    &process_id,
+                                    "running",
+                                    None,
+                                    Some(&summary),
+                                    None,
+                                ).await;
+                            }
+                        }
+                        None => {
+                            let _ = processes::update_process_status(
+                                &state.pool,
+                                &process_id,
+                                "crashed",
+                                None,
+                                Some("sandbox no longer tracked by manager"),
+                                None,
+                            ).await;
+                            state.process_registry.handles.lock().await.remove(&agent_id);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        state
+            .process_registry
+            .handles
+            .lock()
+            .await
+            .remove(&agent_id);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -297,6 +513,7 @@ impl ProcessRegistry {
         })?;
 
         let process_id = handle.process_id.clone();
+        let is_sandbox = handle.child.is_none();
 
         // Update status to stopping
         let _ = processes::update_process_status(
@@ -311,6 +528,30 @@ impl ProcessRegistry {
 
         // Cancel the monitor task
         handle.cancel.cancel();
+
+        #[cfg(feature = "sandbox")]
+        if is_sandbox {
+            handles.remove(agent_id);
+            drop(handles);
+
+            if let Some(sandbox_mgr) = state.sandbox_manager() {
+                let mut mgr = sandbox_mgr.lock().await;
+                let _ = mgr.stop(agent_id).await;
+            }
+
+            return processes::update_process_status(
+                &state.pool,
+                &process_id,
+                "stopped",
+                None,
+                None,
+                None,
+            )
+            .await;
+        }
+
+        #[cfg(not(feature = "sandbox"))]
+        let _ = is_sandbox;
 
         let exit_code = if let Some(mut child) = handle.child.take() {
             if force {
@@ -339,8 +580,6 @@ impl ProcessRegistry {
             }
             child.try_wait().ok().flatten().and_then(|s| s.code())
         } else {
-            // Child already taken by monitor wait_for_exit(). Process killed via kill_on_drop when monitor future drops.
-            // Brief yield to let the kill propagate.
             tokio::task::yield_now().await;
             None
         };

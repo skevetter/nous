@@ -185,6 +185,10 @@ async fn execute(
         process_registry: process_registry.clone(),
         llm_client,
         default_model,
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: Some(Arc::new(tokio::sync::Mutex::new(
+            nous_daemon::sandbox::SandboxManager::new(),
+        ))),
     };
 
     let _scheduler_handle = Scheduler::spawn(
