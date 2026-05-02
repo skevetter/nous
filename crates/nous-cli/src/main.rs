@@ -116,6 +116,8 @@ enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Stop the running daemon
+    Stop,
 }
 
 #[tokio::main]
@@ -182,6 +184,9 @@ async fn main() {
             profile,
         } => {
             commands::serve::run(model, region, profile, port, true, false).await;
+        }
+        Commands::Stop => {
+            commands::stop::run().await;
         }
     }
 }

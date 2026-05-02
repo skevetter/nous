@@ -2286,6 +2286,7 @@ dependencies = [
  "axum",
  "clap",
  "dirs",
+ "libc",
  "nous-core",
  "nous-daemon",
  "reqwest 0.12.28",

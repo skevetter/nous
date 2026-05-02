@@ -11,6 +11,7 @@ path = "src/main.rs"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 dirs = { workspace = true }
+libc = "0.2"
 nous-core = { path = "../nous-core" }
 nous-daemon = { path = "../nous-daemon" }
 reqwest = { workspace = true }
