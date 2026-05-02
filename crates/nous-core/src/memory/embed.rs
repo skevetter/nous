@@ -18,6 +18,8 @@ const MAX_SEQ_LEN: usize = 512;
 
 impl OnnxEmbeddingModel {
     pub fn load(model_path: Option<&str>) -> Result<Self, NousError> {
+        ort::init().with_telemetry(false).commit();
+
         let path = resolve_model_path(model_path)?;
 
         if !path.exists() {
