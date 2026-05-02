@@ -1,7 +1,7 @@
 # Agent Chat & Task Management Integration
 
-**Status:** Draft
-**Date:** 2026-05-02
+**Status:** Draft  
+**Date:** 2026-05-02  
 **Workstream:** NOUS-062
 
 ---
