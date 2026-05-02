@@ -9,6 +9,7 @@ pub mod model;
 pub mod reload;
 pub mod schedule;
 pub mod serve;
+pub mod skill;
 pub mod status;
 pub mod stop;
 pub mod task;

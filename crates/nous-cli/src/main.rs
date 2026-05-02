@@ -10,6 +10,7 @@ use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
 use commands::schedule::ScheduleCommands;
 use commands::task::TaskCommands;
+use commands::skill::SkillCommands;
 use commands::worktree::WorktreeCommands;
 
 #[derive(Parser)]
@@ -65,6 +66,11 @@ enum Commands {
     Schedule {
         #[command(subcommand)]
         command: ScheduleCommands,
+    },
+    /// Skill management operations
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommands,
     },
     /// Git worktree operations
     Worktree {
@@ -161,6 +167,9 @@ async fn main() {
         }
         Commands::Schedule { command } => {
             commands::schedule::run(command, port).await;
+        }
+        Commands::Skill { command } => {
+            commands::skill::run(command, port).await;
         }
         Commands::Worktree { command } => {
             commands::worktree::run(command, port).await;
