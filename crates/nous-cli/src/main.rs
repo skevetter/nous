@@ -116,6 +116,8 @@ enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Show daemon status
+    Status,
     /// Stop the running daemon
     Stop,
 }
@@ -184,6 +186,9 @@ async fn main() {
             profile,
         } => {
             commands::serve::run(model, region, profile, port, true, false).await;
+        }
+        Commands::Status => {
+            commands::status::run().await;
         }
         Commands::Stop => {
             commands::stop::run().await;
