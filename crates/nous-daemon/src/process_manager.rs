@@ -21,6 +21,7 @@ use crate::state::AppState;
 pub struct ProcessHandle {
     pub process_id: String,
     pub agent_id: String,
+    /// `None` for sandbox processes — their lifecycle is managed by `SandboxManager`, not a child process.
     pub child: Option<tokio::process::Child>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub cancel: CancellationToken,
@@ -1084,7 +1085,7 @@ impl ProcessRegistry {
                         process_id = %proc.id,
                         "sandbox process missing sandbox_name, marking crashed"
                     );
-                    let _ = processes::update_process_status(
+                    if let Err(e) = processes::update_process_status(
                         pool,
                         &proc.id,
                         "crashed",
@@ -1092,7 +1093,14 @@ impl ProcessRegistry {
                         Some("no sandbox_name on recovery"),
                         None,
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::warn!(
+                            process_id = %proc.id,
+                            error = %e,
+                            "failed to mark sandbox process as crashed"
+                        );
+                    }
                     crashed += 1;
                     continue;
                 }

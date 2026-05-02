@@ -191,6 +191,8 @@ async fn execute(
         ))),
     };
 
+    // Sandbox recovery is best-effort: a failure here means some sandboxes won't be
+    // reconnected, but the daemon should still start and serve new requests.
     #[cfg(feature = "sandbox")]
     {
         if let Some(ref sandbox_mgr) = state.sandbox_manager {

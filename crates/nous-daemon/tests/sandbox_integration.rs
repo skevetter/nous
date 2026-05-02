@@ -122,6 +122,13 @@ async fn test_sandbox_recovery_on_restart() {
     let process_id = insert_sandbox_process(&state.pool, agent_id, "running", sandbox_name).await;
 
     let sandbox_mgr = state.sandbox_manager.as_ref().unwrap();
+
+    // Pre-register the sandbox as live so reconnect verification succeeds
+    {
+        let mut mgr = sandbox_mgr.lock().await;
+        mgr.register_known_sandbox(sandbox_name);
+    }
+
     let new_registry = Arc::new(ProcessRegistry::new());
     new_registry
         .recover_sandboxes(&state.pool, sandbox_mgr)
@@ -140,18 +147,9 @@ async fn test_sandbox_recovery_on_restart() {
 }
 
 #[tokio::test]
-async fn test_crashed_sandbox_detection() {
+async fn test_missing_sandbox_name_skipped() {
     let (state, _tmp) = setup().await;
-    let agent_id = "crashed-agent";
-    create_test_agent(&state.pool, agent_id).await;
 
-    let process_id =
-        insert_sandbox_process(&state.pool, agent_id, "running", "sandbox-crashed-test").await;
-
-    // Simulate a sandbox that can't be reconnected by using a SandboxManager
-    // that will refuse to reconnect. We achieve this by directly testing that
-    // a process with no sandbox_name gets marked as crashed.
-    // Instead, let's insert a process without a sandbox_name to trigger the crash path.
     let crash_agent = "crash-no-name-agent";
     create_test_agent(&state.pool, crash_agent).await;
     let crash_id = {
@@ -179,13 +177,42 @@ async fn test_crashed_sandbox_detection() {
         .await
         .unwrap();
 
-    // The process without sandbox_name should be marked crashed
     let status = get_process_status(&state.pool, &crash_id).await;
     assert_eq!(status, "crashed");
 
-    // The process with a valid sandbox_name should be recovered
+    let registry_status = new_registry.get_status(crash_agent).await;
+    assert!(
+        registry_status.is_none(),
+        "process with no sandbox_name should not be in registry"
+    );
+}
+
+#[tokio::test]
+async fn test_unreachable_sandbox_marked_crashed() {
+    let (state, _tmp) = setup().await;
+    let agent_id = "unreachable-agent";
+    create_test_agent(&state.pool, agent_id).await;
+
+    let sandbox_name = "sandbox-unreachable-test";
+    let process_id =
+        insert_sandbox_process(&state.pool, agent_id, "running", sandbox_name).await;
+
+    // Do NOT register sandbox_name as live — reconnect should return Ok(false)
+    let sandbox_mgr = state.sandbox_manager.as_ref().unwrap();
+    let new_registry = Arc::new(ProcessRegistry::new());
+    new_registry
+        .recover_sandboxes(&state.pool, sandbox_mgr)
+        .await
+        .unwrap();
+
     let status = get_process_status(&state.pool, &process_id).await;
-    assert_eq!(status, "running");
+    assert_eq!(status, "crashed");
+
+    let registry_status = new_registry.get_status(agent_id).await;
+    assert!(
+        registry_status.is_none(),
+        "unreachable sandbox should not be in registry"
+    );
 }
 
 #[tokio::test]
