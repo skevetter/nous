@@ -46,7 +46,13 @@ pub async fn run() {
         return;
     }
 
-    let config = Config::load().unwrap_or_default();
+    let config = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: failed to load config: {e}");
+            Config::default()
+        }
+    };
     let config_path = config_file_path();
 
     println!("nous daemon: running");
