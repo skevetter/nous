@@ -663,6 +663,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     Some(&restart),
                 )
                 .await?;
+                agents::processes::update_agent(pool, &id, Some("sandbox"), None, None, None, None).await?;
                 println!("{}", serde_json::to_string_pretty(&process)?);
             } else {
                 let agent = agents::get_agent_by_id(pool, &id).await?;
