@@ -1,10 +1,15 @@
 use std::collections::HashMap;
+#[cfg(feature = "sandbox")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(feature = "sandbox")]
+use sqlx::SqlitePool;
 
 use nous_core::agents::processes::{self, Invocation, Process};
 #[cfg(feature = "sandbox")]
@@ -16,6 +21,7 @@ use crate::state::AppState;
 pub struct ProcessHandle {
     pub process_id: String,
     pub agent_id: String,
+    /// `None` for sandbox processes — their lifecycle is managed by `SandboxManager`, not a child process.
     pub child: Option<tokio::process::Child>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub cancel: CancellationToken,
@@ -1047,6 +1053,108 @@ impl ProcessRegistry {
         } else {
             None
         }
+    }
+
+    #[cfg(feature = "sandbox")]
+    pub async fn recover_sandboxes(
+        &self,
+        pool: &SqlitePool,
+        sandbox_mgr: &Arc<tokio::sync::Mutex<crate::sandbox::SandboxManager>>,
+    ) -> Result<(), NousError> {
+        let rows = sqlx::query(
+            "SELECT * FROM agent_processes WHERE process_type = 'sandbox' AND status IN ('running', 'starting')",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let processes: Vec<Process> = rows
+            .iter()
+            .map(Process::from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::Sqlite)?;
+
+        let mut recovered = 0u32;
+        let mut crashed = 0u32;
+
+        for proc in processes {
+            let sandbox_name = match proc.sandbox_name.as_deref() {
+                Some(name) => name,
+                None => {
+                    tracing::warn!(
+                        agent_id = %proc.agent_id,
+                        process_id = %proc.id,
+                        "sandbox process missing sandbox_name, marking crashed"
+                    );
+                    if let Err(e) = processes::update_process_status(
+                        pool,
+                        &proc.id,
+                        "crashed",
+                        None,
+                        Some("no sandbox_name on recovery"),
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            process_id = %proc.id,
+                            error = %e,
+                            "failed to mark sandbox process as crashed"
+                        );
+                    }
+                    crashed += 1;
+                    continue;
+                }
+            };
+            let image = proc.sandbox_image.as_deref().unwrap_or("unknown");
+
+            let reconnect_result = {
+                let mut mgr = sandbox_mgr.lock().await;
+                mgr.reconnect(&proc.agent_id, sandbox_name, image).await
+            };
+
+            match reconnect_result {
+                Ok(true) => {
+                    let cancel = CancellationToken::new();
+                    let handle = ProcessHandle {
+                        process_id: proc.id.clone(),
+                        agent_id: proc.agent_id.clone(),
+                        child: None,
+                        started_at: chrono::Utc::now(),
+                        cancel,
+                    };
+                    {
+                        let mut handles = self.handles.lock().await;
+                        handles.insert(proc.agent_id.clone(), handle);
+                    }
+                    tracing::info!(
+                        agent_id = %proc.agent_id,
+                        sandbox_name = sandbox_name,
+                        "recovered sandbox on daemon restart"
+                    );
+                    recovered += 1;
+                }
+                Ok(false) | Err(_) => {
+                    let _ = processes::update_process_status(
+                        pool,
+                        &proc.id,
+                        "crashed",
+                        None,
+                        Some("sandbox unreachable on daemon restart"),
+                        None,
+                    )
+                    .await;
+                    tracing::warn!(
+                        agent_id = %proc.agent_id,
+                        sandbox_name = sandbox_name,
+                        "sandbox crashed while daemon was down"
+                    );
+                    crashed += 1;
+                }
+            }
+        }
+
+        tracing::info!(recovered, crashed, "sandbox recovery complete");
+        Ok(())
     }
 
     pub async fn shutdown(&self, state: &AppState) {

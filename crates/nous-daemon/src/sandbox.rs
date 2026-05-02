@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nous_core::agents::sandbox::SandboxConfig;
 use nous_core::error::NousError;
@@ -30,12 +30,14 @@ pub struct SandboxInfo {
 #[derive(Default)]
 pub struct SandboxManager {
     sandboxes: HashMap<String, SandboxHandle>,
+    known_live: HashSet<String>,
 }
 
 impl SandboxManager {
     pub fn new() -> Self {
         Self {
             sandboxes: HashMap::new(),
+            known_live: HashSet::new(),
         }
     }
 
@@ -54,6 +56,7 @@ impl SandboxManager {
             status: "running".to_string(),
         };
         self.sandboxes.insert(agent_id.to_string(), handle);
+        self.known_live.insert(name.clone());
 
         Ok(name)
     }
@@ -65,6 +68,7 @@ impl SandboxManager {
             .ok_or_else(|| NousError::NotFound(format!("no sandbox for agent {}", agent_id)))?;
 
         info!(agent_id, name = %handle.name, "stopping sandbox");
+        self.known_live.remove(&handle.name);
         handle.status = "stopped".to_string();
         Ok(())
     }
@@ -113,6 +117,37 @@ impl SandboxManager {
 
     pub fn get(&self, agent_id: &str) -> Option<&SandboxHandle> {
         self.sandboxes.get(agent_id)
+    }
+
+    pub fn is_sandbox_alive(&self, sandbox_name: &str) -> bool {
+        self.known_live.contains(sandbox_name)
+    }
+
+    pub fn register_known_sandbox(&mut self, sandbox_name: &str) {
+        self.known_live.insert(sandbox_name.to_string());
+    }
+
+    pub async fn reconnect(
+        &mut self,
+        agent_id: &str,
+        sandbox_name: &str,
+        image: &str,
+    ) -> Result<bool, NousError> {
+        info!(agent_id, sandbox_name, "attempting sandbox reconnect");
+
+        if !self.is_sandbox_alive(sandbox_name) {
+            info!(agent_id, sandbox_name, "sandbox not alive, cannot reconnect");
+            return Ok(false);
+        }
+
+        let handle = SandboxHandle {
+            name: sandbox_name.to_string(),
+            agent_id: agent_id.to_string(),
+            image: image.to_string(),
+            status: "running".to_string(),
+        };
+        self.sandboxes.insert(agent_id.to_string(), handle);
+        Ok(true)
     }
 }
 
