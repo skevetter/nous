@@ -201,9 +201,8 @@ async fn execute(
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("failed to register SIGTERM handler");
-            let mut sighup =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-                    .expect("failed to register SIGHUP handler");
+            let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to register SIGHUP handler");
             loop {
                 tokio::select! {
                     _ = sigterm.recv() => {
