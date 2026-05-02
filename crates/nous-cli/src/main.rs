@@ -116,6 +116,8 @@ enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Reload daemon configuration (sends SIGHUP)
+    Reload,
     /// Show daemon status
     Status,
     /// Stop the running daemon
@@ -186,6 +188,9 @@ async fn main() {
             profile,
         } => {
             commands::serve::run(model, region, profile, port, true, false).await;
+        }
+        Commands::Reload => {
+            commands::reload::run().await;
         }
         Commands::Status => {
             commands::status::run().await;

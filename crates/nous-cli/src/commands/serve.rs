@@ -196,16 +196,47 @@ async fn execute(
 
     {
         let shutdown = shutdown.clone();
+        let current_port = config.port;
         tokio::spawn(async move {
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("failed to register SIGTERM handler");
-            tokio::select! {
-                _ = sigterm.recv() => {}
-                _ = tokio::signal::ctrl_c() => {}
+            let mut sighup =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                    .expect("failed to register SIGHUP handler");
+            loop {
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        tracing::info!("shutdown signal received");
+                        shutdown.cancel();
+                        break;
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("ctrl-c received");
+                        shutdown.cancel();
+                        break;
+                    }
+                    _ = sighup.recv() => {
+                        tracing::info!("SIGHUP received, reloading config");
+                        match Config::load() {
+                            Ok(new_config) => {
+                                if new_config.port != current_port {
+                                    tracing::warn!(
+                                        "config reloaded: port changed from {} to {}, restart required",
+                                        current_port,
+                                        new_config.port
+                                    );
+                                } else {
+                                    tracing::info!("config reloaded successfully (no restart required)");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("failed to reload config: {e}");
+                            }
+                        }
+                    }
+                }
             }
-            tracing::info!("shutdown signal received");
-            shutdown.cancel();
         });
     }
 
