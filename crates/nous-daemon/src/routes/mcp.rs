@@ -8,6 +8,7 @@ use serde_json::Value;
 use nous_core::agents;
 use nous_core::inventory;
 use nous_core::memory;
+use nous_core::resources;
 use nous_core::messages::{
     post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
     SearchMessagesRequest,
@@ -736,6 +737,130 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                     "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
                 },
                 "required": ["id"]
+            }),
+        },
+        // --- Unified resource tools ---
+        ToolSchema {
+            name: "resource_register",
+            description: "Register a new resource (unified replacement for artifact_register and inventory_register)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Resource name" },
+                    "type": { "type": "string", "description": "Resource type: worktree, room, schedule, branch, file, docker-image, binary" },
+                    "owner_agent_id": { "type": "string", "description": "Owning agent ID (optional)" },
+                    "path": { "type": "string", "description": "Filesystem or logical path" },
+                    "namespace": { "type": "string", "description": "Namespace (default: 'default')" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for discovery" },
+                    "metadata": { "type": "string", "description": "JSON metadata" },
+                    "ownership_policy": { "type": "string", "description": "Ownership policy: cascade-delete, orphan, transfer-to-parent" }
+                },
+                "required": ["name", "type"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_list",
+            description: "List resources with optional filters",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "type": { "type": "string", "description": "Filter by resource type" },
+                    "status": { "type": "string", "description": "Filter by status: active, archived, deleted" },
+                    "owner_agent_id": { "type": "string", "description": "Filter by owner agent ID" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "orphaned": { "type": "boolean", "description": "Show only orphaned (unowned) resources" },
+                    "ownership_policy": { "type": "string", "description": "Filter by ownership policy" },
+                    "limit": { "type": "integer", "description": "Max results (default: 50)" }
+                }
+            }),
+        },
+        ToolSchema {
+            name: "resource_get",
+            description: "Get a resource by ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Resource ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_update",
+            description: "Update a resource (name, path, tags, metadata, status, ownership_policy)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Resource ID" },
+                    "name": { "type": "string", "description": "New name" },
+                    "path": { "type": "string", "description": "New path" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "New tags (replaces existing)" },
+                    "metadata": { "type": "string", "description": "New JSON metadata (replaces existing)" },
+                    "status": { "type": "string", "description": "New status: active, archived, deleted" },
+                    "ownership_policy": { "type": "string", "description": "New ownership policy" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_search",
+            description: "Search resources by tags (AND semantics: resource must have ALL specified tags)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to search (AND semantics)" },
+                    "type": { "type": "string", "description": "Filter by resource type" },
+                    "status": { "type": "string", "description": "Filter by status" },
+                    "namespace": { "type": "string", "description": "Filter by namespace" },
+                    "limit": { "type": "integer", "description": "Max results" }
+                },
+                "required": ["tags"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_archive",
+            description: "Archive an active resource (status: active -> archived)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Resource ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_deregister",
+            description: "Deregister a resource (soft-delete by default, hard=true removes row)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Resource ID" },
+                    "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_heartbeat",
+            description: "Update a resource's last_seen_at timestamp (liveness tracking)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Resource ID" }
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolSchema {
+            name: "resource_transfer",
+            description: "Bulk transfer resource ownership from one agent to another (or orphan)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "from_agent_id": { "type": "string", "description": "Source agent ID" },
+                    "to_agent_id": { "type": "string", "description": "Target agent ID (omit to orphan)" }
+                },
+                "required": ["from_agent_id"]
             }),
         },
         ToolSchema {
@@ -2316,6 +2441,109 @@ pub async fn dispatch(
             let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
             inventory::deregister_item(&state.pool, id, hard).await?;
             Ok(serde_json::json!({"ok": true}))
+        }
+        // --- Unified resource tool handlers ---
+        "resource_register" => {
+            let name = require_str(args, "name")?.to_string();
+            let type_str = require_str(args, "type")?;
+            let resource_type: resources::ResourceType = type_str.parse()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let resource = resources::register_resource(
+                &state.pool,
+                resources::RegisterResourceRequest {
+                    name, resource_type, owner_agent_id, namespace, path, metadata, tags, ownership_policy,
+                },
+            ).await?;
+            Ok(serde_json::to_value(resource).unwrap())
+        }
+        "resource_list" => {
+            let resource_type = args.get("type").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceType>()).transpose()?;
+            let status = args.get("status").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
+            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
+            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = resources::list_resources(
+                &state.pool,
+                &resources::ListResourcesFilter {
+                    resource_type, status, owner_agent_id, namespace, orphaned, ownership_policy, limit,
+                    ..Default::default()
+                },
+            ).await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "resource_get" => {
+            let id = require_str(args, "id")?;
+            let resource = resources::get_resource_by_id(&state.pool, id).await?;
+            Ok(serde_json::to_value(resource).unwrap())
+        }
+        "resource_update" => {
+            let id = require_str(args, "id")?.to_string();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
+            let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            });
+            let status = args.get("status").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
+            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let resource = resources::update_resource(
+                &state.pool,
+                resources::UpdateResourceRequest { id, name, path, metadata, tags, status, ownership_policy },
+            ).await?;
+            Ok(serde_json::to_value(resource).unwrap())
+        }
+        "resource_search" => {
+            let tags: Vec<String> = args.get("tags").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let resource_type = args.get("type").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceType>()).transpose()?;
+            let status = args.get("status").and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
+            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let items = resources::search_by_tags(
+                &state.pool,
+                &resources::SearchResourcesRequest { tags, resource_type, status, namespace, limit },
+            ).await?;
+            Ok(serde_json::to_value(items).unwrap())
+        }
+        "resource_archive" => {
+            let id = require_str(args, "id")?;
+            let resource = resources::archive_resource(&state.pool, id).await?;
+            Ok(serde_json::to_value(resource).unwrap())
+        }
+        "resource_deregister" => {
+            let id = require_str(args, "id")?;
+            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
+            resources::deregister_resource(&state.pool, id, hard).await?;
+            Ok(serde_json::json!({"ok": true}))
+        }
+        "resource_heartbeat" => {
+            let id = require_str(args, "id")?;
+            let resource = resources::heartbeat_resource(&state.pool, id).await?;
+            Ok(serde_json::to_value(resource).unwrap())
+        }
+        "resource_transfer" => {
+            let from = require_str(args, "from_agent_id")?;
+            let to = args.get("to_agent_id").and_then(|v| v.as_str());
+            let count = resources::transfer_ownership(&state.pool, from, to).await?;
+            Ok(serde_json::json!({"transferred": count}))
         }
         "memory_save" => {
             let title = require_str(args, "title")?.to_string();

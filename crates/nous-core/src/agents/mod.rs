@@ -251,19 +251,19 @@ pub struct Artifact {
 }
 
 impl Artifact {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            artifact_type: row.try_get("artifact_type")?,
-            name: row.try_get("name")?,
-            path: row.try_get("path")?,
-            status: row.try_get("status")?,
-            namespace: row.try_get("namespace")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-            last_seen_at: row.try_get("last_seen_at")?,
-        })
+    fn from_resource(r: &crate::resources::Resource) -> Self {
+        Self {
+            id: r.id.clone(),
+            agent_id: r.owner_agent_id.clone().unwrap_or_default(),
+            artifact_type: r.resource_type.clone(),
+            name: r.name.clone(),
+            path: r.path.clone(),
+            status: r.status.clone(),
+            namespace: r.namespace.clone(),
+            created_at: r.created_at.clone(),
+            updated_at: r.updated_at.clone(),
+            last_seen_at: r.last_seen_at.clone(),
+        }
     }
 }
 
@@ -481,6 +481,9 @@ pub fn deregister_agent<'a>(
             }
         }
 
+        // Handle resource ownership policies before deleting
+        crate::resources::handle_agent_deregistration(pool, &id).await?;
+
         // Clean up process records before deleting (NO CASCADE on agent_processes FK)
         processes::cleanup_agent_processes(pool, &id).await?;
 
@@ -692,117 +695,68 @@ pub async fn search_agents(
         .map_err(NousError::Sqlite)
 }
 
-// --- Artifact operations ---
+// --- Artifact operations (delegating to resources module) ---
 
 pub async fn register_artifact(
     pool: &SqlitePool,
     req: RegisterArtifactRequest,
 ) -> Result<Artifact, NousError> {
-    if req.name.trim().is_empty() {
-        return Err(NousError::Validation(
-            "artifact name cannot be empty".into(),
-        ));
-    }
-
-    let agent = get_agent_by_id(pool, &req.agent_id).await?;
-    let namespace = req.namespace.unwrap_or_else(|| agent.namespace.clone());
-    if agent.namespace != namespace {
-        return Err(NousError::Validation(
-            "artifact namespace must match owning agent's namespace".into(),
-        ));
-    }
-    let id = Uuid::now_v7().to_string();
-
-    sqlx::query(
-        "INSERT INTO artifacts (id, agent_id, artifact_type, name, path, namespace) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+    let resource_type: crate::resources::ResourceType = req.artifact_type.as_str().parse()?;
+    let resource = crate::resources::register_resource(
+        pool,
+        crate::resources::RegisterResourceRequest {
+            name: req.name,
+            resource_type,
+            owner_agent_id: Some(req.agent_id.clone()),
+            namespace: req.namespace,
+            path: req.path,
+            metadata: None,
+            tags: None,
+            ownership_policy: Some(resource_type.default_ownership_policy()),
+        },
     )
-    .bind(&id)
-    .bind(&req.agent_id)
-    .bind(req.artifact_type.as_str())
-    .bind(req.name.trim())
-    .bind(&req.path)
-    .bind(&namespace)
-    .execute(pool)
     .await?;
-
-    get_artifact_by_id(pool, &id).await
+    Ok(Artifact::from_resource(&resource))
 }
 
 pub async fn get_artifact_by_id(pool: &SqlitePool, id: &str) -> Result<Artifact, NousError> {
-    let row = sqlx::query("SELECT * FROM artifacts WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-
-    let row = row.ok_or_else(|| NousError::NotFound(format!("artifact '{id}' not found")))?;
-    Artifact::from_row(&row).map_err(NousError::Sqlite)
+    let resource = crate::resources::get_resource_by_id(pool, id).await?;
+    Ok(Artifact::from_resource(&resource))
 }
 
 pub async fn list_artifacts(
     pool: &SqlitePool,
     filter: &ListArtifactsFilter,
 ) -> Result<Vec<Artifact>, NousError> {
-    let limit = filter.limit.unwrap_or(50).min(200);
-    let offset = filter.offset.unwrap_or(0);
+    let resource_type = filter
+        .artifact_type
+        .as_ref()
+        .map(|t| t.as_str().parse::<crate::resources::ResourceType>())
+        .transpose()?;
+    let status = filter
+        .status
+        .as_ref()
+        .map(|s| s.as_str().parse::<crate::resources::ResourceStatus>())
+        .transpose()?;
 
-    let mut sql = String::from("SELECT * FROM artifacts");
-    let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
-
-    if let Some(ref agent_id) = filter.agent_id {
-        conditions.push("agent_id = ?".to_string());
-        binds.push(agent_id.clone());
-    }
-
-    if let Some(ref t) = filter.artifact_type {
-        conditions.push("artifact_type = ?".to_string());
-        binds.push(t.as_str().to_string());
-    }
-
-    if let Some(ref ns) = filter.namespace {
-        conditions.push("namespace = ?".to_string());
-        binds.push(ns.clone());
-    }
-
-    if let Some(ref s) = filter.status {
-        conditions.push("status = ?".to_string());
-        binds.push(s.as_str().to_string());
-    }
-
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
-
-    sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-    binds.push(limit.to_string());
-    binds.push(offset.to_string());
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Artifact::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let resources = crate::resources::list_resources(
+        pool,
+        &crate::resources::ListResourcesFilter {
+            resource_type,
+            status,
+            owner_agent_id: filter.agent_id.clone(),
+            namespace: filter.namespace.clone(),
+            limit: filter.limit,
+            offset: filter.offset,
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(resources.iter().map(Artifact::from_resource).collect())
 }
 
 pub async fn deregister_artifact(pool: &SqlitePool, id: &str) -> Result<(), NousError> {
-    let result = sqlx::query("DELETE FROM artifacts WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(NousError::NotFound(format!("artifact '{id}' not found")));
-    }
-
-    Ok(())
+    crate::resources::deregister_resource(pool, id, true).await
 }
 
 pub async fn update_artifact(
@@ -811,40 +765,20 @@ pub async fn update_artifact(
     name: Option<&str>,
     path: Option<&str>,
 ) -> Result<Artifact, NousError> {
-    let _existing = get_artifact_by_id(pool, id).await?;
-
-    let mut sets: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
-
-    if let Some(name) = name {
-        if name.trim().is_empty() {
-            return Err(NousError::Validation(
-                "artifact name cannot be empty".into(),
-            ));
-        }
-        sets.push("name = ?".to_string());
-        binds.push(name.trim().to_string());
-    }
-
-    if let Some(path) = path {
-        sets.push("path = ?".to_string());
-        binds.push(path.to_string());
-    }
-
-    if sets.is_empty() {
-        return get_artifact_by_id(pool, id).await;
-    }
-
-    let sql = format!("UPDATE artifacts SET {} WHERE id = ?", sets.join(", "));
-    binds.push(id.to_string());
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-    query.execute(pool).await?;
-
-    get_artifact_by_id(pool, id).await
+    let resource = crate::resources::update_resource(
+        pool,
+        crate::resources::UpdateResourceRequest {
+            id: id.to_string(),
+            name: name.map(String::from),
+            path: path.map(String::from),
+            metadata: None,
+            tags: None,
+            status: None,
+            ownership_policy: None,
+        },
+    )
+    .await?;
+    Ok(Artifact::from_resource(&resource))
 }
 
 // --- P7: Agent lifecycle, versioning, templates ---

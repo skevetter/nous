@@ -512,6 +512,55 @@ const MIGRATIONS: &[Migration] = &[
               CREATE INDEX IF NOT EXISTS idx_agent_proc_status ON agent_processes(status); \
               CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proc_active ON agent_processes(agent_id) WHERE status IN ('pending','starting','running','stopping');",
     },
+    Migration {
+        version: "027",
+        name: "resources",
+        sql: "CREATE TABLE IF NOT EXISTS resources (\
+              id TEXT NOT NULL PRIMARY KEY, \
+              name TEXT NOT NULL, \
+              resource_type TEXT NOT NULL CHECK(resource_type IN ('worktree','room','schedule','branch','file','docker-image','binary')), \
+              owner_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL, \
+              namespace TEXT NOT NULL DEFAULT 'default', \
+              path TEXT, \
+              status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','deleted')), \
+              metadata TEXT, \
+              tags TEXT NOT NULL DEFAULT '[]', \
+              ownership_policy TEXT NOT NULL DEFAULT 'orphan' CHECK(ownership_policy IN ('cascade-delete','orphan','transfer-to-parent')), \
+              last_seen_at TEXT, \
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
+              archived_at TEXT, \
+              UNIQUE(owner_agent_id, resource_type, name, namespace)\
+              ); \
+              CREATE INDEX IF NOT EXISTS idx_resources_owner ON resources(owner_agent_id); \
+              CREATE INDEX IF NOT EXISTS idx_resources_namespace_type ON resources(namespace, resource_type); \
+              CREATE INDEX IF NOT EXISTS idx_resources_status ON resources(status); \
+              CREATE INDEX IF NOT EXISTS idx_resources_name ON resources(name); \
+              CREATE INDEX IF NOT EXISTS idx_resources_last_seen ON resources(last_seen_at) WHERE last_seen_at IS NOT NULL; \
+              CREATE TRIGGER IF NOT EXISTS resources_au AFTER UPDATE ON resources \
+                  WHEN NEW.updated_at = OLD.updated_at \
+                  BEGIN UPDATE resources SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END; \
+              CREATE VIRTUAL TABLE IF NOT EXISTS resources_fts USING fts5(content, content_rowid='rowid', tokenize='porter unicode61'); \
+              CREATE TRIGGER IF NOT EXISTS resources_fts_insert AFTER INSERT ON resources BEGIN INSERT INTO resources_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.resource_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END; \
+              CREATE TRIGGER IF NOT EXISTS resources_fts_delete AFTER DELETE ON resources BEGIN DELETE FROM resources_fts WHERE rowid = OLD.rowid; END; \
+              CREATE TRIGGER IF NOT EXISTS resources_fts_update AFTER UPDATE ON resources WHEN NEW.name != OLD.name OR NEW.resource_type != OLD.resource_type OR IFNULL(NEW.metadata, '') != IFNULL(OLD.metadata, '') OR NEW.tags != OLD.tags BEGIN DELETE FROM resources_fts WHERE rowid = OLD.rowid; INSERT INTO resources_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.resource_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END;",
+    },
+    Migration {
+        version: "028",
+        name: "resources_data_migration",
+        sql: "INSERT OR IGNORE INTO resources (id, name, resource_type, owner_agent_id, namespace, path, status, metadata, tags, ownership_policy, last_seen_at, created_at, updated_at) \
+              SELECT id, name, artifact_type, agent_id, namespace, path, status, NULL, '[]', \
+                  CASE artifact_type \
+                      WHEN 'worktree' THEN 'cascade-delete' \
+                      WHEN 'branch' THEN 'cascade-delete' \
+                      ELSE 'orphan' \
+                  END, \
+                  last_seen_at, created_at, updated_at \
+              FROM artifacts; \
+              INSERT OR IGNORE INTO resources (id, name, resource_type, owner_agent_id, namespace, path, status, metadata, tags, ownership_policy, created_at, updated_at, archived_at) \
+              SELECT id, name, artifact_type, owner_agent_id, namespace, path, status, metadata, tags, 'orphan', created_at, updated_at, archived_at \
+              FROM inventory;",
+    },
 ];
 
 struct Migration {
@@ -545,6 +594,7 @@ fn migration_022_fts_rebuild(tokenizer: &str) -> String {
          DROP TABLE IF EXISTS agents_fts; \
          DROP TABLE IF EXISTS inventory_fts; \
          DROP TABLE IF EXISTS memories_fts; \
+         DROP TABLE IF EXISTS resources_fts; \
          DROP TRIGGER IF EXISTS room_messages_fts_insert; \
          DROP TRIGGER IF EXISTS room_messages_fts_delete; \
          DROP TRIGGER IF EXISTS tasks_fts_insert; \
@@ -559,6 +609,9 @@ fn migration_022_fts_rebuild(tokenizer: &str) -> String {
          DROP TRIGGER IF EXISTS memories_fts_insert; \
          DROP TRIGGER IF EXISTS memories_fts_delete; \
          DROP TRIGGER IF EXISTS memories_fts_update; \
+         DROP TRIGGER IF EXISTS resources_fts_insert; \
+         DROP TRIGGER IF EXISTS resources_fts_delete; \
+         DROP TRIGGER IF EXISTS resources_fts_update; \
          CREATE VIRTUAL TABLE room_messages_fts USING fts5(content, content_rowid='rowid', tokenize='{tokenizer}'); \
          CREATE TRIGGER room_messages_fts_insert AFTER INSERT ON room_messages BEGIN INSERT INTO room_messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content); END; \
          CREATE TRIGGER room_messages_fts_delete AFTER DELETE ON room_messages BEGIN INSERT INTO room_messages_fts(room_messages_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content); END; \
@@ -582,7 +635,12 @@ fn migration_022_fts_rebuild(tokenizer: &str) -> String {
          CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || NEW.content || ' ' || NEW.memory_type || ' ' || COALESCE(NEW.topic_key, '')); END; \
          CREATE TRIGGER memories_fts_delete AFTER DELETE ON memories BEGIN DELETE FROM memories_fts WHERE rowid = OLD.rowid; END; \
          CREATE TRIGGER memories_fts_update AFTER UPDATE ON memories WHEN NEW.title != OLD.title OR NEW.content != OLD.content OR NEW.memory_type != OLD.memory_type OR IFNULL(NEW.topic_key, '') != IFNULL(OLD.topic_key, '') BEGIN DELETE FROM memories_fts WHERE rowid = OLD.rowid; INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.title || ' ' || NEW.content || ' ' || NEW.memory_type || ' ' || COALESCE(NEW.topic_key, '')); END; \
-         INSERT INTO memories_fts(rowid, content) SELECT rowid, title || ' ' || content || ' ' || memory_type || ' ' || COALESCE(topic_key, '') FROM memories;",
+         INSERT INTO memories_fts(rowid, content) SELECT rowid, title || ' ' || content || ' ' || memory_type || ' ' || COALESCE(topic_key, '') FROM memories; \
+         CREATE VIRTUAL TABLE IF NOT EXISTS resources_fts USING fts5(content, content_rowid='rowid', tokenize='{tokenizer}'); \
+         CREATE TRIGGER resources_fts_insert AFTER INSERT ON resources BEGIN INSERT INTO resources_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.resource_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END; \
+         CREATE TRIGGER resources_fts_delete AFTER DELETE ON resources BEGIN DELETE FROM resources_fts WHERE rowid = OLD.rowid; END; \
+         CREATE TRIGGER resources_fts_update AFTER UPDATE ON resources WHEN NEW.name != OLD.name OR NEW.resource_type != OLD.resource_type OR IFNULL(NEW.metadata, '') != IFNULL(OLD.metadata, '') OR NEW.tags != OLD.tags BEGIN DELETE FROM resources_fts WHERE rowid = OLD.rowid; INSERT INTO resources_fts(rowid, content) VALUES (NEW.rowid, NEW.name || ' ' || NEW.resource_type || ' ' || NEW.namespace || ' ' || COALESCE(NEW.metadata, '') || ' ' || NEW.tags); END; \
+         INSERT OR IGNORE INTO resources_fts(rowid, content) SELECT rowid, name || ' ' || resource_type || ' ' || namespace || ' ' || COALESCE(metadata, '') || ' ' || tags FROM resources;",
         tokenizer = tokenizer
     )
 }
@@ -868,6 +926,7 @@ mod tests {
             "agents_fts",
             "inventory_fts",
             "memories_fts",
+            "resources_fts",
         ];
         for table in tables {
             let sql: (String,) =
