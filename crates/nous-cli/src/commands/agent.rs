@@ -18,6 +18,9 @@ pub enum AgentCommands {
     Remove {
         /// Agent name or UUID
         name_or_id: String,
+        /// Namespace (for name resolution; defaults to 'default')
+        #[arg(long)]
+        namespace: Option<String>,
         /// Cascade delete children
         #[arg(long)]
         cascade: bool,
@@ -491,12 +494,14 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         }
         AgentCommands::Remove {
             name_or_id,
+            namespace,
             cascade,
         } => {
             let resolved_id = if looks_like_uuid(&name_or_id) {
                 name_or_id
             } else {
-                let agent = agents::lookup_agent(pool, &name_or_id, None).await?;
+                let agent =
+                    agents::lookup_agent(pool, &name_or_id, namespace.as_deref()).await?;
                 agent.id
             };
             let result = agents::deregister_agent(pool, &resolved_id, cascade).await?;
