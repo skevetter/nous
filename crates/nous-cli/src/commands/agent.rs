@@ -200,7 +200,7 @@ pub enum AgentCommands {
         /// Command to run
         #[arg(long)]
         command: Option<String>,
-        /// Process type: claude, shell, http
+        /// Process type: claude, shell, http, sandbox
         #[arg(long, default_value = "shell")]
         r#type: String,
         /// Working directory
@@ -212,6 +212,21 @@ pub enum AgentCommands {
         /// Restart policy: never, on-failure, always
         #[arg(long, default_value = "never")]
         restart: String,
+        /// OCI image for the sandbox (e.g. python:3.12). Requires --type sandbox
+        #[arg(long)]
+        sandbox_image: Option<String>,
+        /// Number of vCPUs for the sandbox. Requires --type sandbox
+        #[arg(long)]
+        sandbox_cpus: Option<u32>,
+        /// Memory in MiB for the sandbox. Requires --type sandbox
+        #[arg(long)]
+        sandbox_memory: Option<u32>,
+        /// Network policy: none, public-only, allow-all. Requires --type sandbox
+        #[arg(long)]
+        sandbox_network: Option<String>,
+        /// Volume mounts in format 'guest_path:host_path[:ro]' (repeatable). Requires --type sandbox
+        #[arg(long)]
+        sandbox_volume: Vec<String>,
     },
     /// Stop a running agent process
     Stop {
@@ -271,6 +286,33 @@ pub enum AgentCommands {
         /// Max process records
         #[arg(long, default_value = "5")]
         lines: u32,
+    },
+    /// Sandbox management subcommands (see Agent Skills Specification for tools declaration)
+    Sandbox {
+        #[command(subcommand)]
+        command: SandboxCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SandboxCommands {
+    /// Show status of a sandboxed agent process
+    Status {
+        /// Agent ID
+        id: String,
+    },
+    /// Show resource metrics for a sandboxed agent
+    Metrics {
+        /// Agent ID
+        id: String,
+    },
+    /// Execute a command inside a running sandbox (runtime integration in Task 4)
+    Exec {
+        /// Agent ID
+        id: String,
+        /// Command and arguments to execute
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 }
 
@@ -573,29 +615,78 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             working_dir,
             timeout,
             restart,
+            sandbox_image,
+            sandbox_cpus,
+            sandbox_memory,
+            sandbox_network,
+            sandbox_volume,
         } => {
-            let agent = agents::get_agent_by_id(pool, &id).await?;
-            let cmd = command
-                .or(agent.spawn_command)
-                .ok_or("command is required (not set on agent config either)")?;
-            let pt = if r#type == "shell" {
-                agent.process_type.unwrap_or_else(|| "shell".to_string())
+            let has_sandbox_flags = sandbox_image.is_some()
+                || sandbox_cpus.is_some()
+                || sandbox_memory.is_some()
+                || sandbox_network.is_some()
+                || !sandbox_volume.is_empty();
+
+            if has_sandbox_flags && r#type != "sandbox" {
+                return Err("--sandbox-* flags require --type sandbox".into());
+            }
+
+            if r#type == "sandbox" {
+                let image =
+                    sandbox_image.ok_or("--sandbox-image is required when --type sandbox")?;
+
+                if let Some(ref policy) = sandbox_network {
+                    validate_network_policy(policy).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                }
+
+                let volumes_json = if sandbox_volume.is_empty() {
+                    None
+                } else {
+                    let volumes: Vec<nous_core::agents::sandbox::VolumeMount> = sandbox_volume
+                        .iter()
+                        .map(|spec| parse_volume_spec(spec))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Some(serde_json::to_string(&volumes)?)
+                };
+
+                let process = agents::processes::create_sandbox_process(
+                    pool,
+                    &id,
+                    &image,
+                    sandbox_cpus,
+                    sandbox_memory,
+                    sandbox_network.as_deref(),
+                    volumes_json.as_deref(),
+                    None,
+                    timeout,
+                    Some(&restart),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&process)?);
             } else {
-                r#type
-            };
-            let process = agents::processes::create_process(
-                pool,
-                &id,
-                &pt,
-                &cmd,
-                working_dir.as_deref().or(agent.working_dir.as_deref()),
-                None,
-                timeout,
-                Some(&restart),
-                None,
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&process)?);
+                let agent = agents::get_agent_by_id(pool, &id).await?;
+                let cmd = command
+                    .or(agent.spawn_command)
+                    .ok_or("command is required (not set on agent config either)")?;
+                let pt = if r#type == "shell" {
+                    agent.process_type.unwrap_or_else(|| "shell".to_string())
+                } else {
+                    r#type
+                };
+                let process = agents::processes::create_process(
+                    pool,
+                    &id,
+                    &pt,
+                    &cmd,
+                    working_dir.as_deref().or(agent.working_dir.as_deref()),
+                    None,
+                    timeout,
+                    Some(&restart),
+                    None,
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&process)?);
+            }
         }
         AgentCommands::Stop {
             id,
@@ -791,12 +882,205 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let processes = agents::processes::list_processes(pool, &id, Some(lines)).await?;
             println!("{}", serde_json::to_string_pretty(&processes)?);
         }
+        AgentCommands::Sandbox { command } => match command {
+            SandboxCommands::Status { id } => {
+                let process = agents::processes::get_active_process(pool, &id).await?;
+                match process {
+                    Some(p) if p.process_type == "sandbox" => {
+                        println!("{}", serde_json::to_string_pretty(&p)?);
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "agent '{id}' has an active process but it is not a sandbox"
+                        )
+                        .into());
+                    }
+                    None => {
+                        let processes =
+                            agents::processes::list_processes(pool, &id, Some(10)).await?;
+                        let sandbox = processes.into_iter().find(|p| p.process_type == "sandbox");
+                        match sandbox {
+                            Some(p) => println!("{}", serde_json::to_string_pretty(&p)?),
+                            None => {
+                                return Err(
+                                    format!("no sandbox process found for agent '{id}'").into()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            SandboxCommands::Metrics { id } => {
+                let process = agents::processes::get_active_process(pool, &id).await?;
+                match process {
+                    Some(p) if p.process_type == "sandbox" => {
+                        let metrics = serde_json::json!({
+                            "agent_id": id,
+                            "process_id": p.id,
+                            "status": p.status,
+                            "sandbox_image": p.sandbox_image,
+                            "sandbox_cpus": p.sandbox_cpus,
+                            "sandbox_memory_mib": p.sandbox_memory_mib,
+                            "note": "live metrics available after runtime integration (Task 4)"
+                        });
+                        println!("{}", serde_json::to_string_pretty(&metrics)?);
+                    }
+                    _ => {
+                        return Err(format!("no active sandbox process for agent '{id}'").into());
+                    }
+                }
+            }
+            SandboxCommands::Exec { id, args } => {
+                if args.is_empty() {
+                    return Err("exec requires a command after '--'".into());
+                }
+                let process = agents::processes::get_active_process(pool, &id).await?;
+                match process {
+                    Some(p) if p.process_type == "sandbox" && p.status == "running" => {
+                        println!(
+                            "sandbox exec not yet implemented (Task 4): would run {:?} in sandbox {} (process {})",
+                            args,
+                            p.sandbox_name.as_deref().unwrap_or(&id),
+                            p.id
+                        );
+                    }
+                    Some(p) if p.process_type == "sandbox" => {
+                        return Err(format!(
+                            "sandbox process for agent '{id}' is not running (status: {})",
+                            p.status
+                        )
+                        .into());
+                    }
+                    _ => {
+                        return Err(format!("no active sandbox process for agent '{id}'").into());
+                    }
+                }
+            }
+        },
     }
 
     pools.close().await;
     Ok(())
 }
 
+fn parse_volume_spec(spec: &str) -> Result<nous_core::agents::sandbox::VolumeMount, String> {
+    let parts: Vec<&str> = spec.split(':').collect();
+    match parts.len() {
+        1 => Ok(nous_core::agents::sandbox::VolumeMount {
+            guest_path: parts[0].to_string(),
+            host_path: None,
+            readonly: false,
+        }),
+        2 => Ok(nous_core::agents::sandbox::VolumeMount {
+            guest_path: parts[0].to_string(),
+            host_path: Some(parts[1].to_string()),
+            readonly: false,
+        }),
+        3 => {
+            let readonly = match parts[2] {
+                "ro" => true,
+                "rw" => false,
+                other => {
+                    return Err(format!(
+                        "invalid volume flag '{other}', expected 'ro' or 'rw'"
+                    ))
+                }
+            };
+            Ok(nous_core::agents::sandbox::VolumeMount {
+                guest_path: parts[0].to_string(),
+                host_path: Some(parts[1].to_string()),
+                readonly,
+            })
+        }
+        _ => Err(format!(
+            "invalid volume spec '{spec}': expected 'guest_path:host_path[:ro]'"
+        )),
+    }
+}
+
 fn looks_like_uuid(s: &str) -> bool {
     s.len() == 36 && s.chars().filter(|c| *c == '-').count() == 4
+}
+
+const VALID_NETWORK_POLICIES: &[&str] = &["none", "public-only", "allow-all"];
+
+fn validate_network_policy(policy: &str) -> Result<(), String> {
+    if VALID_NETWORK_POLICIES.contains(&policy) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid network policy: {policy}. Must be one of: none, public-only, allow-all"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_volume_spec_guest_only() {
+        let result = parse_volume_spec("/workspace").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, None);
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host() {
+        let result = parse_volume_spec("/workspace:/host/path").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host_ro() {
+        let result = parse_volume_spec("/workspace:/host/path:ro").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_guest_host_rw() {
+        let result = parse_volume_spec("/workspace:/host/path:rw").unwrap();
+        assert_eq!(result.guest_path, "/workspace");
+        assert_eq!(result.host_path, Some("/host/path".to_string()));
+        assert!(!result.readonly);
+    }
+
+    #[test]
+    fn parse_volume_spec_invalid_flag() {
+        let result = parse_volume_spec("/workspace:/host/path:invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid volume flag"));
+    }
+
+    #[test]
+    fn parse_volume_spec_too_many_parts() {
+        let result = parse_volume_spec("/a:/b:ro:extra");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid volume spec"));
+    }
+
+    #[test]
+    fn validate_network_policy_valid_values() {
+        assert!(validate_network_policy("none").is_ok());
+        assert!(validate_network_policy("public-only").is_ok());
+        assert!(validate_network_policy("allow-all").is_ok());
+    }
+
+    #[test]
+    fn validate_network_policy_invalid_values() {
+        let err = validate_network_policy("bridge").unwrap_err();
+        assert!(err.contains("invalid network policy: bridge"));
+        assert!(err.contains("none, public-only, allow-all"));
+
+        let err = validate_network_policy("").unwrap_err();
+        assert!(err.contains("invalid network policy"));
+
+        let err = validate_network_policy("NONE").unwrap_err();
+        assert!(err.contains("invalid network policy: NONE"));
+    }
 }
