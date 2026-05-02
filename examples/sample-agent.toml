@@ -1,0 +1,89 @@
+# =============================================================================
+# Sample Agent Definition
+# =============================================================================
+#
+# This file shows the structure of a nous agent configuration.
+# It can be used as a reference when registering agents via the CLI.
+#
+# Note: This TOML file is for documentation purposes. Agent registration
+# is done via CLI commands; this file shows the data model.
+#
+# =============================================================================
+
+# --- Agent Identity ---
+
+# Unique name within the namespace (required)
+name = "code-reviewer"
+
+# Agent type determines role in the hierarchy
+# Valid types: engineer, manager, director, senior-manager
+type = "engineer"
+
+# Namespace for multi-tenant isolation (default: "default")
+namespace = "default"
+
+# Parent agent ID for hierarchy placement (optional)
+# parent = "01234567-abcd-efgh-ijkl-mnopqrstuvwx"
+
+# Chat room assignment (optional)
+room = "engineering-room"
+
+# Initial status: active, inactive, archived, running, idle, blocked, done
+status = "active"
+
+# --- Process Configuration ---
+
+# How the agent runs work
+# Valid types: shell, claude, http
+process_type = "claude"
+
+# Command to execute when spawning the agent process
+spawn_command = "claude --dangerously-skip-permissions"
+
+# Working directory for the agent process
+working_dir = "/workspace/project"
+
+# Whether to automatically restart on failure
+auto_restart = true
+
+# --- Metadata ---
+# Free-form JSON metadata for custom attributes
+
+[metadata]
+speciality = "code review and testing"
+languages = ["rust", "python", "typescript"]
+max_concurrent_reviews = 3
+
+# --- Template Reference (if instantiated from a template) ---
+
+# template_id = "01234567-..."
+
+# --- Skills (tracked via versions) ---
+# Skills are recorded as version snapshots
+
+[[skills]]
+name = "code-review"
+path = "/skills/code-review.md"
+hash = "sha256:abc123..."
+
+[[skills]]
+name = "testing"
+path = "/skills/testing.md"
+hash = "sha256:def456..."
+
+# =============================================================================
+# CLI equivalent to register this agent:
+#
+#   nous agent register \
+#     --name "code-reviewer" \
+#     --type engineer \
+#     --room "engineering-room" \
+#     --metadata '{"speciality": "code review and testing", "languages": ["rust", "python", "typescript"]}'
+#
+#   nous agent update <AGENT_ID> \
+#     --process-type claude \
+#     --spawn-command "claude --dangerously-skip-permissions" \
+#     --working-dir "/workspace/project" \
+#     --auto-restart true
+#
+# =============================================================================
