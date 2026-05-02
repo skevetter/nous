@@ -26,7 +26,7 @@ async fn test_state() -> (AppState, TempDir) {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
+        llm_provider: None,
         default_model: "test-model".to_string(),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
@@ -46,7 +46,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
+        llm_provider: None,
         default_model: "test-model".to_string(),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
@@ -2173,7 +2173,7 @@ async fn mcp_agent_invoke_claude_no_client_returns_error() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    // Invoke — should fail because llm_client is None
+    // Invoke — should fail because llm_provider is None
     let response = app(state.clone())
         .oneshot(
             Request::builder()
@@ -2200,7 +2200,7 @@ async fn mcp_agent_invoke_claude_no_client_returns_error() {
     assert_eq!(resp["is_error"], true);
     let err_text = resp["content"][0]["text"].as_str().unwrap();
     assert!(
-        err_text.contains("internal error") || err_text.contains("LLM client"),
+        err_text.contains("internal error") || err_text.contains("LLM provider"),
         "expected error in MCP response, got: {err_text}"
     );
 }
@@ -2290,7 +2290,7 @@ async fn sandbox_spawn_creates_entry_in_manager() {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
+        llm_provider: None,
         default_model: "test-model".to_string(),
         sandbox_manager: Some(sandbox_manager.clone()),
     };

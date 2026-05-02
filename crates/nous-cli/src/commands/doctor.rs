@@ -3,6 +3,7 @@ use std::process;
 
 use nous_core::config::Config;
 use nous_core::db::DbPools;
+use nous_daemon::llm_client::{credential_source, has_credentials, LlmConfig, ProviderKind};
 
 use super::model;
 
@@ -46,6 +47,7 @@ pub async fn run(port: Option<u16>) {
     let daemon_port = config.as_ref().map(|c| c.port).unwrap_or(8377);
     check_port(daemon_port);
     check_embedding_model();
+    check_llm_providers();
 
     if has_failure {
         process::exit(1);
@@ -158,6 +160,54 @@ fn check_embedding_model() {
             println!("[WARN] Missing: tokenizer.json");
         }
         println!("      Run `nous model download` to install embedding model");
+    }
+}
+
+fn check_llm_providers() {
+    let llm_config = LlmConfig::resolve(None, None, None, None);
+
+    println!();
+    println!("LLM Provider Configuration:");
+    println!("  Active provider: {}", llm_config.provider);
+    println!("  Model: {}", llm_config.model);
+    if llm_config.provider == ProviderKind::Bedrock {
+        println!("  Region: {}", llm_config.region);
+        if let Some(ref profile) = llm_config.profile {
+            println!("  Profile: {profile}");
+        }
+    }
+
+    // Check credentials for active provider
+    let active_creds = has_credentials(llm_config.provider);
+    if active_creds {
+        println!(
+            "[OK] {} credentials available ({})",
+            llm_config.provider,
+            credential_source(llm_config.provider)
+        );
+    } else {
+        println!(
+            "[WARN] {} credentials not found (need: {})",
+            llm_config.provider,
+            credential_source(llm_config.provider)
+        );
+    }
+
+    // Show status of all providers
+    println!();
+    println!("  All providers:");
+    for kind in [ProviderKind::Bedrock, ProviderKind::Anthropic, ProviderKind::OpenAI] {
+        let marker = if kind == llm_config.provider {
+            " (active)"
+        } else {
+            ""
+        };
+        let status = if has_credentials(kind) {
+            "credentials found"
+        } else {
+            "no credentials"
+        };
+        println!("    {kind}: {status}{marker}");
     }
 }
 

@@ -23,7 +23,7 @@ async fn test_state() -> (AppState, TempDir) {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
-        llm_client: None,
+        llm_provider: None,
         default_model: "test-model".to_string(),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
@@ -60,10 +60,10 @@ async fn register_agent_with_process_type(
     agent.id
 }
 
-// --- Sync claude invoke with no LlmClient ---
+// --- Sync claude invoke with no LlmProvider ---
 
 #[tokio::test]
-async fn sync_claude_invoke_no_llm_client_returns_config_error() {
+async fn sync_claude_invoke_no_llm_provider_returns_config_error() {
     let (state, _tmp) = test_state().await;
     let agent_id = register_agent_with_process_type(&state, "claude-sync", Some("claude")).await;
 
@@ -75,15 +75,15 @@ async fn sync_claude_invoke_no_llm_client_returns_config_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "expected Config error about LLM client, got: {err}"
+        matches!(&err, NousError::Config(msg) if msg.contains("LLM provider not configured")),
+        "expected Config error about LLM provider, got: {err}"
     );
 }
 
-// --- Async claude invoke with no LlmClient ---
+// --- Async claude invoke with no LlmProvider ---
 
 #[tokio::test]
-async fn async_claude_invoke_no_llm_client_returns_config_error() {
+async fn async_claude_invoke_no_llm_provider_returns_config_error() {
     let (state, _tmp) = test_state().await;
     let agent_id = register_agent_with_process_type(&state, "claude-async", Some("claude")).await;
 
@@ -95,8 +95,8 @@ async fn async_claude_invoke_no_llm_client_returns_config_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "expected Config error about LLM client, got: {err}"
+        matches!(&err, NousError::Config(msg) if msg.contains("LLM provider not configured")),
+        "expected Config error about LLM provider, got: {err}"
     );
 }
 
@@ -185,7 +185,7 @@ async fn invocation_status_failed_on_claude_dispatch_error() {
         .error
         .as_deref()
         .unwrap()
-        .contains("LLM client not configured"));
+        .contains("LLM provider not configured"));
 }
 
 #[tokio::test]
@@ -245,13 +245,14 @@ async fn async_shell_invoke_returns_running_then_completes() {
 #[tokio::test]
 #[ignore]
 async fn real_bedrock_claude_invoke() {
-    use nous_daemon::llm_client::LlmClient;
-    use rig::client::ProviderClient;
+    use nous_daemon::llm_client::{build_provider, LlmConfig};
 
     let (mut state, _tmp) = test_state().await;
 
-    let client = LlmClient::from_env().expect("AWS credentials required");
-    state.llm_client = Some(Arc::new(client));
+    let config = LlmConfig::resolve(Some("bedrock".to_string()), None, None, None);
+    let provider = build_provider(&config).await.expect("AWS credentials required");
+    state.llm_provider = Some(provider);
+    state.default_model = config.model;
 
     let agent_id =
         register_agent_with_process_type(&state, "real-claude-agent", Some("claude")).await;

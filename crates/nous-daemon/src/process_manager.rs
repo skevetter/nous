@@ -910,11 +910,8 @@ impl ProcessRegistry {
         metadata: &Option<serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
-        use rig::client::completion::CompletionClient;
-        use rig::completion::Prompt as _;
-
-        let client = state.llm_client.as_ref().ok_or_else(|| {
-            NousError::Config("LLM client not configured — set AWS credentials".into())
+        let provider = state.llm_provider.as_ref().ok_or_else(|| {
+            NousError::Config("LLM provider not configured — set credentials for your provider".into())
         })?;
 
         let model = metadata
@@ -936,18 +933,13 @@ impl ProcessRegistry {
             let prompt_owned = prompt.to_string();
             let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
             let state_clone = state.clone();
-            let client = client.clone();
+            let provider = provider.clone();
             tokio::spawn(async move {
-                let agent = if preamble.is_empty() {
-                    client.agent(&model).build()
-                } else {
-                    client.agent(&model).preamble(&preamble).build()
-                };
                 let start = std::time::Instant::now();
-                let result = tokio::time::timeout(timeout, agent.prompt(&prompt_owned)).await;
+                let result = provider.prompt(&model, &preamble, &prompt_owned, timeout).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
                 let update_result = match result {
-                    Ok(Ok(output)) => {
+                    Ok(output) => {
                         processes::update_invocation(
                             &state_clone.pool,
                             &inv_id,
@@ -958,8 +950,7 @@ impl ProcessRegistry {
                         )
                         .await
                     }
-                    Ok(Err(err)) => {
-                        let error_detail = format!("Bedrock error (model={model}): {err:?}");
+                    Err(crate::llm_client::LlmError::Provider(error_detail)) => {
                         tracing::error!(inv_id = %inv_id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
                         processes::update_invocation(
                             &state_clone.pool,
@@ -971,7 +962,7 @@ impl ProcessRegistry {
                         )
                         .await
                     }
-                    Err(_) => {
+                    Err(crate::llm_client::LlmError::Timeout) => {
                         processes::update_invocation(
                             &state_clone.pool,
                             &inv_id,
@@ -990,19 +981,13 @@ impl ProcessRegistry {
             return Ok(invocation.clone());
         }
 
-        let agent = if preamble.is_empty() {
-            client.agent(&model).build()
-        } else {
-            client.agent(&model).preamble(&preamble).build()
-        };
-
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
-        let result = tokio::time::timeout(timeout, agent.prompt(prompt)).await;
+        let result = provider.prompt(&model, &preamble, prompt, timeout).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
         match result {
-            Ok(Ok(output)) => {
+            Ok(output) => {
                 processes::update_invocation(
                     &state.pool,
                     &invocation.id,
@@ -1013,8 +998,7 @@ impl ProcessRegistry {
                 )
                 .await
             }
-            Ok(Err(err)) => {
-                let error_detail = format!("Bedrock error (model={model}): {err:?}");
+            Err(crate::llm_client::LlmError::Provider(error_detail)) => {
                 tracing::error!(invocation_id = %invocation.id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
                 processes::update_invocation(
                     &state.pool,
@@ -1026,7 +1010,7 @@ impl ProcessRegistry {
                 )
                 .await
             }
-            Err(_) => {
+            Err(crate::llm_client::LlmError::Timeout) => {
                 processes::update_invocation(
                     &state.pool,
                     &invocation.id,

@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use crate::llm_client::LlmClient;
+use crate::llm_client::LlmProvider;
 use crate::process_manager::ProcessRegistry;
 #[cfg(feature = "sandbox")]
 use crate::sandbox::SandboxManager;
@@ -21,7 +21,7 @@ pub struct AppState {
     pub schedule_notify: Arc<Notify>,
     pub shutdown: CancellationToken,
     pub process_registry: Arc<ProcessRegistry>,
-    pub llm_client: Option<Arc<LlmClient>>,
+    pub llm_provider: Option<LlmProvider>,
     pub default_model: String,
     #[cfg(feature = "sandbox")]
     pub sandbox_manager: Option<Arc<tokio::sync::Mutex<SandboxManager>>>,

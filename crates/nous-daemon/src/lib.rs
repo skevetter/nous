@@ -155,7 +155,7 @@ mod tests {
             schedule_notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
             process_registry: Arc::new(process_manager::ProcessRegistry::new()),
-            llm_client: None,
+            llm_provider: None,
             default_model: "test-model".to_string(),
             #[cfg(feature = "sandbox")]
             sandbox_manager: None,

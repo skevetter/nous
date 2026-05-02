@@ -82,6 +82,9 @@ enum Commands {
         /// Comma-separated tool prefixes to expose (e.g. "chat,task" exposes room_ and task_ tools)
         #[arg(long)]
         tools: Option<String>,
+        /// LLM provider (bedrock, anthropic, openai)
+        #[arg(long)]
+        provider: Option<String>,
         /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
         #[arg(long)]
         model: Option<String>,
@@ -94,6 +97,9 @@ enum Commands {
     },
     /// Start the HTTP daemon
     Serve {
+        /// LLM provider (bedrock, anthropic, openai)
+        #[arg(long)]
+        provider: Option<String>,
         /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
         #[arg(long)]
         model: Option<String>,
@@ -112,6 +118,9 @@ enum Commands {
     },
     /// Start the HTTP daemon in the background (alias for `serve --daemon`)
     Start {
+        /// LLM provider (bedrock, anthropic, openai)
+        #[arg(long)]
+        provider: Option<String>,
         /// LLM model ID (e.g. anthropic.claude-sonnet-4-20250514-v1:0)
         #[arg(long)]
         model: Option<String>,
@@ -176,27 +185,31 @@ async fn main() {
         }
         Commands::McpServer {
             tools,
+            provider,
             model,
             region,
             profile,
         } => {
-            commands::mcp_server::run(tools, model, region, profile, port).await;
+            commands::mcp_server::run(tools, provider, model, region, profile, port).await;
         }
         Commands::Serve {
+            provider,
             model,
             region,
             profile,
             daemon,
             foreground_daemon,
         } => {
-            commands::serve::run(model, region, profile, port, daemon, foreground_daemon).await;
+            commands::serve::run(provider, model, region, profile, port, daemon, foreground_daemon)
+                .await;
         }
         Commands::Start {
+            provider,
             model,
             region,
             profile,
         } => {
-            commands::serve::run(model, region, profile, port, true, false).await;
+            commands::serve::run(provider, model, region, profile, port, true, false).await;
         }
         Commands::Reload => {
             commands::reload::run().await;

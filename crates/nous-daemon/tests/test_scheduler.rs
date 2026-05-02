@@ -26,7 +26,7 @@ async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
+        llm_provider: None,
         default_model: "test-model".to_string(),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,

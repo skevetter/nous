@@ -42,6 +42,7 @@ fn remove_pid_file() {
 }
 
 pub async fn run(
+    provider: Option<String>,
     model: Option<String>,
     region: Option<String>,
     profile: Option<String>,
@@ -50,14 +51,14 @@ pub async fn run(
     foreground_daemon: bool,
 ) {
     if daemon && !foreground_daemon {
-        if let Err(e) = daemonize(model, region, profile, port) {
+        if let Err(e) = daemonize(provider, model, region, profile, port) {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
         return;
     }
 
-    if let Err(e) = execute(model, region, profile, port, foreground_daemon).await {
+    if let Err(e) = execute(provider, model, region, profile, port, foreground_daemon).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -65,6 +66,7 @@ pub async fn run(
 
 #[allow(clippy::zombie_processes)]
 fn daemonize(
+    provider: Option<String>,
     model: Option<String>,
     region: Option<String>,
     profile: Option<String>,
@@ -74,6 +76,10 @@ fn daemonize(
 
     let mut args = vec!["serve".to_string(), "--foreground-daemon".to_string()];
 
+    if let Some(ref prov) = provider {
+        args.push("--provider".to_string());
+        args.push(prov.clone());
+    }
     if let Some(ref m) = model {
         args.push("--model".to_string());
         args.push(m.clone());
@@ -127,6 +133,7 @@ fn daemonize(
 }
 
 async fn execute(
+    provider: Option<String>,
     model: Option<String>,
     region: Option<String>,
     profile: Option<String>,
@@ -155,22 +162,25 @@ async fn execute(
             }
         };
 
-    use nous_daemon::llm_client::{build_client, LlmConfig};
+    use nous_daemon::llm_client::{build_provider, LlmConfig};
 
-    let llm_config = LlmConfig::resolve(model, region, profile);
+    let llm_config = LlmConfig::resolve(provider, model, region, profile);
 
-    let has_credentials = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
-        || std::env::var("AWS_PROFILE").is_ok()
-        || std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_ok();
+    let llm_provider = build_provider(&llm_config).await;
+    let default_model = llm_config.model.clone();
 
-    let (llm_client, default_model) = if has_credentials {
-        let client = build_client(&llm_config).await;
-        tracing::info!(region = %llm_config.region, model = %llm_config.model, "LLM client configured for Bedrock");
-        (Some(Arc::new(client)), llm_config.model)
+    if llm_provider.is_some() {
+        tracing::info!(
+            provider = %llm_config.provider,
+            model = %llm_config.model,
+            "LLM provider configured"
+        );
     } else {
-        tracing::warn!("LLM client not available (no AWS credentials found in environment)");
-        (None, llm_config.model)
-    };
+        tracing::warn!(
+            provider = %llm_config.provider,
+            "LLM provider not available (missing credentials)"
+        );
+    }
 
     let shutdown = CancellationToken::new();
     let process_registry = Arc::new(ProcessRegistry::new());
@@ -183,7 +193,7 @@ async fn execute(
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: process_registry.clone(),
-        llm_client,
+        llm_provider,
         default_model,
         #[cfg(feature = "sandbox")]
         sandbox_manager: Some(Arc::new(tokio::sync::Mutex::new(

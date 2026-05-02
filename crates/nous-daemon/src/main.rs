@@ -38,21 +38,25 @@ async fn main() {
             }
         };
 
-    use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
-    use rig::client::ProviderClient;
+    use nous_daemon::llm_client::{build_provider, LlmConfig};
 
-    let (llm_client, default_model) = match LlmClient::from_env() {
-        Ok(client) => {
-            tracing::info!("LLM client configured for Bedrock");
-            let model =
-                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-            (Some(Arc::new(client)), model)
-        }
-        Err(e) => {
-            tracing::info!("LLM client not available: {e}");
-            (None, DEFAULT_MODEL.to_string())
-        }
-    };
+    let llm_config = LlmConfig::resolve(None, None, None, None);
+
+    let llm_provider = build_provider(&llm_config).await;
+    let default_model = llm_config.model.clone();
+
+    if llm_provider.is_some() {
+        tracing::info!(
+            provider = %llm_config.provider,
+            model = %llm_config.model,
+            "LLM provider configured"
+        );
+    } else {
+        tracing::warn!(
+            provider = %llm_config.provider,
+            "LLM provider not available (missing credentials)"
+        );
+    }
 
     let shutdown = CancellationToken::new();
 
@@ -79,7 +83,7 @@ async fn main() {
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: Arc::new(ProcessRegistry::new()),
-        llm_client,
+        llm_provider,
         default_model,
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
