@@ -8,7 +8,7 @@
 
 ## 1. Current State
 
-Nous provides a persistent memory system (`crates/nous-core/src/memory/`) backed by two SQLite databases: a FTS pool (`memory-fts.db`) for structured data and full-text search, and a Vec pool (`memory-vec.db`) for vector embeddings. The memory infrastructure is production-ready but operates independently of the agent system — agents must explicitly invoke memory operations through daemon APIs; there is no automatic memory integration at the agent definition or runtime level.
+Nous provides a persistent memory system (`crates/nous-core/src/memory/`) backed by two SQLite databases: a FTS pool (`memory-fts.db`) for structured data and full-text search, and a Vec pool (`memory-vec.db`) for vector embeddings. The memory infrastructure is production-ready but operates independently of the agent system — agents must explicitly invoke memory operations through daemon APIs; there is no automatic memory integration at the agent form or runtime level.
 
 ### 1.1 Memory Tables (FTS Pool)
 
@@ -76,9 +76,9 @@ Rig provides:
 - `VectorStoreIndex` trait (auto-implements as Tool for RAG).
 - `.dynamic_context(N, index)` on agents (injects top-N retrieval results before each prompt).
 
-### 1.6 Agent Definition System
+### 1.6 Agent Form System
 
-Agents are defined via TOML files (`crates/nous-core/src/agents/definition.rs:1-85`). Four sections:
+Agents are defined via TOML files (agent forms) that follow the [Agent Skills Specification](https://agentskills.io) conventions for declarative agent capabilities. The Rust implementation is in `crates/nous-core/src/agents/definition.rs:1-85`. Four sections:
 
 ```toml
 [agent]             # REQUIRED: name, type (engineer/manager/director/senior-manager), version
@@ -93,7 +93,7 @@ The system has no `[memory]` section. No fields exist for: memory scope, memory 
 
 | Capability | Current State | Gap |
 |-----------|---------------|-----|
-| Memory-aware agent definitions | Agent TOML has no memory config | Agents cannot declare memory scope (workspace, session, per-agent), retrieval strategy, or context window size |
+| Memory-aware agent forms | Agent TOML has no memory config | Agents cannot declare memory scope (workspace, session, per-agent), retrieval strategy, or context window size |
 | Automatic context injection | Agents manually call `get_context` or `search_hybrid_filtered` | No rig integration for `.dynamic_context()` with memory system |
 | Session-scoped memory | `memory_sessions` table exists, `session_id` column in `memories` | No session lifecycle tied to agent spawn/cleanup. `session_start` is manually invoked. |
 | Agent-scoped retrieval | `agent_id` is an optional filter in search | No isolation boundary — agents can read all memories in their workspace |
@@ -101,7 +101,7 @@ The system has no `[memory]` section. No fields exist for: memory scope, memory 
 | Memory types aligned to agent behavior | 6 types exist (Decision/Convention/Bugfix/Architecture/Fact/Observation) | No "Skill" or "Preference" type. No procedural memory (tool usage patterns). |
 | Automatic memory creation | Only `save_prompt` and `session_end` auto-create | No hooks for agents to auto-save decisions, conventions, or discoveries |
 
-Agents today interact with memory as a separate subsystem requiring explicit daemon calls. There is no declarative layer in agent definitions to express memory needs or behavior.
+Agents today interact with memory as a separate subsystem requiring explicit daemon calls. There is no declarative layer in agent forms to express memory needs or behavior.
 
 ## 2. Memory Architecture
 
@@ -114,7 +114,7 @@ Agent memory follows a tiered model inspired by cognitive science and validated 
 | **Working Memory** | Conversation context within a session. Single-shot facts, intermediate reasoning steps. | Session-scoped. Cleared on session end unless explicitly saved. | In-memory buffer (rig conversation history). Optional save to `memories` with `MemoryType::Observation` + `session_id`. | `MemorySession` table tracks sessions. `save_prompt()` saves user input as Observation. |
 | **Episodic Memory** | Specific events and interactions. Bug fixes, incidents, user feedback, search queries. | Persistent. Decays via importance. Archivable. | `memories` table with `MemoryType::Observation`, `MemoryType::Bugfix`. `memory_access_log` tracks access. | `session_end` summary auto-creates episodic memory. Access log enables future decay/consolidation. |
 | **Semantic Memory** | Persistent knowledge, conventions, architecture decisions, facts. | Long-lived. High-importance entries resist decay. | `memories` table with `MemoryType::Decision`, `MemoryType::Convention`, `MemoryType::Architecture`, `MemoryType::Fact`. Embeddings in `memory_embeddings` + `memory_chunks`. | Core memory system. FTS5 + vec0 hybrid search. |
-| **Procedural Memory** | Learned skills, tool usage patterns, task workflows, preferences. | Persistent. Updated via reinforcement (which tools succeeded, which failed). | Not explicitly modeled. Closest match: `MemoryType::Convention` + `skills` refs in agent definitions. | **Gap** — no dedicated type. Conventions can encode tool preferences ("always use X for Y task") but tool success/failure telemetry is not captured. |
+| **Procedural Memory** | Learned skills, tool usage patterns, task workflows, preferences. | Persistent. Updated via reinforcement (which tools succeeded, which failed). | Not explicitly modeled. Closest match: `MemoryType::Convention` + `skills` refs in agent forms. | **Gap** — no dedicated type. Conventions can encode tool preferences ("always use X for Y task") but tool success/failure telemetry is not captured. |
 
 ### 2.2 Memory Storage Backend
 
@@ -178,7 +178,7 @@ The six current memory types are sufficient for Phase 1 agent integration, but t
 
 | Type | Current Mapping | Gap |
 |------|----------------|-----|
-| **Skill Memory** | Stored in agent definitions (`[skills].refs`), not in `memories` table. | Skills are static references to Markdown files. No runtime learning ("agent learned to use tool X for task Y"). |
+| **Skill Memory** | Stored in agent forms (`[skills].refs`), not in `memories` table. | Skills are static references to Markdown files. No runtime learning ("agent learned to use tool X for task Y"). |
 | **Preference Memory** | No dedicated type. Stored as `MemoryType::Convention` with importance=low. | User preferences (model choice, verbosity level, output format) have no explicit schema. Retrieval mixes them with coding conventions. |
 
 Proposal: add two new `MemoryType` variants in a future phase:
@@ -195,11 +195,11 @@ This is deferred to Phase 2 — Phase 1 uses existing types. Conventions can enc
 
 ## 3. Agent-Memory Integration Points
 
-Agent-memory integration happens at three layers: agent definition (declarative config), runtime (automatic context injection), and API (explicit memory operations).
+Agent-memory integration happens at three layers: agent form (declarative config), runtime (automatic context injection), and API (explicit memory operations).
 
-### 3.1 Declarative Configuration (Agent Definitions)
+### 3.1 Declarative Configuration (Agent Forms)
 
-Agents declare their memory requirements in a new `[memory]` section in TOML definition files (`~/.config/nous/agents/*.toml`):
+Agents declare their memory requirements in a new `[memory]` section in TOML form files (`~/.config/nous/agents/*.toml`):
 
 ```toml
 [agent]
@@ -498,9 +498,9 @@ Agent Cleanup
 
 This three-layer integration (declarative config, automatic injection, explicit API) ensures agents can operate with memory at varying levels of sophistication: low-touch agents use automatic context injection, high-touch agents use tools for precise memory operations.
 
-## 4. Memory in Agent Definitions
+## 4. Memory in Agent Forms
 
-Agent definitions extend with a new `[memory]` TOML section. This section is optional — agents without it operate with no automatic memory integration (backward compatible).
+Agent forms extend with a new `[memory]` TOML section, following the extensible form pattern described in the [Agent Skills Specification](https://agentskills.io), where agents declare their capabilities and resource needs declaratively. This section is optional — agents without it operate with no automatic memory integration (backward compatible).
 
 ### 4.1 Schema Extension
 
@@ -564,7 +564,7 @@ fn default_context_size() -> u32 { 5 }
 fn default_importance() -> String { "moderate".to_string() }
 ```
 
-### 4.2 Example Agent Definitions
+### 4.2 Example Agent Forms
 
 #### Minimal (no memory)
 
@@ -735,7 +735,7 @@ Overrides are validated at spawn time: the agent must have `agent_workspace_acce
 
 Three layers of config can specify memory behavior:
 
-1. Agent definition TOML `[memory]` section (highest precedence)
+1. Agent form TOML `[memory]` section (highest precedence)
 2. Daemon global config `~/.config/nous/config.toml` (future: `[memory.defaults]` section)
 3. Hardcoded defaults in `definition.rs` (lowest precedence)
 
@@ -1772,7 +1772,7 @@ println!("Session ended, summary saved as memory");
 
 Agent-memory integration is additive. No breaking changes to existing memory or agent systems. Four phases deliver incremental value.
 
-### 8.1 Phase 1: Agent Definition Extensions (2 weeks)
+### 8.1 Phase 1: Agent Form Extensions (2 weeks)
 
 **Goal:** Agents can declare memory config in TOML. No runtime integration yet — validation and parsing only.
 
@@ -1788,7 +1788,7 @@ Agent-memory integration is additive. No breaking changes to existing memory or 
    - Validate `importance_default` is "low" | "moderate" | "high"
    - Validate `shared` scope has non-empty agent ID list
 
-3. Add example agent definitions in `examples/agents/`
+3. Add example agent forms in `examples/agents/`
    - `memory-aware-reviewer.toml` (workspace scope, hybrid retrieval, auto-save)
    - `session-tracker.toml` (session scope, recency retrieval, session_tracking=true)
    - `minimal-agent.toml` (no [memory] section — backward compatible)
@@ -2240,6 +2240,31 @@ Agent can read: own memories + team memories + workspace memories. Cannot read o
 
 ---
 
+### 9.11 Agent Skills Specification Alignment
+
+**Question:** Should the `[memory]` section design align with or extend the [Agent Skills Specification](https://agentskills.io) for broader interoperability?
+
+**Context:** The Agent Skills Specification provides a standard approach for declaring agent capabilities, resources, and requirements in TOML form files. Aligning our `[memory]` section with this spec would enable:
+- Cross-framework compatibility (agents portable between nous and other spec-compliant systems)
+- Standardized tooling for form validation and documentation
+- Community-driven evolution of memory configuration patterns
+
+**Options:**
+
+| Option | Pros | Cons |
+|--------|------|------|
+| **A. Full alignment** | Our `[memory]` section follows spec conventions exactly. Agents are portable. Community tooling works. | May constrain design. Spec may not cover nous-specific needs (e.g., vec pool selection). |
+| **B. Partial alignment** | Use spec-compliant field names where possible. Add nous-specific extensions with `x-nous-` prefix per spec's extension mechanism. | Balances portability and flexibility. Core fields portable, extensions documented. | Some features non-portable. Cross-framework agents must handle extensions gracefully. |
+| **C. No alignment** | Design `[memory]` section independently. Simpler short-term. | No external dependencies. Full design freedom. | Agents locked into nous ecosystem. No cross-framework portability. |
+
+**Recommendation:** Option B (partial alignment) for Phase 1. Follow spec conventions for core memory config (scope, retrieval strategy). Use `x-nous-` prefix for nous-specific extensions (e.g., `x-nous-vec-pool`, `x-nous-fts-tokenizer`). This provides portability for common use cases while preserving flexibility for advanced nous features.
+
+Monitor agentskills.io evolution during Phase 2-3. If the spec adds memory sections that conflict with our design, propose updates to the spec based on our production experience.
+
+**Decision owner:** Architecture review during Phase 1, with input from agentskills.io maintainers if available.
+
+---
+
 ## Summary of Decisions
 
 | ID | Decision | Recommended | Phase | Owner |
@@ -2254,5 +2279,6 @@ Agent can read: own memories + team memories + workspace memories. Cannot read o
 | 9.8 | Relation type extensibility | Fixed set | Phase 1-4 | Architecture |
 | 9.9 | LLM extraction accuracy | Best-effort + logging | Phase 3 | Engineering |
 | 9.10 | Memory lifecycle after agent deletion | Archive memories | Phase 2 | Product |
+| 9.11 | Agent Skills Spec alignment | Partial alignment (x-nous- extensions) | Phase 1 | Architecture |
 
 All decisions are revisable based on user feedback and production metrics. This document will be updated as decisions solidify.
