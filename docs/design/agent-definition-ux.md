@@ -59,6 +59,8 @@ Six systems were examined: Claude Code skills/CLAUDE.md, Dagger modules, Pulumi 
 
 **Tradeoffs.** The tap model makes third-party distribution trivially easy: any public GitHub repository named `homebrew-*` becomes a distributable tap. The Ruby DSL is readable but not statically checkable without running a Ruby linter. The always-latest-HEAD model means tap consumers get updates automatically on `brew update`, which can break reproducibility unless formulas explicitly pin versions in their `url` field.
 
+> **Terminology note:** Homebrew calls its distribution repositories "taps." Nous adopts the same Git-repository-as-distribution-unit pattern but uses the term "form" to avoid overloading the Homebrew-specific name. All references to taps in this section (§1.5) use Homebrew's terminology; the rest of this document uses "form" for the nous equivalent.
+
 ### 1.6 npm Packages
 
 **Unit definition.** An npm package is a directory containing `package.json`. The manifest declares a `name` (scoped or unscoped), `version` (SemVer), entry points (`main` or the newer `exports` map), `dependencies`, `devDependencies`, `peerDependencies`, and lifecycle `scripts`. The `exports` map enables conditional resolution — different entry points for CommonJS vs. ESM consumers.
@@ -117,21 +119,21 @@ Agent definitions and skills live under the XDG config directory (`~/.config/nou
 │   ├── code-review.md             # Skill files (Markdown)
 │   ├── git-workflow.md
 │   └── summarize.md
-└── taps/
+└── forms/
     ├── paseo-org/
-    │   ├── tap.toml               # Tap metadata (name, url, pinned_ref)
+    │   ├── form.toml              # Form metadata (name, url, pinned_ref)
     │   ├── agents/
     │   │   ├── monitor.toml
     │   │   └── deployer.toml
     │   └── skills/
     │       └── incident-response.md
     └── acme-corp/
-        ├── tap.toml
+        ├── form.toml
         └── agents/
             └── data-pipeline.toml
 ```
 
-The `taps/` subdirectory is populated by `nous tap add`; its contents are managed by nous and should not be edited by hand. User-authored agents and skills live directly under `~/.config/nous/agents/` and `~/.config/nous/skills/`.
+The `forms/` subdirectory is populated by `nous form add`; its contents are managed by nous and should not be edited by hand. User-authored agents and skills live directly under `~/.config/nous/agents/` and `~/.config/nous/skills/`.
 
 ### 3.2 Agent Definition File Format
 
@@ -158,7 +160,14 @@ restart_policy = "on-failure"   # never | on-failure | always
 refs = [
   "code-review",                 # local skill by name (resolved from ~/.config/nous/skills/)
   "git-workflow",
-  "paseo-org/incident-response", # tap-qualified skill reference
+  "paseo-org/incident-response", # form-qualified skill reference
+]
+
+[tools]
+refs = [
+  "web-search",
+  "file-read",
+  "code-execution",
 ]
 
 [metadata]
@@ -169,7 +178,9 @@ tags    = ["review", "quality"]
 
 Required fields: `agent.name`, `agent.type`, `agent.version`. All other fields have defaults matching those in `agents::RegisterAgentRequest`.
 
-A skill file is plain Markdown, exactly as Claude Code skills work today. The `[skills].refs` array in the agent definition resolves each entry first against `~/.config/nous/skills/<name>.md`, then against installed tap skill directories.
+The `[tools]` section declares which tools the agent has access to at runtime. Each entry in the `refs` array is a tool name string. Tool names are resolved against the runtime's built-in tool set first, then against any tool registry configured in `~/.config/nous/config.toml`. If a referenced tool is not found at spawn time, `nous agent spawn` produces an error listing the unresolved tool names. Omitting the `[tools]` section entirely grants the agent no tool access by default.
+
+A skill file is plain Markdown, exactly as Claude Code skills work today. The `[skills].refs` array in the agent definition resolves each entry first against `~/.config/nous/skills/<name>.md`, then against installed form skill directories.
 
 ### 3.3 Naming Conventions
 
@@ -177,8 +188,8 @@ A skill file is plain Markdown, exactly as Claude Code skills work today. The `[
 |------|-----------|---------|
 | Agent definition file | lowercase kebab-case, `.toml` extension | `code-reviewer.toml` |
 | Skill file | lowercase kebab-case, `.md` extension | `git-workflow.md` |
-| Tap directory | `<owner>` form matching `nous tap add <owner>/<repo>` | `paseo-org/` |
-| Tap-qualified skill ref | `<tap-owner>/<skill-name>` | `paseo-org/incident-response` |
+| Form directory | `<owner>` form matching `nous form add <owner>/<repo>` | `paseo-org/` |
+| Form-qualified skill ref | `<form-owner>/<skill-name>` | `paseo-org/incident-response` |
 | Agent name field | lowercase, hyphens allowed, no spaces | `code-reviewer` |
 
 Agent names must be unique within a namespace. Two agents in different namespaces may share a name; `nous agent list --namespace <ns>` scopes the listing accordingly.
@@ -195,9 +206,9 @@ Reads a local TOML definition file, registers the agent in the nous database, an
 # Register from a local file
 nous agent add ~/.config/nous/agents/reviewer.toml
 
-# Register from a tap-installed definition
+# Register from a form-installed definition
 nous agent add paseo-org/monitor
-# Resolves to ~/.config/nous/taps/paseo-org/agents/monitor.toml
+# Resolves to ~/.config/nous/forms/paseo-org/agents/monitor.toml
 
 # Output (matches existing agent JSON output format)
 {
@@ -239,7 +250,7 @@ nous agent sync
 
 #### `nous skill list`
 
-Lists skills available to the current user (local skills + all installed tap skills).
+Lists skills available to the current user (local skills + all installed form skills).
 
 ```bash
 nous skill list
@@ -251,17 +262,43 @@ nous skill list
 #   deploy-runbook
 ```
 
-## 4. Tap Model Design
+### 3.5 Agent Skills Specification Alignment
 
-The tap model takes its structure from Homebrew taps: a Git repository serves as the distribution unit. Any public (or private, with credentials) Git repository that follows the tap layout becomes installable with a single command. No central registry account is required.
+The [Agent Skills Specification](https://agentskills.io/specification) is an emerging standard for agent skill interoperability across platforms. Nous agent definitions align with this specification at the structural level: the TOML `[agent]` section maps to the spec's skill metadata (name, version, description), and the `[skills].refs` array maps to the spec's capability declarations. This alignment means a nous agent definition can be mechanically translated to and from the Agent Skills Spec format, enabling interoperability with other platforms that adopt the standard.
 
-### 4.1 Tap Repository Layout
+Full compliance with the Agent Skills Specification is not a goal for Phase 1. The alignment documented here is a forward reference — as the spec matures, nous can adopt stricter conformance without restructuring the definition format. Implementors should consult the spec when extending the `[skills]` or `[tools]` sections to avoid divergence that would make future alignment more costly.
 
-A tap repository must contain a `tap.toml` manifest at the root. Agents go under `agents/`, skills under `skills/`:
+### 3.6 Hooks
+
+Agent definitions support lifecycle hooks that execute at defined points during an agent's interaction with its underlying model. Hooks are based on rig's [`PromptHook`](https://docs.rs/rig-core/latest/rig/agent/trait.PromptHook.html) trait, which provides structured extension points in the prompt-completion lifecycle. Each hook declaration specifies a name, a lifecycle event, a handler type, and the command to execute.
+
+```toml
+[[hooks]]
+name       = "audit-log"
+event      = "before_completion"
+handler    = "shell"
+command    = "nous hook run audit-log --event before_completion"
+
+[[hooks]]
+name       = "token-counter"
+event      = "after_completion"
+handler    = "shell"
+command    = "nous hook run token-counter --event after_completion"
+```
+
+The `event` field maps directly to rig's `PromptHook` trait lifecycle: `before_completion` fires before the LLM call is made (corresponding to the trait's pre-request hook point), and `after_completion` fires after the LLM returns a response (corresponding to the post-response hook point). The `handler` field specifies the execution mode — `shell` runs the command as a subprocess. Future handler types (e.g., `wasm`, `http`) can be added without changing the hook declaration syntax.
+
+## 4. Form Model Design
+
+The form model takes its structure from Homebrew taps: a Git repository serves as the distribution unit. Any public (or private, with credentials) Git repository that follows the form layout becomes installable with a single command. No central registry account is required.
+
+### 4.1 Form Repository Layout
+
+A form repository must contain a `form.toml` manifest at the root. Agents go under `agents/`, skills under `skills/`:
 
 ```
-github.com/paseo-org/nous-tap/          # Git repository
-├── tap.toml                            # Tap manifest (required)
+github.com/paseo-org/nous-form/         # Git repository
+├── form.toml                           # Form manifest (required)
 ├── agents/
 │   ├── monitor.toml
 │   ├── deployer.toml
@@ -271,75 +308,75 @@ github.com/paseo-org/nous-tap/          # Git repository
     └── deploy-runbook.md
 ```
 
-The `tap.toml` manifest:
+The `form.toml` manifest:
 
 ```toml
-[tap]
+[form]
 name        = "paseo-org"
 description = "Paseo platform agents and skills"
-url         = "https://github.com/paseo-org/nous-tap"
+url         = "https://github.com/paseo-org/nous-form"
 maintainers = ["team@paseo.dev"]
 ```
 
-The `name` field in `tap.toml` determines the directory name under `~/.config/nous/taps/` and the namespace prefix for tap-qualified references (`paseo-org/monitor`).
+The `name` field in `form.toml` determines the directory name under `~/.config/nous/forms/` and the namespace prefix for form-qualified references (`paseo-org/monitor`).
 
 ### 4.2 CLI Commands
 
-#### `nous tap add <owner>/<repo>`
+#### `nous form add <owner>/<repo>`
 
-Clones the tap repository and writes a `tap.toml` entry pinning the current HEAD SHA.
+Clones the form repository and writes a `form.toml` entry pinning the current HEAD SHA.
 
 ```bash
-nous tap add paseo-org/nous-tap
-# Cloning https://github.com/paseo-org/nous-tap ...
-# Installed tap 'paseo-org' at ~/.config/nous/taps/paseo-org/
+nous form add paseo-org/nous-form
+# Cloning https://github.com/paseo-org/nous-form ...
+# Installed form 'paseo-org' at ~/.config/nous/forms/paseo-org/
 # 12 agents, 7 skills available.
 ```
 
-#### `nous tap remove <name>`
+#### `nous form remove <name>`
 
-Removes the tap directory and its `tap.toml` entry. Does not deregister agents that were instantiated from the tap.
+Removes the form directory and its `form.toml` entry. Does not deregister agents that were instantiated from the form.
 
 ```bash
-nous tap remove paseo-org
+nous form remove paseo-org
 ```
 
-#### `nous tap update [<name>]`
+#### `nous form update [<name>]`
 
-Pulls the latest HEAD (or the pinned ref if `--pin` was used) for one or all taps.
+Pulls the latest HEAD (or the pinned ref if `--pin` was used) for one or all forms.
 
 ```bash
-nous tap update               # updates all taps
-nous tap update paseo-org     # updates one tap
+nous form update               # updates all forms
+nous form update paseo-org     # updates one form
 ```
 
-#### `nous tap list`
+#### `nous form list`
 
-Lists installed taps with their pinned ref and available agent/skill counts.
+Lists installed forms with their pinned ref and available agent/skill counts.
 
 ```bash
-nous tap list
+nous form list
 # NAME           URL                                    REF        AGENTS  SKILLS
-# paseo-org      github.com/paseo-org/nous-tap          a3f1c2d    12      7
+# paseo-org      github.com/paseo-org/nous-form         a3f1c2d    12      7
 # acme-corp      github.com/acme/nous-agents            HEAD       3       2
 ```
 
-### 4.3 Step-by-Step: Installing and Using a Tap Agent
+### 4.3 Step-by-Step: Installing and Using a Form Agent
 
 ```
-1. Add the tap:
-   $ nous tap add paseo-org/nous-tap
-   → Clones repo to ~/.config/nous/taps/paseo-org/
-   → Reads tap.toml; records pinned SHA in ~/.config/nous/taps/paseo-org/tap.toml
+1. Add the form:
+   $ nous form add paseo-org/nous-form
+   → Clones repo to ~/.config/nous/forms/paseo-org/
+   → Reads form.toml; records pinned SHA in ~/.config/nous/forms/paseo-org/form.toml
 
 2. Inspect available agents:
    $ nous skill list
    → Shows paseo-org/* skills alongside local skills
-   $ nous agent list    # (agents from taps are not yet registered)
+   $ nous agent list    # (agents from forms are not yet registered)
 
-3. Register an agent from the tap:
+3. Register an agent from the form:
    $ nous agent add paseo-org/monitor
-   → Resolves to ~/.config/nous/taps/paseo-org/agents/monitor.toml
+   → Resolves to ~/.config/nous/forms/paseo-org/agents/monitor.toml
    → Calls agents::register_agent with definition fields
    → Writes skill content for referenced skills into the DB
 
@@ -347,9 +384,9 @@ nous tap list
    $ nous agent spawn <id> --type claude
    → Uses spawn_command from the definition file
 
-5. Update the tap to get new agent versions:
-   $ nous tap update paseo-org
-   → git pull in ~/.config/nous/taps/paseo-org/
+5. Update the form to get new agent versions:
+   $ nous form update paseo-org
+   → git pull in ~/.config/nous/forms/paseo-org/
 
 6. Sync updated definitions into the DB:
    $ nous agent sync
@@ -358,31 +395,31 @@ nous tap list
 
 ### 4.4 Versioning Strategy
 
-Tap repositories are versioned with Git tags following SemVer (`v1.0.0`, `v1.2.3`). By default, `nous tap add` follows HEAD (equivalent to Homebrew's default behavior). Two optional modes allow pinning:
+Form repositories are versioned with Git tags following SemVer (`v1.0.0`, `v1.2.3`). By default, `nous form add` follows HEAD (equivalent to Homebrew's default behavior). Two optional modes allow pinning:
 
 ```bash
 # Pin to a tag
-nous tap add paseo-org/nous-tap@v1.2.0
+nous form add paseo-org/nous-form@v1.2.0
 
 # Pin to a specific commit SHA
-nous tap add paseo-org/nous-tap@a3f1c2d
+nous form add paseo-org/nous-form@a3f1c2d
 ```
 
-The pinned ref is recorded in `~/.config/nous/taps/paseo-org/tap.toml`:
+The pinned ref is recorded in `~/.config/nous/forms/paseo-org/form.toml`:
 
 ```toml
-[tap]
+[form]
 name       = "paseo-org"
-url        = "https://github.com/paseo-org/nous-tap"
+url        = "https://github.com/paseo-org/nous-form"
 pinned_ref = "v1.2.0"           # empty string means HEAD
 fetched_at = "2026-05-01T10:00:00Z"
 ```
 
-`nous tap update` respects the pinned ref: if `pinned_ref` is set, update is a no-op unless `--upgrade` is passed to advance to a new tag.
+`nous form update` respects the pinned ref: if `pinned_ref` is set, update is a no-op unless `--upgrade` is passed to advance to a new tag.
 
 ### 4.5 Namespace Isolation
 
-Each tap occupies an isolated namespace equal to its `name` field in `tap.toml`. Two taps that both define an agent named `monitor` do not conflict: one is `paseo-org/monitor`, the other is `acme-corp/monitor`. Unqualified names (`nous agent add monitor`) resolve against local `~/.config/nous/agents/` first, then in order of tap installation. Conflicts produce a disambiguation error:
+Each form occupies an isolated namespace equal to its `name` field in `form.toml`. Two forms that both define an agent named `monitor` do not conflict: one is `paseo-org/monitor`, the other is `acme-corp/monitor`. Unqualified names (`nous agent add monitor`) resolve against local `~/.config/nous/agents/` first, then in order of form installation. Conflicts produce a disambiguation error:
 
 ```
 error: agent name 'monitor' is ambiguous — found in: paseo-org, acme-corp
@@ -392,20 +429,20 @@ error: agent name 'monitor' is ambiguous — found in: paseo-org, acme-corp
 ### 4.6 Update Mechanism
 
 ```
-nous tap update paseo-org
+nous form update paseo-org
   │
-  ├── git fetch origin in ~/.config/nous/taps/paseo-org/
+  ├── git fetch origin in ~/.config/nous/forms/paseo-org/
   ├── Computes diff of changed agent/skill files
   ├── Reports: "3 agents updated, 1 agent added, 0 removed"
   └── Does NOT automatically re-register agents.
       Run: nous agent sync  (to propagate changes to the DB)
 ```
 
-Separating `tap update` (fetches files) from `agent sync` (updates the DB) lets users review what changed before applying it — the same pattern as `helm repo update` followed by `helm upgrade`.
+Separating `form update` (fetches files) from `agent sync` (updates the DB) lets users review what changed before applying it — the same pattern as `helm repo update` followed by `helm upgrade`.
 
 ## 5. Lockfile Design
 
-The lockfile (`~/.config/nous/nous.lock`) pins every agent and skill to a specific content hash and source ref. Its purpose mirrors `Cargo.lock`: given the same lockfile, two different machines produce an identical agent configuration even if tap repositories have changed upstream.
+The lockfile (`~/.config/nous/nous.lock`) pins every agent and skill to a specific content hash and source ref. Its purpose mirrors `Cargo.lock`: given the same lockfile, two different machines produce an identical agent configuration even if form repositories have changed upstream.
 
 ### 5.1 Lockfile Format
 
@@ -428,11 +465,11 @@ version   = "1.2.0"
 
 [[agent]]
 name      = "monitor"
-source    = "tap:paseo-org"
-file      = "~/.config/nous/taps/paseo-org/agents/monitor.toml"
+source    = "form:paseo-org"
+file      = "~/.config/nous/forms/paseo-org/agents/monitor.toml"
 sha256    = "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
 version   = "2.0.1"
-tap_ref   = "v1.2.0"
+form_ref   = "v1.2.0"
 
 [[skill]]
 name      = "code-review"
@@ -442,10 +479,10 @@ sha256    = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 
 [[skill]]
 name      = "paseo-org/incident-response"
-source    = "tap:paseo-org"
-file      = "~/.config/nous/taps/paseo-org/skills/incident-response.md"
+source    = "form:paseo-org"
+file      = "~/.config/nous/forms/paseo-org/skills/incident-response.md"
 sha256    = "82e35a63ceba37e9646434c5dd412ea577596f72d2c7d0b7d3f11e5d8d9a3d65"
-tap_ref   = "v1.2.0"
+form_ref   = "v1.2.0"
 ```
 
 ### 5.2 Resolution Algorithm
@@ -454,10 +491,10 @@ When `nous agent sync` runs, it resolves in this order:
 
 ```
 1. Read all .toml files in ~/.config/nous/agents/ (local agents).
-2. For each tap in ~/.config/nous/taps/:
-     a. Read tap.toml to get pinned_ref.
+2. For each form in ~/.config/nous/forms/:
+     a. Read form.toml to get pinned_ref.
      b. Verify the local clone is at pinned_ref (git rev-parse HEAD).
-     c. Read all .toml files in <tap>/agents/.
+     c. Read all .toml files in <form>/agents/.
 3. For each agent definition:
      a. Compute SHA-256 of the file contents.
      b. Compare against nous.lock entry.
@@ -465,7 +502,7 @@ When `nous agent sync` runs, it resolves in this order:
      d. If no lock entry → mark as "new"; create DB record and lock entry.
      e. If in lock but file missing → mark as "removed" (warning only; no DB delete).
 4. For each skill ref in each agent definition:
-     a. Resolve skill file path (local or tap-qualified).
+     a. Resolve skill file path (local or form-qualified).
      b. Compute SHA-256.
      c. Record in nous.lock.
 5. Write updated nous.lock atomically (write to nous.lock.tmp, rename).
@@ -481,12 +518,12 @@ nous resolves all definitions from the local filesystem. No network access is re
 |-----------|------------------|
 | `nous agent sync` | No — reads local files only |
 | `nous agent add <local-file>` | No |
-| `nous agent add <tap>/<name>` | No (tap must already be fetched) |
-| `nous tap add <owner>/<repo>` | Yes — initial clone |
-| `nous tap update` | Yes — git fetch |
+| `nous agent add <form>/<name>` | No (form must already be fetched) |
+| `nous form add <owner>/<repo>` | Yes — initial clone |
+| `nous form update` | Yes — git fetch |
 | `nous agent spawn` | No — uses local DB records |
 
-Machines in air-gapped environments can pre-populate `~/.config/nous/taps/` by copying the directories directly (rsync, archive, or git bundle) and running `nous agent sync` locally. The lockfile verifies integrity via SHA-256 without contacting any external service.
+Machines in air-gapped environments can pre-populate `~/.config/nous/forms/` by copying the directories directly (rsync, archive, or git bundle) and running `nous agent sync` locally. The lockfile verifies integrity via SHA-256 without contacting any external service.
 
 ### 5.4 When to Regenerate
 
@@ -494,7 +531,7 @@ The lockfile regenerates automatically on:
 
 - `nous agent sync`
 - `nous agent add <file>` (adds or updates a single entry)
-- `nous tap update` (updates tap_ref and file hashes for that tap's entries)
+- `nous form update` (updates form_ref and file hashes for that form's entries)
 
 Force-regenerate from scratch (discards the existing lock and re-resolves everything):
 
@@ -506,13 +543,13 @@ This is equivalent to deleting `Cargo.lock` and re-running `cargo build`. Use it
 
 ### 5.5 Reproducibility Guarantee
 
-Two machines with the same `nous.lock` and the same source files (local `agents/`, `skills/`, and tap directories at the recorded `tap_ref`) will produce identical agent registration state. The guarantee holds because:
+Two machines with the same `nous.lock` and the same source files (local `agents/`, `skills/`, and form directories at the recorded `form_ref`) will produce identical agent registration state. The guarantee holds because:
 
 - SHA-256 hashes in the lockfile are content-addressed, not path-addressed.
-- Tap refs pin git commits, making tap contents deterministic.
+- Form refs pin git commits, making form contents deterministic.
 - The DB schema stores all agent fields written at registration time (`nous agent sync --refresh-lock` re-writes the DB from the lockfile).
 
-The lockfile should be committed to version control when sharing an agent configuration across a team. Treat it like `Cargo.lock` for a binary: commit it for deployment repos, `.gitignore` it for reusable agent library repos.
+The lockfile should be committed to version control when sharing an agent configuration across a team. Treat it like `Cargo.lock` for a binary: commit it for deployment repos, `.gitignore` it for reusable agent library repos (forms).
 
 ## 6. Recommendation
 
@@ -520,11 +557,11 @@ Build the file-based agent definition system in three phases. Each phase is inde
 
 ### Phase 1 — Prototype (target: 1 sprint)
 
-**Goal:** Make it possible to define an agent as a TOML file and register it with a single command, without touching taps or lockfiles.
+**Goal:** Make it possible to define an agent as a TOML file and register it with a single command, without touching forms or lockfiles.
 
 **What to build:**
 
-1. A TOML schema for agent definitions (`[agent]`, `[process]`, `[skills]`, `[metadata]` sections as described in §3.2).
+1. A TOML schema for agent definitions (`[agent]`, `[process]`, `[skills]`, `[tools]`, `[metadata]` sections as described in §3.2).
 2. `nous agent add <file>` command that:
    - Parses the TOML using the existing `serde` + `toml` stack.
    - Calls the existing `agents::register_agent` (no new DB schema needed).
@@ -532,7 +569,7 @@ Build the file-based agent definition system in three phases. Each phase is inde
 3. `nous skill list` command showing local skills.
 4. A few example definition files under `examples/agents/` in the repository.
 
-**What not to build in Phase 1:** taps, lockfiles, `nous agent sync`, `nous tap *` commands. These add distribution complexity before the basic format is validated.
+**What not to build in Phase 1:** forms, lockfiles, `nous agent sync`, `nous form *` commands. These add distribution complexity before the basic format is validated.
 
 **Done criteria:** A developer can `git clone` the nous repository, write a 20-line TOML file, run `nous agent add my-agent.toml`, and have the agent registered and visible in `nous agent list` — with no prior knowledge of the nous database schema.
 
@@ -542,17 +579,17 @@ Build the file-based agent definition system in three phases. Each phase is inde
 
 **What to build:**
 
-1. `nous tap add <owner>/<repo>[@<ref>]` — clones a tap repository.
-2. `nous tap update [<name>]` — git fetch + report changed files.
-3. `nous tap remove <name>` — removes tap directory.
-4. `nous tap list` — lists installed taps.
-5. Tap-qualified agent references in `nous agent add paseo-org/monitor`.
-6. Tap-qualified skill refs in agent definition files (`[skills].refs`).
+1. `nous form add <owner>/<repo>[@<ref>]` — clones a form repository.
+2. `nous form update [<name>]` — git fetch + report changed files.
+3. `nous form remove <name>` — removes form directory.
+4. `nous form list` — lists installed forms.
+5. Form-qualified agent references in `nous agent add paseo-org/monitor`.
+6. Form-qualified skill refs in agent definition files (`[skills].refs`).
 7. Namespace conflict detection and disambiguation errors (§4.5).
 
-**What not to build in Phase 2:** the lockfile. Taps at HEAD are sufficient for team distribution before reproducibility is critical.
+**What not to build in Phase 2:** the lockfile. Forms at HEAD are sufficient for team distribution before reproducibility is critical.
 
-**Done criteria:** An operator can `nous tap add acme-corp/agents`, run `nous agent add acme-corp/monitor`, and have the agent registered — pulling its skill files from the tap, not from local files.
+**Done criteria:** An operator can `nous form add acme-corp/agents`, run `nous agent add acme-corp/monitor`, and have the agent registered — pulling its skill files from the form, not from local files.
 
 ### Phase 3 — Reproducibility (target: 1–2 sprints after Phase 2 ships)
 
@@ -563,11 +600,11 @@ Build the file-based agent definition system in three phases. Each phase is inde
 1. `nous.lock` file generation during `nous agent sync`.
 2. `nous agent sync` command — full reconciliation of filesystem → DB with lockfile write.
 3. `nous agent sync --refresh-lock` for forced regeneration.
-4. Tap `pinned_ref` support in `nous tap add @<ref>` and `nous tap update --upgrade`.
+4. Form `pinned_ref` support in `nous form add @<ref>` and `nous form update --upgrade`.
 5. SHA-256 content verification on sync (detects tampering or manual edits).
 6. Documentation on committing `nous.lock` vs. `.gitignore`-ing it.
 
-**Done criteria:** Running `nous agent sync` on two machines with the same `~/.config/nous/agents/`, `~/.config/nous/taps/`, and `nous.lock` produces byte-identical JSON output from `nous agent list`.
+**Done criteria:** Running `nous agent sync` on two machines with the same `~/.config/nous/agents/`, `~/.config/nous/forms/`, and `nous.lock` produces byte-identical JSON output from `nous agent list`.
 
 ### Rationale for Phasing
 
@@ -579,6 +616,6 @@ The three-phase approach reflects three different user needs that arrive at diff
 | 2 — Distribution | Small teams | Share proven agent definitions without a registry |
 | 3 — Reproducibility | Ops / CI pipelines | Deploy agent configs deterministically |
 
-Skipping to Phase 3 on the first iteration would produce a technically correct system that no one uses because the definition format is unfamiliar. Starting with Phase 1 validates the format with real usage before investing in the distribution and lockfile machinery.
+Skipping to Phase 3 on the first iteration would produce a technically correct system that no one uses because the definition format is unfamiliar. Starting with Phase 1 validates the format with real usage before investing in the form distribution and lockfile machinery.
 
-The total surface area across all three phases maps to approximately 5 new Rust source files (one per command group), 2 new `clap` subcommand trees (`nous tap`, `nous skill`), and 1 new module (`crates/nous-cli/src/commands/tap.rs`). No new database schema changes are required — all three phases consume the existing `agents`, `agent_versions`, and `agent_templates` tables already present in `crates/nous-core/src/agents/`.
+The total surface area across all three phases maps to approximately 5 new Rust source files (one per command group), 2 new `clap` subcommand trees (`nous form`, `nous skill`), and 1 new module (`crates/nous-cli/src/commands/form.rs`). No new database schema changes are required — all three phases consume the existing `agents`, `agent_versions`, and `agent_templates` tables already present in `crates/nous-core/src/agents/`.
