@@ -225,7 +225,7 @@ pub async fn register_artifact(
     State(state): State<AppState>,
     Json(body): Json<RegisterArtifactBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let artifact_type: nous_core::agents::ArtifactType = body.artifact_type.parse()?;
+    let artifact_type = nous_core::agents::parse_artifact_type(&body.artifact_type)?;
     let artifact = nous_core::agents::register_artifact(
         &state.pool,
         nous_core::agents::RegisterArtifactRequest {
@@ -247,7 +247,7 @@ pub async fn list_artifacts(
     let artifact_type = params
         .artifact_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::agents::ArtifactType>())
+        .map(|s| nous_core::agents::parse_artifact_type(s))
         .transpose()?;
 
     let artifacts = nous_core::agents::list_artifacts(

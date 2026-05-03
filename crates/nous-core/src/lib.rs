@@ -3,7 +3,6 @@ pub mod config;
 pub mod db;
 pub mod entities;
 pub mod error;
-pub mod inventory;
 pub mod memory;
 pub mod messages;
 pub mod notifications;

@@ -2,10 +2,11 @@ mod common;
 
 use nous_core::agents::processes;
 use nous_core::agents::{
-    self, AgentStatus, ArtifactType, CreateTemplateRequest, InstantiateRequest,
+    self, AgentStatus, CreateTemplateRequest, InstantiateRequest,
     ListAgentsFilter, ListArtifactsFilter, RecordVersionRequest, RegisterAgentRequest,
     RegisterArtifactRequest,
 };
+use nous_core::resources::ResourceType;
 use nous_core::db::DbPools;
 
 async fn setup() -> (DbPools, tempfile::TempDir) {
@@ -544,7 +545,7 @@ async fn test_register_artifact() {
         pool,
         RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: ArtifactType::Worktree,
+            artifact_type: ResourceType::Worktree,
             name: "my-worktree".into(),
             path: Some("/tmp/wt/my-worktree".into()),
             namespace: None,
@@ -585,7 +586,7 @@ async fn test_list_artifacts() {
         pool,
         RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: ArtifactType::Room,
+            artifact_type: ResourceType::Room,
             name: "work-room".into(),
             path: None,
             namespace: None,
@@ -598,7 +599,7 @@ async fn test_list_artifacts() {
         pool,
         RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: ArtifactType::Branch,
+            artifact_type: ResourceType::Branch,
             name: "feat/test".into(),
             path: Some("/repo".into()),
             namespace: None,
@@ -622,7 +623,7 @@ async fn test_list_artifacts() {
         pool,
         &ListArtifactsFilter {
             agent_id: Some(agent.id.clone()),
-            artifact_type: Some(ArtifactType::Room),
+            artifact_type: Some(ResourceType::Room),
             ..Default::default()
         },
     )
@@ -657,7 +658,7 @@ async fn test_deregister_artifact() {
         pool,
         RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: ArtifactType::Schedule,
+            artifact_type: ResourceType::Schedule,
             name: "cron-job".into(),
             path: None,
             namespace: None,
@@ -699,7 +700,7 @@ async fn test_artifacts_cascade_on_agent_delete() {
         pool,
         RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: ArtifactType::Worktree,
+            artifact_type: ResourceType::Worktree,
             name: "cascade-wt".into(),
             path: None,
             namespace: None,
