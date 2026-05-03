@@ -30,6 +30,34 @@ impl ScriptTool {
             )));
         }
 
+        let canonical_script = script_path
+            .canonicalize()
+            .map_err(|e| NousError::Validation(format!("cannot resolve script path: {e}")))?;
+        let canonical_base = base_dir
+            .canonicalize()
+            .map_err(|e| NousError::Validation(format!("cannot resolve base dir: {e}")))?;
+        if !canonical_script.starts_with(&canonical_base) {
+            return Err(NousError::Validation(format!(
+                "script path escapes base directory: {}",
+                def.script.as_deref().unwrap_or("<unknown>")
+            )));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&canonical_script)
+                .map_err(|e| NousError::Validation(format!("cannot read script metadata: {e}")))?
+                .permissions()
+                .mode();
+            if mode & 0o111 == 0 {
+                return Err(NousError::Validation(format!(
+                    "script is not executable: {}",
+                    canonical_script.display()
+                )));
+            }
+        }
+
         Ok(Self {
             meta: ToolMetadata {
                 name: def.name.clone(),
@@ -107,12 +135,21 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn create_executable_script(path: &Path, content: &[u8]) {
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(content).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     #[test]
     fn from_def_with_valid_script() {
         let dir = tempfile::tempdir().unwrap();
         let script_path = dir.path().join("test.sh");
-        let mut f = std::fs::File::create(&script_path).unwrap();
-        f.write_all(b"#!/bin/sh\necho hello").unwrap();
+        create_executable_script(&script_path, b"#!/bin/sh\necho hello");
 
         let def = CustomToolDef {
             name: "test_script".into(),
@@ -163,6 +200,54 @@ mod tests {
         match result.unwrap_err() {
             NousError::NotFound(msg) => assert!(msg.contains("nonexistent.sh")),
             other => panic!("expected NotFound, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_def_rejects_path_traversal() {
+        let parent = tempfile::tempdir().unwrap();
+        let base_dir = parent.path().join("workspace");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let outside_script = parent.path().join("evil.sh");
+        create_executable_script(&outside_script, b"#!/bin/sh\necho pwned");
+
+        let def = CustomToolDef {
+            name: "traversal".into(),
+            script: Some("../evil.sh".into()),
+            description: "Path traversal attempt".into(),
+            input_schema: None,
+            timeout_secs: None,
+        };
+
+        let result = ScriptTool::from_def(&def, &base_dir);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NousError::Validation(msg) => assert!(msg.contains("escapes base directory")),
+            other => panic!("expected Validation, got: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_def_rejects_non_executable_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("noexec.sh");
+        let mut f = std::fs::File::create(&script_path).unwrap();
+        f.write_all(b"#!/bin/sh\necho hello").unwrap();
+
+        let def = CustomToolDef {
+            name: "noexec".into(),
+            script: Some("noexec.sh".into()),
+            description: "Non-executable script".into(),
+            input_schema: None,
+            timeout_secs: None,
+        };
+
+        let result = ScriptTool::from_def(&def, dir.path());
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NousError::Validation(msg) => assert!(msg.contains("not executable")),
+            other => panic!("expected Validation, got: {other:?}"),
         }
     }
 }
