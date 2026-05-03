@@ -96,7 +96,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Room ID" },
-                    "hard": { "type": "boolean", "default": false }
+                    "force": { "type": "boolean", "default": false }
                 },
                 "required": ["id"]
             }),
@@ -385,7 +385,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Agent ID" },
-                    "cascade": { "type": "boolean", "description": "Cascade delete children" }
+                    "force": { "type": "boolean", "description": "Force delete (cascade children)" }
                 },
                 "required": ["id"]
             }),
@@ -738,7 +738,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Item ID" },
-                    "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                    "force": { "type": "boolean", "description": "Force delete (remove from DB entirely)" }
                 },
                 "required": ["id"]
             }),
@@ -839,7 +839,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Resource ID" },
-                    "hard": { "type": "boolean", "description": "Hard delete (remove from DB entirely)" }
+                    "force": { "type": "boolean", "description": "Force delete (remove from DB entirely)" }
                 },
                 "required": ["id"]
             }),
@@ -1379,7 +1379,7 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "ids": { "type": "array", "items": { "type": "string" }, "description": "List of agent IDs to deregister" },
-                    "cascade": { "type": "boolean", "description": "Cascade delete children (default: false)" }
+                    "force": { "type": "boolean", "description": "Force delete (cascade children, default: false)" }
                 },
                 "required": ["ids"]
             }),
@@ -1687,8 +1687,8 @@ pub async fn dispatch(
         }
         "room_delete" => {
             let id = require_str(args, "id")?;
-            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
-            delete_room(&state.pool, id, hard).await?;
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            delete_room(&state.pool, id, force).await?;
             Ok(serde_json::json!({"deleted": true}))
         }
         "room_post_message" => {
@@ -2021,12 +2021,12 @@ pub async fn dispatch(
         }
         "agent_deregister" => {
             let id = require_str(args, "id")?;
-            let cascade = args
-                .get("cascade")
+            let force = args
+                .get("force")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let result = agents::deregister_agent(&state.pool, id, cascade).await?;
-            Ok(serde_json::json!({"result": result}))
+            agents::deregister_agent(&state.pool, id, force).await?;
+            Ok(serde_json::json!({"deleted": true}))
         }
         "agent_lookup" => {
             let name = require_str(args, "name")?;
@@ -2538,9 +2538,9 @@ pub async fn dispatch(
         }
         "inventory_deregister" => {
             let id = require_str(args, "id")?;
-            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
-            inventory::deregister_item(&state.pool, id, hard).await?;
-            Ok(serde_json::json!({"ok": true}))
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            inventory::deregister_item(&state.pool, id, force).await?;
+            Ok(serde_json::json!({"deleted": true}))
         }
         // --- Unified resource tool handlers ---
         "resource_register" => {
@@ -2716,9 +2716,9 @@ pub async fn dispatch(
         }
         "resource_deregister" => {
             let id = require_str(args, "id")?;
-            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
-            resources::deregister_resource(&state.pool, id, hard).await?;
-            Ok(serde_json::json!({"ok": true}))
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            resources::deregister_resource(&state.pool, id, force).await?;
+            Ok(serde_json::json!({"deleted": true}))
         }
         "resource_heartbeat" => {
             let id = require_str(args, "id")?;
@@ -3380,13 +3380,13 @@ pub async fn dispatch(
                         .collect()
                 })
                 .unwrap_or_default();
-            let cascade = args
-                .get("cascade")
+            let force = args
+                .get("force")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let mut results = serde_json::Map::new();
             for id in &ids {
-                match agents::deregister_agent(&state.pool, id, cascade).await {
+                match agents::deregister_agent(&state.pool, id, force).await {
                     Ok(result) => {
                         results.insert(id.clone(), serde_json::json!(result));
                     }

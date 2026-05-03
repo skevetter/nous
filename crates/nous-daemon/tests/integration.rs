@@ -247,7 +247,7 @@ async fn e2e_hard_delete_then_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/rooms/{room_id}?hard=true"))
+                .uri(format!("/rooms/{room_id}?force=true"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1094,9 +1094,7 @@ async fn e2e_agent_register_list_get_deregister() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = json_body(response).await;
-    assert_eq!(body["data"]["result"], "deleted");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     // Verify 404
     let response = app(state.clone())
@@ -1493,7 +1491,7 @@ async fn mcp_agent_register_lookup_list_deregister() {
     let resp: Value = json_body(response).await;
     assert!(resp.get("is_error").is_none());
     let result: Value = serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(result["result"], "deleted");
+    assert_eq!(result["deleted"], true);
 }
 
 #[tokio::test]
@@ -2454,7 +2452,7 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/resources/{res_id}?hard=true"))
+                .uri(format!("/resources/{res_id}?force=true"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -2623,7 +2621,7 @@ async fn mcp_resource_register_list_deregister() {
                         "name": "resource_deregister",
                         "arguments": {
                             "id": res_id,
-                            "hard": true
+                            "force": true
                         }
                     }))
                     .unwrap(),

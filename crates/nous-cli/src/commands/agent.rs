@@ -14,16 +14,28 @@ pub enum AgentCommands {
         /// Path to the TOML definition file
         file: String,
     },
-    /// Remove an agent by name or ID
+    /// Delete an agent by name or ID
+    Delete {
+        /// Agent name or UUID
+        name_or_id: String,
+        /// Namespace (for name resolution; defaults to 'default')
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Force delete (cascade children)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove an agent by name or ID (deprecated: use 'delete')
+    #[command(hide = true)]
     Remove {
         /// Agent name or UUID
         name_or_id: String,
         /// Namespace (for name resolution; defaults to 'default')
         #[arg(long)]
         namespace: Option<String>,
-        /// Cascade delete children
+        /// Force delete (cascade children)
         #[arg(long)]
-        cascade: bool,
+        force: bool,
     },
     /// Register a new agent in the org hierarchy
     Register {
@@ -66,13 +78,14 @@ pub enum AgentCommands {
         #[arg(long)]
         metadata: Option<String>,
     },
-    /// Deregister an agent (remove from registry)
+    /// Deregister an agent (deprecated: use 'delete')
+    #[command(hide = true)]
     Deregister {
         /// Agent ID or name
         id: String,
-        /// Cascade delete children
+        /// Force delete (cascade children)
         #[arg(long)]
-        cascade: bool,
+        force: bool,
     },
     /// Look up an agent by name
     Lookup {
@@ -486,10 +499,15 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let final_agent = agents::get_agent_by_id(pool, &agent.id).await?;
             println!("{}", serde_json::to_string_pretty(&final_agent)?);
         }
-        AgentCommands::Remove {
+        AgentCommands::Delete {
             name_or_id,
             namespace,
-            cascade,
+            force,
+        }
+        | AgentCommands::Remove {
+            name_or_id,
+            namespace,
+            force,
         } => {
             let resolved_id = if looks_like_uuid(&name_or_id) {
                 name_or_id
@@ -497,8 +515,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 let agent = agents::lookup_agent(pool, &name_or_id, namespace.as_deref()).await?;
                 agent.id
             };
-            let result = agents::deregister_agent(pool, &resolved_id, cascade).await?;
-            println!("{{\"result\": \"{result}\"}}");
+            agents::deregister_agent(pool, &resolved_id, force).await?;
+            println!("{{\"deleted\": true}}");
         }
         AgentCommands::Register {
             name,
@@ -546,15 +564,15 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             .await?;
             println!("{}", serde_json::to_string_pretty(&agent)?);
         }
-        AgentCommands::Deregister { id, cascade } => {
+        AgentCommands::Deregister { id, force } => {
             let resolved_id = if looks_like_uuid(&id) {
                 id
             } else {
                 let agent = agents::lookup_agent(pool, &id, None).await?;
                 agent.id
             };
-            let result = agents::deregister_agent(pool, &resolved_id, cascade).await?;
-            println!("{{\"result\": \"{result}\"}}");
+            agents::deregister_agent(pool, &resolved_id, force).await?;
+            println!("{{\"deleted\": true}}");
         }
         AgentCommands::Lookup { name, namespace } => {
             let agent = agents::lookup_agent(pool, &name, namespace.as_deref()).await?;

@@ -38,7 +38,13 @@ pub enum ArtifactCommands {
         #[arg(long, default_value = "50")]
         limit: u32,
     },
-    /// Deregister (delete) an artifact
+    /// Delete an artifact
+    Delete {
+        /// Artifact ID
+        id: String,
+    },
+    /// Deregister an artifact (deprecated: use 'delete')
+    #[command(hide = true)]
     Deregister {
         /// Artifact ID
         id: String,
@@ -110,9 +116,9 @@ async fn execute(
             .await?;
             println!("{}", serde_json::to_string_pretty(&list)?);
         }
-        ArtifactCommands::Deregister { id } => {
+        ArtifactCommands::Delete { id } | ArtifactCommands::Deregister { id } => {
             agents::deregister_artifact(pool, &id).await?;
-            println!("{{\"ok\": true}}");
+            println!("{{\"deleted\": true}}");
         }
     }
 

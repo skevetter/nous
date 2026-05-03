@@ -105,13 +105,22 @@ pub enum ResourceCommands {
         /// Resource ID
         id: String,
     },
-    /// Deregister (soft-delete or hard-delete) a resource
+    /// Delete a resource
+    Delete {
+        /// Resource ID
+        id: String,
+        /// Force delete (remove from database entirely)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Deregister a resource (deprecated: use 'delete')
+    #[command(hide = true)]
     Deregister {
         /// Resource ID
         id: String,
-        /// Hard delete (remove from database entirely)
+        /// Force delete (remove from database entirely)
         #[arg(long)]
-        hard: bool,
+        force: bool,
     },
     /// Update last_seen_at timestamp (liveness heartbeat)
     Heartbeat {
@@ -293,9 +302,9 @@ async fn execute(
             let resource = resources::archive_resource(pool, &id).await?;
             println!("{}", serde_json::to_string_pretty(&resource)?);
         }
-        ResourceCommands::Deregister { id, hard } => {
-            resources::deregister_resource(pool, &id, hard).await?;
-            println!("{{\"ok\": true}}");
+        ResourceCommands::Delete { id, force } | ResourceCommands::Deregister { id, force } => {
+            resources::deregister_resource(pool, &id, force).await?;
+            println!("{{\"deleted\": true}}");
         }
         ResourceCommands::Heartbeat { id } => {
             let resource = resources::heartbeat_resource(pool, &id).await?;

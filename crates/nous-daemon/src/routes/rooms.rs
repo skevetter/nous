@@ -23,7 +23,7 @@ pub struct ListRoomsQuery {
 #[derive(Deserialize)]
 pub struct DeleteRoomQuery {
     #[serde(default)]
-    pub hard: bool,
+    pub force: bool,
 }
 
 pub async fn create(
@@ -62,6 +62,6 @@ pub async fn delete(
     Query(params): Query<DeleteRoomQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let room = nous_core::rooms::get_room(&state.pool, &id).await?;
-    nous_core::rooms::delete_room(&state.pool, &room.id, params.hard).await?;
+    nous_core::rooms::delete_room(&state.pool, &room.id, params.force).await?;
     Ok(crate::response::no_content())
 }
