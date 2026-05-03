@@ -17,8 +17,6 @@ pub struct NousMemoryIndex {
     embedder: Arc<dyn Embedder>,
     workspace_id: String,
     agent_id: Option<String>,
-    #[allow(dead_code)]
-    session_id: Option<String>,
     scope: MemoryScope,
     retrieval: RetrievalStrategy,
     memory_types: Vec<MemoryType>,
@@ -32,7 +30,6 @@ impl NousMemoryIndex {
         embedder: Arc<dyn Embedder>,
         workspace_id: String,
         agent_id: Option<String>,
-        session_id: Option<String>,
         scope: MemoryScope,
         retrieval: RetrievalStrategy,
         memory_types: Vec<MemoryType>,
@@ -43,7 +40,6 @@ impl NousMemoryIndex {
             embedder,
             workspace_id,
             agent_id,
-            session_id,
             scope,
             retrieval,
             memory_types,
@@ -373,7 +369,6 @@ mod tests {
             Arc::new(MockEmbedder::new()),
             "test-workspace".to_string(),
             Some("test-agent".to_string()),
-            Some("test-session".to_string()),
             scope,
             retrieval,
             vec![MemoryType::Decision, MemoryType::Convention],
@@ -396,7 +391,6 @@ mod tests {
                 Arc::new(MockEmbedder::new()),
                 "ws-1".to_string(),
                 Some("agent-1".to_string()),
-                Some("session-1".to_string()),
                 MemoryScope::Agent,
                 RetrievalStrategy::Hybrid,
                 vec![MemoryType::Decision],
@@ -404,7 +398,6 @@ mod tests {
 
             assert_eq!(index.workspace_id, "ws-1");
             assert_eq!(index.agent_id.as_deref(), Some("agent-1"));
-            assert_eq!(index.session_id.as_deref(), Some("session-1"));
             assert_eq!(index.scope, MemoryScope::Agent);
             assert_eq!(index.retrieval, RetrievalStrategy::Hybrid);
             assert_eq!(index.memory_types, vec![MemoryType::Decision]);
