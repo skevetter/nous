@@ -683,52 +683,6 @@ pub async fn run_importance_decay(
     Ok(r1.rows_affected() + r2.rows_affected())
 }
 
-pub async fn grant_workspace_access(
-    db: &DatabaseConnection,
-    agent_id: &str,
-    workspace_id: &str,
-) -> Result<(), NousError> {
-    db.execute(Statement::from_sql_and_values(
-        sea_orm::DbBackend::Sqlite,
-        "INSERT OR IGNORE INTO agent_workspace_access (agent_id, workspace_id) VALUES (?, ?)",
-        [agent_id.into(), workspace_id.into()],
-    ))
-    .await?;
-    Ok(())
-}
-
-pub async fn revoke_workspace_access(
-    db: &DatabaseConnection,
-    agent_id: &str,
-    workspace_id: &str,
-) -> Result<(), NousError> {
-    db.execute(Statement::from_sql_and_values(
-        sea_orm::DbBackend::Sqlite,
-        "DELETE FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?",
-        [agent_id.into(), workspace_id.into()],
-    ))
-    .await?;
-    Ok(())
-}
-
-pub async fn check_workspace_access(
-    db: &DatabaseConnection,
-    agent_id: &str,
-    workspace_id: &str,
-) -> Result<bool, NousError> {
-    let row = db
-        .query_one(Statement::from_sql_and_values(
-            sea_orm::DbBackend::Sqlite,
-            "SELECT EXISTS(SELECT 1 FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?) as has_access",
-            [agent_id.into(), workspace_id.into()],
-        ))
-        .await?;
-
-    match row {
-        Some(r) => Ok(r.try_get_by::<bool, _>("has_access").unwrap_or(false)),
-        None => Ok(false),
-    }
-}
 
 fn sanitize_fts_query(query: &str) -> String {
     query
@@ -1898,30 +1852,6 @@ mod tests {
         assert_eq!(refreshed.importance, "high");
     }
 
-    #[tokio::test]
-    async fn workspace_access_crud() {
-        let (db, _vec_pool, _tmp) = setup().await;
-
-        assert!(!check_workspace_access(&db, "agent-1", "ws-1")
-            .await
-            .unwrap());
-
-        grant_workspace_access(&db, "agent-1", "ws-1")
-            .await
-            .unwrap();
-
-        assert!(check_workspace_access(&db, "agent-1", "ws-1")
-            .await
-            .unwrap());
-
-        revoke_workspace_access(&db, "agent-1", "ws-1")
-            .await
-            .unwrap();
-
-        assert!(!check_workspace_access(&db, "agent-1", "ws-1")
-            .await
-            .unwrap());
-    }
 
     #[tokio::test]
     async fn search_archived_excluded_by_default() {
