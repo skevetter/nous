@@ -12,7 +12,7 @@ pub mod scheduler;
 pub mod state;
 pub mod vector_store;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 
 use nous_core::config::RateLimitConfig;
@@ -44,7 +44,7 @@ fn router(state: AppState) -> Router {
             "/tasks/{id}",
             get(routes::tasks::get).put(routes::tasks::update),
         )
-        .route("/tasks/{id}/close", post(routes::tasks::close))
+        .route("/tasks/{id}/close", patch(routes::tasks::close))
         .route("/tasks/{id}/links", get(routes::tasks::list_links))
         .route("/tasks/{id}/note", post(routes::tasks::add_note))
         .route("/tasks/link", post(routes::tasks::link))
@@ -59,9 +59,9 @@ fn router(state: AppState) -> Router {
         )
         .route(
             "/worktrees/{id}/status",
-            axum::routing::patch(routes::worktrees::update_status),
+            patch(routes::worktrees::update_status),
         )
-        .route("/worktrees/{id}/archive", post(routes::worktrees::archive))
+        .route("/worktrees/{id}/archive", patch(routes::worktrees::archive))
         .route(
             "/agents",
             post(routes::agents::register).get(routes::agents::list),
@@ -73,15 +73,15 @@ fn router(state: AppState) -> Router {
             "/agents/{id}",
             get(routes::agents::get).delete(routes::agents::deregister),
         )
-        .route("/agents/{id}/heartbeat", post(routes::agents::heartbeat))
+        .route("/agents/{id}/heartbeat", patch(routes::agents::heartbeat))
         .route("/agents/{id}/children", get(routes::agents::children))
         .route("/agents/{id}/ancestors", get(routes::agents::ancestors))
         .route("/agents/{id}/inspect", get(routes::agents::inspect))
         .route("/agents/{id}/versions", get(routes::agents::list_versions))
-        .route("/agents/{id}/rollback", post(routes::agents::rollback))
+        .route("/agents/{id}/rollback", patch(routes::agents::rollback))
         .route(
             "/agents/{id}/notify-upgrade",
-            post(routes::agents::notify_upgrade),
+            patch(routes::agents::notify_upgrade),
         )
         .route("/agents/versions", post(routes::agents::record_version))
         .route("/agents/outdated", get(routes::agents::list_outdated))
@@ -105,7 +105,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/memories/search", get(routes::memory::search))
         .route("/memories/relate", post(routes::memory::relate))
-        .route("/memories/decay", post(routes::memory::decay))
+        .route("/memories/decay", patch(routes::memory::decay))
         .route(
             "/memories/{id}",
             get(routes::memory::get).put(routes::memory::update),
@@ -125,23 +125,23 @@ fn router(state: AppState) -> Router {
                 .put(routes::inventory::update)
                 .delete(routes::inventory::deregister),
         )
-        .route("/inventory/{id}/archive", post(routes::inventory::archive))
+        .route("/inventory/{id}/archive", patch(routes::inventory::archive))
         .route(
             "/resources",
             post(routes::resources::register).get(routes::resources::list),
         )
         .route("/resources/search", get(routes::resources::search))
-        .route("/resources/transfer", post(routes::resources::transfer))
+        .route("/resources/transfer", patch(routes::resources::transfer))
         .route(
             "/resources/{id}",
             get(routes::resources::get)
                 .put(routes::resources::update)
                 .delete(routes::resources::deregister),
         )
-        .route("/resources/{id}/archive", post(routes::resources::archive))
+        .route("/resources/{id}/archive", patch(routes::resources::archive))
         .route(
             "/resources/{id}/heartbeat",
-            post(routes::resources::heartbeat),
+            patch(routes::resources::heartbeat),
         )
         .route(
             "/schedules",
@@ -708,7 +708,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("PATCH")
                     .uri(format!("/tasks/{}/close", task.id))
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -1109,7 +1109,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("PATCH")
                     .uri("/memories/decay")
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from(

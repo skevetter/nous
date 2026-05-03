@@ -145,7 +145,7 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
         let url = format!("http://127.0.0.1:{}/memories/decay", config.port);
         let client = reqwest::Client::new();
         let resp = client
-            .post(&url)
+            .patch(&url)
             .json(&serde_json::json!({
                 "high_days": high_days,
                 "moderate_days": moderate_days,
