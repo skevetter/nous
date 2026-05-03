@@ -3,6 +3,9 @@ name = "nous-daemon"
 version = "0.10.0"
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 axum = "0.8"
 chrono = { workspace = true }

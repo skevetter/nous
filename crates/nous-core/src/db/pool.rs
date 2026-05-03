@@ -68,6 +68,7 @@ pub fn create_vec_pool(path: &Path) -> Result<VecPool, NousError> {
     let conn = Connection::open(path)
         .map_err(|e| NousError::Internal(format!("failed to open vec db: {e}")))?;
 
+    // SAFETY: sqlite-vec requires raw FFI init before the connection is used.
     unsafe {
         let db = conn.handle();
         let rc = sqlite3_vec_init(db, std::ptr::null_mut(), std::ptr::null());

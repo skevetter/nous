@@ -312,7 +312,7 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
             .await?;
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        MemoryCommands::Decay { .. } => unreachable!(),
+        MemoryCommands::Decay { .. } => unreachable!("decay is handled by the daemon, not the CLI"),
     }
 
     pools.close().await;
