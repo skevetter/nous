@@ -415,7 +415,7 @@ mod tests {
         let registry_clone = registry.clone();
 
         let handle = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
             registry_clone
                 .notify(Notification {
                     room_id: "room-wait".into(),
@@ -457,7 +457,7 @@ mod tests {
         let registry_clone = registry.clone();
 
         let handle = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::task::yield_now().await;
             registry_clone
                 .notify(Notification {
                     room_id: "topic-room".into(),
@@ -469,7 +469,7 @@ mod tests {
                 })
                 .await;
 
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::task::yield_now().await;
             registry_clone
                 .notify(Notification {
                     room_id: "topic-room".into(),
