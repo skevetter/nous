@@ -1795,6 +1795,7 @@ pub async fn dispatch(
                 room_id,
                 create_room_flag,
                 None,
+                None,
             )
             .await?;
             Ok(serde_json::to_value(task).unwrap())
@@ -1839,6 +1840,7 @@ pub async fn dispatch(
                 priority,
                 assignee_id,
                 description,
+                None,
                 None,
                 None,
             )

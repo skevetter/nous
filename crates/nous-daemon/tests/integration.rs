@@ -700,6 +700,7 @@ async fn e2e_worktree_lifecycle() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
