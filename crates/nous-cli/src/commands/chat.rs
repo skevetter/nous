@@ -137,6 +137,7 @@ async fn execute(cmd: ChatCommands, port: Option<u16>) -> Result<(), Box<dyn std
                     content,
                     reply_to,
                     metadata: None,
+                    message_type: None,
                 },
                 None,
             )

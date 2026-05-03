@@ -375,6 +375,7 @@ mod tests {
                 content: "Test message".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -415,6 +416,7 @@ mod tests {
                 content: "Deploy completed successfully".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )

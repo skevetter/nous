@@ -38,6 +38,7 @@ pub async fn post(
             content: body.content,
             reply_to: body.reply_to,
             metadata: body.metadata,
+            message_type: None,
         },
         Some(&state.registry),
     )

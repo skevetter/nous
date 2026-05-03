@@ -1621,6 +1621,7 @@ pub async fn dispatch(
                     content,
                     reply_to,
                     metadata,
+                    message_type: None,
                 },
                 Some(&state.registry),
             )

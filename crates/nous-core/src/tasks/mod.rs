@@ -599,6 +599,7 @@ pub async fn add_note(
             content: content.to_string(),
             reply_to: None,
             metadata: Some(metadata),
+            message_type: None,
         },
         None,
     )

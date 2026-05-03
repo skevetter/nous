@@ -377,6 +377,7 @@ mod tests {
                 content: "Deploy started".into(),
                 reply_to: None,
                 metadata: Some(metadata),
+                message_type: None,
             },
             Some(&registry),
         )
