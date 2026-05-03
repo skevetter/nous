@@ -323,10 +323,7 @@ mod tests {
             &self,
             texts: impl IntoIterator<Item = String> + Send,
         ) -> impl std::future::Future<
-            Output = Result<
-                Vec<rig::embeddings::Embedding>,
-                rig::embeddings::EmbeddingError,
-            >,
+            Output = Result<Vec<rig::embeddings::Embedding>, rig::embeddings::EmbeddingError>,
         > + Send {
             let vecs: Vec<rig::embeddings::Embedding> = texts
                 .into_iter()
