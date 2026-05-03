@@ -31,8 +31,6 @@ pub enum Relation {
     Invocations,
     #[sea_orm(has_many = "super::agent_versions::Entity")]
     Versions,
-    #[sea_orm(has_many = "super::artifacts::Entity")]
-    Artifacts,
 }
 
 impl Related<super::agent_processes::Entity> for Entity {
@@ -50,12 +48,6 @@ impl Related<super::agent_invocations::Entity> for Entity {
 impl Related<super::agent_versions::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Versions.def()
-    }
-}
-
-impl Related<super::artifacts::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Artifacts.def()
     }
 }
 

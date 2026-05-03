@@ -214,11 +214,12 @@ fn resolve_model_path(override_path: Option<&str>) -> Result<PathBuf, NousError>
     Ok(home.join(".nous/models/all-MiniLM-L6-v2.onnx"))
 }
 
-/// Mock embedder for testing — produces deterministic vectors based on text content.
+#[cfg(any(test, feature = "test-utils"))]
 pub struct MockEmbedder {
     pub dimension: usize,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl MockEmbedder {
     pub fn new() -> Self {
         Self {
@@ -227,12 +228,14 @@ impl MockEmbedder {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl Default for MockEmbedder {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl Embedder for MockEmbedder {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, NousError> {
         Ok(texts
@@ -287,13 +290,6 @@ impl<M: rig::embeddings::EmbeddingModel> Embedder for RigEmbedderAdapter<M> {
     }
 }
 
-pub trait AsyncEmbedder: Send + Sync {
-    fn embed_async(
-        &self,
-        texts: &[&str],
-    ) -> impl std::future::Future<Output = Result<Vec<Vec<f32>>, NousError>> + Send;
-    fn dimension(&self) -> usize;
-}
 
 #[cfg(test)]
 mod tests {

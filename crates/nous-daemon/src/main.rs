@@ -123,15 +123,17 @@ async fn main() {
     }
 
     let addr = format!("{}:{}", config.host, config.port);
-    let listener = TcpListener::bind(&addr).await.unwrap();
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
+    let listener = TcpListener::bind(&addr)
+        .await
+        .expect("failed to bind TCP listener");
+    tracing::info!("listening on {}", listener.local_addr().expect("listener has no local address"));
     axum::serve(
         listener,
         nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref()),
     )
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
-        .unwrap();
+        .expect("axum server exited with error");
 
-    scheduler_handle.await.unwrap();
+    scheduler_handle.await.expect("scheduler task panicked");
 }

@@ -3,6 +3,9 @@ name = "nous-daemon"
 version = "0.10.0"
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 axum = "0.8"
 chrono = { workspace = true }
@@ -32,15 +35,14 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 microsandbox = { workspace = true, optional = true }
-rig-qdrant = { version = "0.2.5", optional = true }
 
 [features]
 default = []
 sandbox = ["microsandbox"]
-qdrant = ["dep:rig-qdrant"]
 
 [dev-dependencies]
 http-body-util = "0.1"
+nous-core = { path = "../nous-core", features = ["test-utils"] }
 temp-env = "0.3"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

@@ -24,10 +24,6 @@ pub fn app(state: AppState) -> Router {
     app_with_options(state, None, None)
 }
 
-pub fn app_with_rate_limit(state: AppState, rate_limit: &RateLimitConfig) -> Router {
-    app_with_options(state, Some(rate_limit), None)
-}
-
 pub fn app_with_api_key(state: AppState, api_key: Option<&str>) -> Router {
     app_with_options(state, None, api_key)
 }
