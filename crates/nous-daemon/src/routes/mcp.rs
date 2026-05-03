@@ -1582,6 +1582,40 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "required": ["agent_id", "status"]
             }),
         },
+        ToolSchema {
+            name: "task_command",
+            description: "Execute a task operation from chat (close, assign, status, priority, link)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string", "description": "Room where command is issued" },
+                    "command": { "type": "string", "enum": ["close", "assign", "status", "priority", "link"] },
+                    "task_id": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "actor_id": { "type": "string" }
+                },
+                "required": ["command", "task_id", "actor_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_handoff",
+            description: "Send a structured work handoff from one agent to another",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string" },
+                    "from_agent": { "type": "string" },
+                    "to_agent": { "type": "string" },
+                    "task_id": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+                    "context": { "type": "object" },
+                    "deadline": { "type": "string" }
+                },
+                "required": ["room_id", "from_agent", "to_agent"]
+            }),
+        },
     ]
 }
 
@@ -3591,6 +3625,69 @@ pub async fn dispatch(
                     message_type: Some(MessageType::System),
                 },
                 Some(&state.registry),
+            )
+            .await?;
+            Ok(serde_json::to_value(msg).unwrap())
+        }
+        "task_command" => {
+            let command = require_str(args, "command")?.to_string();
+            let task_id = require_str(args, "task_id")?.to_string();
+            let actor_id = require_str(args, "actor_id")?.to_string();
+            let cmd_args: Vec<String> = args
+                .get("args")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+
+            let cmd = tasks::TaskCommand {
+                command,
+                task_id,
+                args: cmd_args,
+                actor_id,
+            };
+
+            let result =
+                tasks::execute_task_command(&state.pool, cmd, Some(&state.registry)).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "agent_handoff" => {
+            let room_id = require_str(args, "room_id")?.to_string();
+            let from_agent = require_str(args, "from_agent")?.to_string();
+            let to_agent = require_str(args, "to_agent")?.to_string();
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str().map(String::from));
+            let branch = args
+                .get("branch")
+                .and_then(|v| v.as_str().map(String::from));
+            let scope = args.get("scope").and_then(|v| v.as_str().map(String::from));
+            let acceptance_criteria: Vec<String> = args
+                .get("acceptance_criteria")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let context = args
+                .get("context")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let deadline = args
+                .get("deadline")
+                .and_then(|v| v.as_str().map(String::from));
+
+            let payload = agents::coordination::HandoffPayload {
+                task_id,
+                branch,
+                scope,
+                acceptance_criteria,
+                context,
+                deadline,
+            };
+
+            let msg = agents::coordination::post_handoff(
+                &state.pool,
+                Some(&state.registry),
+                &room_id,
+                &from_agent,
+                &to_agent,
+                payload,
             )
             .await?;
             Ok(serde_json::to_value(msg).unwrap())
