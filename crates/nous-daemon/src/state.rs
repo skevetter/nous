@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use nous_core::db::DatabaseConnection;
 use nous_core::db::VecPool;
 use nous_core::memory::{Embedder, EmbeddingConfig, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
-use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +14,7 @@ use crate::sandbox::SandboxManager;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: SqlitePool,
+    pub pool: DatabaseConnection,
     pub vec_pool: VecPool,
     pub registry: Arc<NotificationRegistry>,
     pub embedder: Option<Arc<dyn Embedder>>,

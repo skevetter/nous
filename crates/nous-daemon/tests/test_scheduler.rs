@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let clock = Arc::new(MockClock::new(ts));
     let shutdown = CancellationToken::new();

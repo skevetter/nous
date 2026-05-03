@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
+use crate::entities::{
+    notification_queue as nq_entity, room_subscriptions as rs_entity, rooms as rooms_entity,
+};
 use crate::error::NousError;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,25 +80,24 @@ impl NotificationRegistry {
         let _ = sender.send(notification);
     }
 
-    pub async fn notify_filtered(&self, pool: &SqlitePool, notification: Notification) {
+    pub async fn notify_filtered(&self, db: &DatabaseConnection, notification: Notification) {
         let sender = self.get_sender(&notification.room_id).await;
         let _ = sender.send(notification.clone());
 
-        let rows = sqlx::query("SELECT agent_id, topics FROM room_subscriptions WHERE room_id = ?")
-            .bind(&notification.room_id)
-            .fetch_all(pool)
+        let rows = rs_entity::Entity::find()
+            .filter(rs_entity::Column::RoomId.eq(&notification.room_id))
+            .all(db)
             .await;
 
         if let Ok(rows) = rows {
             for row in &rows {
-                let agent_id: String = row.get("agent_id");
-                let topics_str: Option<String> = row.try_get("topics").ok().flatten();
-                let sub_topics: Option<Vec<String>> = topics_str
+                let sub_topics: Option<Vec<String>> = row
+                    .topics
                     .as_deref()
                     .and_then(|s| serde_json::from_str(s).ok());
 
-                if should_notify_agent(&notification, &agent_id, sub_topics.as_deref()) {
-                    let _ = enqueue_notification(pool, &agent_id, &notification).await;
+                if should_notify_agent(&notification, &row.agent_id, sub_topics.as_deref()) {
+                    let _ = enqueue_notification(db, &row.agent_id, &notification).await;
                 }
             }
         }
@@ -114,16 +116,12 @@ impl Default for NotificationRegistry {
 }
 
 pub async fn subscribe_to_room(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     room_id: &str,
     agent_id: &str,
     topics: Option<Vec<String>>,
 ) -> Result<(), NousError> {
-    let room_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM rooms WHERE id = ?)")
-        .bind(room_id)
-        .fetch_one(pool)
-        .await?
-        .get(0);
+    let room_exists = rooms_entity::Entity::find_by_id(room_id).count(db).await? > 0;
 
     if !room_exists {
         return Err(NousError::NotFound(format!("room '{room_id}' not found")));
@@ -131,61 +129,55 @@ pub async fn subscribe_to_room(
 
     let topics_json = topics.map(|t| serde_json::to_string(&t).unwrap_or_default());
 
-    sqlx::query(
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "INSERT OR REPLACE INTO room_subscriptions (room_id, agent_id, topics) VALUES (?, ?, ?)",
-    )
-    .bind(room_id)
-    .bind(agent_id)
-    .bind(&topics_json)
-    .execute(pool)
+        [room_id.into(), agent_id.into(), topics_json.into()],
+    ))
     .await?;
 
     Ok(())
 }
 
 pub async fn unsubscribe_from_room(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     room_id: &str,
     agent_id: &str,
 ) -> Result<(), NousError> {
-    sqlx::query("DELETE FROM room_subscriptions WHERE room_id = ? AND agent_id = ?")
-        .bind(room_id)
-        .bind(agent_id)
-        .execute(pool)
+    rs_entity::Entity::delete_many()
+        .filter(rs_entity::Column::RoomId.eq(room_id))
+        .filter(rs_entity::Column::AgentId.eq(agent_id))
+        .exec(db)
         .await?;
 
     Ok(())
 }
 
 pub async fn list_subscriptions(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
 ) -> Result<Vec<Subscription>, NousError> {
-    let rows = sqlx::query(
-        "SELECT room_id, agent_id, topics, created_at FROM room_subscriptions WHERE agent_id = ?",
-    )
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await?;
+    let models = rs_entity::Entity::find()
+        .filter(rs_entity::Column::AgentId.eq(agent_id))
+        .all(db)
+        .await?;
 
-    rows.iter()
-        .map(|row: &SqliteRow| {
-            let topics_str: Option<String> = row.try_get("topics")?;
-            let topics = match topics_str.as_deref().map(serde_json::from_str) {
-                Some(Ok(val)) => Some(val),
-                Some(Err(_)) => None,
-                None => None,
-            };
+    Ok(models
+        .into_iter()
+        .map(|m| {
+            let topics = m
+                .topics
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
 
-            Ok(Subscription {
-                room_id: row.try_get("room_id")?,
-                agent_id: row.try_get("agent_id")?,
+            Subscription {
+                room_id: m.room_id,
+                agent_id: m.agent_id,
                 topics,
-                created_at: row.try_get("created_at")?,
-            })
+                created_at: m.created_at,
+            }
         })
-        .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map_err(NousError::Sqlite)
+        .collect())
 }
 
 pub async fn room_wait(
@@ -271,7 +263,7 @@ pub fn should_notify_agent(
 }
 
 pub async fn enqueue_notification(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     notification: &Notification,
 ) -> Result<(), NousError> {
@@ -284,56 +276,48 @@ pub async fn enqueue_notification(
         .trim_matches('"')
         .to_string();
 
-    sqlx::query(
-        "INSERT INTO notification_queue (id, agent_id, room_id, message_id, sender_id, priority, topics, mentions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(agent_id)
-    .bind(&notification.room_id)
-    .bind(&notification.message_id)
-    .bind(&notification.sender_id)
-    .bind(&priority)
-    .bind(&topics_json)
-    .bind(&mentions_json)
-    .execute(pool)
-    .await?;
+    let model = nq_entity::ActiveModel {
+        id: Set(id),
+        agent_id: Set(agent_id.to_string()),
+        room_id: Set(notification.room_id.clone()),
+        message_id: Set(notification.message_id.clone()),
+        sender_id: Set(notification.sender_id.clone()),
+        priority: Set(priority),
+        topics: Set(topics_json),
+        mentions: Set(mentions_json),
+        delivered: Set(false),
+        created_at: NotSet,
+    };
+
+    nq_entity::Entity::insert(model).exec(db).await?;
 
     Ok(())
 }
 
 pub async fn dequeue_notification(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     room_id: Option<&str>,
     topics: Option<&[String]>,
 ) -> Result<Option<Notification>, NousError> {
-    let row = if let Some(rid) = room_id {
-        sqlx::query(
-            "SELECT id, room_id, message_id, sender_id, priority, topics, mentions FROM notification_queue WHERE agent_id = ? AND room_id = ? AND delivered = 0 ORDER BY created_at ASC LIMIT 1",
-        )
-        .bind(agent_id)
-        .bind(rid)
-        .fetch_optional(pool)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT id, room_id, message_id, sender_id, priority, topics, mentions FROM notification_queue WHERE agent_id = ? AND delivered = 0 ORDER BY created_at ASC LIMIT 1",
-        )
-        .bind(agent_id)
-        .fetch_optional(pool)
-        .await?
+    let model = {
+        let mut query = nq_entity::Entity::find()
+            .filter(nq_entity::Column::AgentId.eq(agent_id))
+            .filter(nq_entity::Column::Delivered.eq(false))
+            .order_by_asc(nq_entity::Column::CreatedAt);
+
+        if let Some(rid) = room_id {
+            query = query.filter(nq_entity::Column::RoomId.eq(rid));
+        }
+
+        query.one(db).await?
     };
 
-    let Some(row) = row else {
+    let Some(model) = model else {
         return Ok(None);
     };
 
-    let queue_id: String = row.get("id");
-    let notif_topics: Vec<String> = row
-        .try_get::<String, _>("topics")
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let notif_topics: Vec<String> = serde_json::from_str(&model.topics).unwrap_or_default();
 
     if let Some(filter) = topics {
         if !filter.is_empty() && !notif_topics.iter().any(|t| filter.contains(t)) {
@@ -341,25 +325,23 @@ pub async fn dequeue_notification(
         }
     }
 
-    sqlx::query("UPDATE notification_queue SET delivered = 1 WHERE id = ?")
-        .bind(&queue_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE notification_queue SET delivered = 1 WHERE id = ?",
+        [model.id.clone().into()],
+    ))
+    .await?;
 
-    let priority_str: String = row.try_get("priority").unwrap_or_else(|_| "normal".into());
+    let priority_str = &model.priority;
     let priority: NotificationPriority =
         serde_json::from_str(&format!("\"{priority_str}\"")).unwrap_or_default();
 
-    let mentions: Vec<String> = row
-        .try_get::<String, _>("mentions")
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let mentions: Vec<String> = serde_json::from_str(&model.mentions).unwrap_or_default();
 
     Ok(Some(Notification {
-        room_id: row.get("room_id"),
-        message_id: row.get("message_id"),
-        sender_id: row.get("sender_id"),
+        room_id: model.room_id,
+        message_id: model.message_id,
+        sender_id: model.sender_id,
         priority,
         topics: notif_topics,
         mentions,
@@ -367,14 +349,14 @@ pub async fn dequeue_notification(
 }
 
 pub async fn room_wait_persistent(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     registry: &NotificationRegistry,
     room_id: &str,
     agent_id: &str,
     timeout_ms: Option<u64>,
     topics: Option<&[String]>,
 ) -> Result<WaitResult, NousError> {
-    if let Some(notification) = dequeue_notification(pool, agent_id, Some(room_id), topics).await? {
+    if let Some(notification) = dequeue_notification(db, agent_id, Some(room_id), topics).await? {
         return Ok(WaitResult {
             notification: Some(notification),
             timed_out: false,
@@ -392,12 +374,12 @@ mod tests {
     use crate::rooms::create_room;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, TempDir) {
+    async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
-        let pool = pools.fts.clone();
-        (pool, tmp)
+        pools.run_migrations().await.unwrap();
+        let db = pools.fts.clone();
+        (db, tmp)
     }
 
     #[tokio::test]
@@ -510,37 +492,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe_unsubscribe_db() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "sub-room", None, None).await.unwrap();
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "sub-room", None, None).await.unwrap();
 
-        subscribe_to_room(&pool, &room.id, "agent-1", Some(vec!["topic-a".into()]))
+        subscribe_to_room(&db, &room.id, "agent-1", Some(vec!["topic-a".into()]))
             .await
             .unwrap();
 
-        let subs = list_subscriptions(&pool, "agent-1").await.unwrap();
+        let subs = list_subscriptions(&db, "agent-1").await.unwrap();
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].room_id, room.id);
         assert_eq!(subs[0].topics, Some(vec!["topic-a".to_string()]));
 
-        unsubscribe_from_room(&pool, &room.id, "agent-1")
+        unsubscribe_from_room(&db, &room.id, "agent-1")
             .await
             .unwrap();
 
-        let subs = list_subscriptions(&pool, "agent-1").await.unwrap();
+        let subs = list_subscriptions(&db, "agent-1").await.unwrap();
         assert!(subs.is_empty());
     }
 
     #[tokio::test]
     async fn test_notify_after_post() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "notify-room", None, None).await.unwrap();
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "notify-room", None, None).await.unwrap();
         let registry = NotificationRegistry::new();
         let mut receiver = registry.subscribe(&room.id).await;
 
         let metadata = serde_json::json!({"topics": ["deployment"], "mentions": ["agent-2"]});
 
         post_message(
-            &pool,
+            &db,
             PostMessageRequest {
                 room_id: room.id.clone(),
                 sender_id: "agent-1".into(),
@@ -613,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_dequeue_notification() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
         let notification = Notification {
             room_id: "room-eq".into(),
@@ -624,11 +606,11 @@ mod tests {
             mentions: vec!["agent-eq".into()],
         };
 
-        enqueue_notification(&pool, "agent-eq", &notification)
+        enqueue_notification(&db, "agent-eq", &notification)
             .await
             .unwrap();
 
-        let dequeued = dequeue_notification(&pool, "agent-eq", None, None)
+        let dequeued = dequeue_notification(&db, "agent-eq", None, None)
             .await
             .unwrap();
         assert!(dequeued.is_some());
@@ -639,7 +621,7 @@ mod tests {
         assert_eq!(d.topics, vec!["build".to_string()]);
         assert_eq!(d.mentions, vec!["agent-eq".to_string()]);
 
-        let again = dequeue_notification(&pool, "agent-eq", None, None)
+        let again = dequeue_notification(&db, "agent-eq", None, None)
             .await
             .unwrap();
         assert!(again.is_none());
@@ -664,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_room_wait_persistent_checks_queue_first() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
         let registry = NotificationRegistry::new();
 
         let notification = Notification {
@@ -676,12 +658,12 @@ mod tests {
             mentions: vec![],
         };
 
-        enqueue_notification(&pool, "persist-agent", &notification)
+        enqueue_notification(&db, "persist-agent", &notification)
             .await
             .unwrap();
 
         let result = room_wait_persistent(
-            &pool,
+            &db,
             &registry,
             "persist-room",
             "persist-agent",

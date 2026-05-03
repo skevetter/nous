@@ -1,8 +1,12 @@
+use sea_orm::entity::prelude::*;
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::entities::agent_invocations as inv_entity;
+use crate::entities::agent_processes as proc_entity;
 use crate::error::NousError;
 
 // --- Domain objects ---
@@ -37,34 +41,34 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            process_type: row.try_get("process_type")?,
-            command: row.try_get("command")?,
-            working_dir: row.try_get("working_dir")?,
-            env_json: row.try_get("env_json")?,
-            pid: row.try_get("pid")?,
-            status: row.try_get("status")?,
-            exit_code: row.try_get("exit_code")?,
-            started_at: row.try_get("started_at")?,
-            stopped_at: row.try_get("stopped_at")?,
-            last_output: row.try_get("last_output")?,
-            max_output_bytes: row.try_get("max_output_bytes")?,
-            restart_policy: row.try_get("restart_policy")?,
-            restart_count: row.try_get("restart_count")?,
-            max_restarts: row.try_get("max_restarts")?,
-            timeout_secs: row.try_get("timeout_secs")?,
-            sandbox_image: row.try_get("sandbox_image")?,
-            sandbox_cpus: row.try_get("sandbox_cpus")?,
-            sandbox_memory_mib: row.try_get("sandbox_memory_mib")?,
-            sandbox_network_policy: row.try_get("sandbox_network_policy")?,
-            sandbox_volumes_json: row.try_get("sandbox_volumes_json")?,
-            sandbox_name: row.try_get("sandbox_name")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+    pub fn from_model(m: proc_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            agent_id: m.agent_id,
+            process_type: m.process_type,
+            command: m.command,
+            working_dir: m.working_dir,
+            env_json: m.env_json,
+            pid: m.pid.map(|v| v as i64),
+            status: m.status,
+            exit_code: m.exit_code,
+            started_at: m.started_at,
+            stopped_at: m.stopped_at,
+            last_output: m.last_output,
+            max_output_bytes: m.max_output_bytes as i64,
+            restart_policy: m.restart_policy,
+            restart_count: m.restart_count,
+            max_restarts: m.max_restarts,
+            timeout_secs: m.timeout_secs.map(|v| v as i64),
+            sandbox_image: m.sandbox_image,
+            sandbox_cpus: m.sandbox_cpus.map(|v| v as i64),
+            sandbox_memory_mib: m.sandbox_memory_mib.map(|v| v as i64),
+            sandbox_network_policy: m.sandbox_network_policy,
+            sandbox_volumes_json: m.sandbox_volumes_json,
+            sandbox_name: m.sandbox_name,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
@@ -85,21 +89,21 @@ pub struct Invocation {
 }
 
 impl Invocation {
-    pub fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            process_id: row.try_get("process_id")?,
-            prompt: row.try_get("prompt")?,
-            result: row.try_get("result")?,
-            status: row.try_get("status")?,
-            error: row.try_get("error")?,
-            started_at: row.try_get("started_at")?,
-            completed_at: row.try_get("completed_at")?,
-            duration_ms: row.try_get("duration_ms")?,
-            metadata_json: row.try_get("metadata_json")?,
-            created_at: row.try_get("created_at")?,
-        })
+    pub fn from_model(m: inv_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            agent_id: m.agent_id,
+            process_id: m.process_id,
+            prompt: m.prompt,
+            result: m.result,
+            status: m.status,
+            error: m.error,
+            started_at: m.started_at,
+            completed_at: m.completed_at,
+            duration_ms: m.duration_ms.map(|v| v as i64),
+            metadata_json: m.metadata_json,
+            created_at: m.created_at,
+        }
     }
 }
 
@@ -107,7 +111,7 @@ impl Invocation {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_process(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     process_type: &str,
     command: &str,
@@ -118,34 +122,48 @@ pub async fn create_process(
     max_restarts: Option<i32>,
 ) -> Result<Process, NousError> {
     // Verify agent exists
-    super::get_agent_by_id(pool, agent_id).await?;
+    super::get_agent_by_id(db, agent_id).await?;
 
     let id = Uuid::now_v7().to_string();
     let policy = restart_policy.unwrap_or("never");
     let max_r = max_restarts.unwrap_or(3);
 
-    sqlx::query(
-        "INSERT INTO agent_processes (id, agent_id, process_type, command, working_dir, env_json, timeout_secs, restart_policy, max_restarts) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(agent_id)
-    .bind(process_type)
-    .bind(command)
-    .bind(working_dir)
-    .bind(env_json.unwrap_or("{}"))
-    .bind(timeout_secs)
-    .bind(policy)
-    .bind(max_r)
-    .execute(pool)
-    .await?;
+    let model = proc_entity::ActiveModel {
+        id: Set(id.clone()),
+        agent_id: Set(agent_id.to_string()),
+        process_type: Set(process_type.to_string()),
+        command: Set(command.to_string()),
+        working_dir: Set(working_dir.map(String::from)),
+        env_json: Set(Some(env_json.unwrap_or("{}").to_string())),
+        timeout_secs: Set(timeout_secs.map(|v| v as i32)),
+        restart_policy: Set(policy.to_string()),
+        max_restarts: Set(max_r),
+        status: Set("pending".to_string()),
+        pid: Set(None),
+        exit_code: Set(None),
+        started_at: Set(None),
+        stopped_at: Set(None),
+        last_output: Set(None),
+        max_output_bytes: Set(1048576),
+        restart_count: Set(0),
+        sandbox_image: Set(None),
+        sandbox_cpus: Set(None),
+        sandbox_memory_mib: Set(None),
+        sandbox_network_policy: Set(None),
+        sandbox_volumes_json: Set(None),
+        sandbox_name: Set(None),
+        created_at: NotSet,
+        updated_at: NotSet,
+    };
 
-    get_process_by_id(pool, &id).await
+    proc_entity::Entity::insert(model).exec(db).await?;
+
+    get_process_by_id(db, &id).await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_sandbox_process(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     sandbox_image: &str,
     sandbox_cpus: Option<u32>,
@@ -156,78 +174,113 @@ pub async fn create_sandbox_process(
     timeout_secs: Option<i64>,
     restart_policy: Option<&str>,
 ) -> Result<Process, NousError> {
-    super::get_agent_by_id(pool, agent_id).await?;
+    super::get_agent_by_id(db, agent_id).await?;
 
     let id = Uuid::now_v7().to_string();
     let policy = restart_policy.unwrap_or("never");
     let name = sandbox_name.unwrap_or(agent_id);
 
-    sqlx::query(
-        "INSERT INTO agent_processes (id, agent_id, process_type, command, status, restart_policy, timeout_secs, \
-         sandbox_image, sandbox_cpus, sandbox_memory_mib, sandbox_network_policy, sandbox_volumes_json, sandbox_name) \
-         VALUES (?, ?, 'sandbox', ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(agent_id)
-    .bind(format!("sandbox:{sandbox_image}"))
-    .bind(policy)
-    .bind(timeout_secs)
-    .bind(sandbox_image)
-    .bind(sandbox_cpus.map(|v| v as i64))
-    .bind(sandbox_memory_mib.map(|v| v as i64))
-    .bind(sandbox_network_policy)
-    .bind(sandbox_volumes_json)
-    .bind(name)
-    .execute(pool)
-    .await?;
+    let model = proc_entity::ActiveModel {
+        id: Set(id.clone()),
+        agent_id: Set(agent_id.to_string()),
+        process_type: Set("sandbox".to_string()),
+        command: Set(format!("sandbox:{sandbox_image}")),
+        working_dir: Set(None),
+        env_json: Set(None),
+        timeout_secs: Set(timeout_secs.map(|v| v as i32)),
+        restart_policy: Set(policy.to_string()),
+        max_restarts: Set(3),
+        status: Set("pending".to_string()),
+        pid: Set(None),
+        exit_code: Set(None),
+        started_at: Set(None),
+        stopped_at: Set(None),
+        last_output: Set(None),
+        max_output_bytes: Set(1048576),
+        restart_count: Set(0),
+        sandbox_image: Set(Some(sandbox_image.to_string())),
+        sandbox_cpus: Set(sandbox_cpus.map(|v| v as i32)),
+        sandbox_memory_mib: Set(sandbox_memory_mib.map(|v| v as i32)),
+        sandbox_network_policy: Set(sandbox_network_policy.map(String::from)),
+        sandbox_volumes_json: Set(sandbox_volumes_json.map(String::from)),
+        sandbox_name: Set(Some(name.to_string())),
+        created_at: NotSet,
+        updated_at: NotSet,
+    };
 
-    get_process_by_id(pool, &id).await
+    proc_entity::Entity::insert(model).exec(db).await?;
+
+    get_process_by_id(db, &id).await
 }
 
-pub async fn get_process_by_id(pool: &SqlitePool, id: &str) -> Result<Process, NousError> {
-    let row = sqlx::query("SELECT * FROM agent_processes WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_process_by_id(db: &DatabaseConnection, id: &str) -> Result<Process, NousError> {
+    let model = proc_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("process '{id}' not found")))?;
-    Process::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("process '{id}' not found")))?;
+    Ok(Process::from_model(model))
 }
 
 pub async fn get_active_process(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
 ) -> Result<Option<Process>, NousError> {
-    let row = sqlx::query(
-        "SELECT * FROM agent_processes WHERE agent_id = ? AND status IN ('pending','starting','running','stopping') LIMIT 1",
-    )
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT * FROM agent_processes WHERE agent_id = ? AND status IN ('pending','starting','running','stopping') LIMIT 1",
+            [agent_id.into()],
+        ))
+        .await?;
 
-    row.map(|r| Process::from_row(&r))
-        .transpose()
-        .map_err(NousError::Sqlite)
+    if let Some(row) = rows.first() {
+        let model = proc_entity::Model {
+            id: row.try_get_by("id")?,
+            agent_id: row.try_get_by("agent_id")?,
+            process_type: row.try_get_by("process_type")?,
+            command: row.try_get_by("command")?,
+            working_dir: row.try_get_by("working_dir")?,
+            env_json: row.try_get_by("env_json")?,
+            pid: row.try_get_by("pid")?,
+            status: row.try_get_by("status")?,
+            exit_code: row.try_get_by("exit_code")?,
+            started_at: row.try_get_by("started_at")?,
+            stopped_at: row.try_get_by("stopped_at")?,
+            last_output: row.try_get_by("last_output")?,
+            max_output_bytes: row.try_get_by("max_output_bytes")?,
+            restart_policy: row.try_get_by("restart_policy")?,
+            restart_count: row.try_get_by("restart_count")?,
+            max_restarts: row.try_get_by("max_restarts")?,
+            timeout_secs: row.try_get_by("timeout_secs")?,
+            sandbox_image: row.try_get_by("sandbox_image")?,
+            sandbox_cpus: row.try_get_by("sandbox_cpus")?,
+            sandbox_memory_mib: row.try_get_by("sandbox_memory_mib")?,
+            sandbox_network_policy: row.try_get_by("sandbox_network_policy")?,
+            sandbox_volumes_json: row.try_get_by("sandbox_volumes_json")?,
+            sandbox_name: row.try_get_by("sandbox_name")?,
+            created_at: row.try_get_by("created_at")?,
+            updated_at: row.try_get_by("updated_at")?,
+        };
+        Ok(Some(Process::from_model(model)))
+    } else {
+        Ok(None)
+    }
 }
 
 pub async fn get_latest_process(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
 ) -> Result<Option<Process>, NousError> {
-    let row = sqlx::query(
-        "SELECT * FROM agent_processes WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await?;
+    let model = proc_entity::Entity::find()
+        .filter(proc_entity::Column::AgentId.eq(agent_id))
+        .order_by_desc(proc_entity::Column::CreatedAt)
+        .one(db)
+        .await?;
 
-    row.map(|r| Process::from_row(&r))
-        .transpose()
-        .map_err(NousError::Sqlite)
+    Ok(model.map(Process::from_model))
 }
 
 pub async fn update_process_status(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     process_id: &str,
     status: &str,
     exit_code: Option<i32>,
@@ -252,126 +305,162 @@ pub async fn update_process_status(
 
     // Build update dynamically
     let mut sets = vec!["status = ?".to_string(), "updated_at = ?".to_string()];
-    let mut bind_values: Vec<Option<String>> = vec![Some(status.to_string()), Some(now)];
+    let mut bind_values: Vec<sea_orm::Value> = vec![status.into(), now.into()];
 
     if let Some(code) = exit_code {
         sets.push("exit_code = ?".to_string());
-        bind_values.push(Some(code.to_string()));
+        bind_values.push(code.into());
     }
     if let Some(out) = output {
         sets.push("last_output = ?".to_string());
-        bind_values.push(Some(out.to_string()));
+        bind_values.push(out.into());
     }
     if let Some(p) = pid {
         sets.push("pid = ?".to_string());
-        bind_values.push(Some(p.to_string()));
+        bind_values.push((p as i32).into());
     }
     if let Some(sa) = started_at {
         sets.push("started_at = ?".to_string());
-        bind_values.push(Some(sa));
+        bind_values.push(sa.into());
     }
     if let Some(sa) = stopped_at {
         sets.push("stopped_at = ?".to_string());
-        bind_values.push(Some(sa));
+        bind_values.push(sa.into());
     }
 
     let sql = format!(
         "UPDATE agent_processes SET {} WHERE id = ?",
         sets.join(", ")
     );
-    bind_values.push(Some(process_id.to_string()));
+    bind_values.push(process_id.into());
 
-    let mut query = sqlx::query(&sql);
-    for val in &bind_values {
-        match val {
-            Some(v) => query = query.bind(v),
-            None => query = query.bind(Option::<String>::None),
-        }
-    }
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            &sql,
+            bind_values,
+        ))
+        .await?;
 
-    let result = query.execute(pool).await?;
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!(
             "process '{process_id}' not found"
         )));
     }
 
-    get_process_by_id(pool, process_id).await
+    get_process_by_id(db, process_id).await
 }
 
-pub async fn increment_restart_count(pool: &SqlitePool, process_id: &str) -> Result<(), NousError> {
-    sqlx::query("UPDATE agent_processes SET restart_count = restart_count + 1 WHERE id = ?")
-        .bind(process_id)
-        .execute(pool)
-        .await?;
+pub async fn increment_restart_count(
+    db: &DatabaseConnection,
+    process_id: &str,
+) -> Result<(), NousError> {
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE agent_processes SET restart_count = restart_count + 1 WHERE id = ?",
+        [process_id.into()],
+    ))
+    .await?;
     Ok(())
 }
 
 pub async fn list_processes(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Process>, NousError> {
-    let limit = limit.unwrap_or(20).min(100);
-    let rows = sqlx::query(
-        "SELECT * FROM agent_processes WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(agent_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let limit = limit.unwrap_or(20).min(100) as u64;
+    let models = proc_entity::Entity::find()
+        .filter(proc_entity::Column::AgentId.eq(agent_id))
+        .order_by_desc(proc_entity::Column::CreatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
 
-    rows.iter()
-        .map(Process::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(Process::from_model).collect())
 }
 
-pub async fn list_all_active_processes(pool: &SqlitePool) -> Result<Vec<Process>, NousError> {
-    let rows = sqlx::query(
-        "SELECT * FROM agent_processes WHERE status IN ('pending','starting','running','stopping') ORDER BY created_at DESC",
-    )
-    .fetch_all(pool)
-    .await?;
+pub async fn list_all_active_processes(db: &DatabaseConnection) -> Result<Vec<Process>, NousError> {
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT * FROM agent_processes WHERE status IN ('pending','starting','running','stopping') ORDER BY created_at DESC",
+            [],
+        ))
+        .await?;
 
-    rows.iter()
-        .map(Process::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let mut result = Vec::new();
+    for row in &rows {
+        let model = proc_entity::Model {
+            id: row.try_get_by("id")?,
+            agent_id: row.try_get_by("agent_id")?,
+            process_type: row.try_get_by("process_type")?,
+            command: row.try_get_by("command")?,
+            working_dir: row.try_get_by("working_dir")?,
+            env_json: row.try_get_by("env_json")?,
+            pid: row.try_get_by("pid")?,
+            status: row.try_get_by("status")?,
+            exit_code: row.try_get_by("exit_code")?,
+            started_at: row.try_get_by("started_at")?,
+            stopped_at: row.try_get_by("stopped_at")?,
+            last_output: row.try_get_by("last_output")?,
+            max_output_bytes: row.try_get_by("max_output_bytes")?,
+            restart_policy: row.try_get_by("restart_policy")?,
+            restart_count: row.try_get_by("restart_count")?,
+            max_restarts: row.try_get_by("max_restarts")?,
+            timeout_secs: row.try_get_by("timeout_secs")?,
+            sandbox_image: row.try_get_by("sandbox_image")?,
+            sandbox_cpus: row.try_get_by("sandbox_cpus")?,
+            sandbox_memory_mib: row.try_get_by("sandbox_memory_mib")?,
+            sandbox_network_policy: row.try_get_by("sandbox_network_policy")?,
+            sandbox_volumes_json: row.try_get_by("sandbox_volumes_json")?,
+            sandbox_name: row.try_get_by("sandbox_name")?,
+            created_at: row.try_get_by("created_at")?,
+            updated_at: row.try_get_by("updated_at")?,
+        };
+        result.push(Process::from_model(model));
+    }
+
+    Ok(result)
 }
 
 // --- Invocation CRUD ---
 
 pub async fn create_invocation(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     prompt: &str,
     metadata: Option<&str>,
 ) -> Result<Invocation, NousError> {
-    super::get_agent_by_id(pool, agent_id).await?;
+    super::get_agent_by_id(db, agent_id).await?;
     let id = Uuid::now_v7().to_string();
 
     // Link to active process if one exists
-    let active = get_active_process(pool, agent_id).await?;
+    let active = get_active_process(db, agent_id).await?;
     let process_id = active.map(|p| p.id);
 
-    sqlx::query(
-        "INSERT INTO agent_invocations (id, agent_id, process_id, prompt, metadata_json) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(agent_id)
-    .bind(&process_id)
-    .bind(prompt)
-    .bind(metadata)
-    .execute(pool)
-    .await?;
+    let model = inv_entity::ActiveModel {
+        id: Set(id.clone()),
+        agent_id: Set(agent_id.to_string()),
+        process_id: Set(process_id),
+        prompt: Set(prompt.to_string()),
+        result: Set(None),
+        status: Set("pending".to_string()),
+        error: Set(None),
+        started_at: Set(None),
+        completed_at: Set(None),
+        duration_ms: Set(None),
+        metadata_json: Set(metadata.map(String::from)),
+        created_at: NotSet,
+    };
 
-    get_invocation(pool, &id).await
+    inv_entity::Entity::insert(model).exec(db).await?;
+
+    get_invocation(db, &id).await
 }
 
 pub async fn update_invocation(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     invocation_id: &str,
     status: &str,
     result: Option<&str>,
@@ -394,82 +483,78 @@ pub async fn update_invocation(
         None
     };
 
-    sqlx::query(
+    let bind_values: Vec<sea_orm::Value> = vec![
+        status.into(),
+        result.map(|s| s.to_string()).into(),
+        error.map(|s| s.to_string()).into(),
+        duration_ms.map(|v| v as i32).into(),
+        started_at.into(),
+        completed_at.into(),
+        invocation_id.into(),
+    ];
+
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "UPDATE agent_invocations SET status = ?, result = COALESCE(?, result), error = COALESCE(?, error), \
          duration_ms = COALESCE(?, duration_ms), started_at = COALESCE(?, started_at), completed_at = COALESCE(?, completed_at) \
          WHERE id = ?",
-    )
-    .bind(status)
-    .bind(result)
-    .bind(error)
-    .bind(duration_ms)
-    .bind(&started_at)
-    .bind(&completed_at)
-    .bind(invocation_id)
-    .execute(pool)
+        bind_values,
+    ))
     .await?;
 
-    get_invocation(pool, invocation_id).await
+    get_invocation(db, invocation_id).await
 }
 
-pub async fn get_invocation(pool: &SqlitePool, id: &str) -> Result<Invocation, NousError> {
-    let row = sqlx::query("SELECT * FROM agent_invocations WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_invocation(db: &DatabaseConnection, id: &str) -> Result<Invocation, NousError> {
+    let model = inv_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("invocation '{id}' not found")))?;
-    Invocation::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("invocation '{id}' not found")))?;
+    Ok(Invocation::from_model(model))
 }
 
 pub async fn list_invocations(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     status_filter: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<Invocation>, NousError> {
-    let limit = limit.unwrap_or(20).min(100);
+    let limit = limit.unwrap_or(20).min(100) as u64;
 
-    let rows = if let Some(status) = status_filter {
-        sqlx::query(
-            "SELECT * FROM agent_invocations WHERE agent_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(agent_id)
-        .bind(status)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT * FROM agent_invocations WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(agent_id)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?
-    };
+    let mut query = inv_entity::Entity::find().filter(inv_entity::Column::AgentId.eq(agent_id));
 
-    rows.iter()
-        .map(Invocation::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    if let Some(status) = status_filter {
+        query = query.filter(inv_entity::Column::Status.eq(status));
+    }
+
+    let models = query
+        .order_by_desc(inv_entity::Column::CreatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
+
+    Ok(models.into_iter().map(Invocation::from_model).collect())
 }
 
-pub async fn cleanup_agent_processes(pool: &SqlitePool, agent_id: &str) -> Result<(), NousError> {
+pub async fn cleanup_agent_processes(
+    db: &DatabaseConnection,
+    agent_id: &str,
+) -> Result<(), NousError> {
     // Mark any active processes as stopped
-    sqlx::query(
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "UPDATE agent_processes SET status = 'stopped', stopped_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
          WHERE agent_id = ? AND status IN ('pending','starting','running','stopping')",
-    )
-    .bind(agent_id)
-    .execute(pool)
+        [agent_id.into()],
+    ))
     .await?;
 
     // Delete all process records for this agent
-    sqlx::query("DELETE FROM agent_processes WHERE agent_id = ?")
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "DELETE FROM agent_processes WHERE agent_id = ?",
+        [agent_id.into()],
+    ))
+    .await?;
 
     Ok(())
 }
@@ -477,7 +562,7 @@ pub async fn cleanup_agent_processes(pool: &SqlitePool, agent_id: &str) -> Resul
 // --- Agent update (config fields) ---
 
 pub async fn update_agent(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     process_type: Option<&str>,
     spawn_command: Option<&str>,
@@ -485,47 +570,45 @@ pub async fn update_agent(
     auto_restart: Option<bool>,
     metadata_json: Option<&str>,
 ) -> Result<super::Agent, NousError> {
-    let _existing = super::get_agent_by_id(pool, id).await?;
+    let _existing = super::get_agent_by_id(db, id).await?;
 
     let mut sets: Vec<String> = Vec::new();
-    let mut binds: Vec<Option<String>> = Vec::new();
+    let mut binds: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(pt) = process_type {
         sets.push("process_type = ?".to_string());
-        binds.push(Some(pt.to_string()));
+        binds.push(pt.into());
     }
     if let Some(sc) = spawn_command {
         sets.push("spawn_command = ?".to_string());
-        binds.push(Some(sc.to_string()));
+        binds.push(sc.into());
     }
     if let Some(wd) = working_dir {
         sets.push("working_dir = ?".to_string());
-        binds.push(Some(wd.to_string()));
+        binds.push(wd.into());
     }
     if let Some(ar) = auto_restart {
         sets.push("auto_restart = ?".to_string());
-        binds.push(Some(if ar { "1" } else { "0" }.to_string()));
+        binds.push(ar.into());
     }
     if let Some(md) = metadata_json {
         sets.push("metadata_json = ?".to_string());
-        binds.push(Some(md.to_string()));
+        binds.push(md.into());
     }
 
     if sets.is_empty() {
-        return super::get_agent_by_id(pool, id).await;
+        return super::get_agent_by_id(db, id).await;
     }
 
     let sql = format!("UPDATE agents SET {} WHERE id = ?", sets.join(", "));
-    binds.push(Some(id.to_string()));
+    binds.push(id.into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        match bind {
-            Some(v) => query = query.bind(v),
-            None => query = query.bind(Option::<String>::None),
-        }
-    }
-    query.execute(pool).await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        &sql,
+        binds,
+    ))
+    .await?;
 
-    super::get_agent_by_id(pool, id).await
+    super::get_agent_by_id(db, id).await
 }

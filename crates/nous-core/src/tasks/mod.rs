@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::agents;
+use crate::entities::{
+    task_dependencies as dep_entity, task_events as event_entity, task_links as link_entity,
+    task_templates as template_entity, tasks as task_entity,
+};
 use crate::error::NousError;
 use crate::messages::{self, MessageType, PostMessageRequest};
 use crate::notifications::NotificationRegistry;
@@ -31,32 +35,30 @@ pub struct Task {
 }
 
 impl Task {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        let labels_str: Option<String> = row.try_get("labels")?;
-        let labels: Option<Vec<String>> = match labels_str.as_deref().map(serde_json::from_str) {
-            Some(Ok(val)) => Some(val),
-            Some(Err(e)) => {
+    fn from_model(m: task_entity::Model) -> Self {
+        let labels = m.labels.as_deref().and_then(|s| match serde_json::from_str(s) {
+            Ok(val) => Some(val),
+            Err(e) => {
                 tracing::warn!(error = %e, "malformed JSON in tasks labels column, treating as null");
                 None
             }
-            None => None,
-        };
+        });
 
-        Ok(Self {
-            id: row.try_get("id")?,
-            title: row.try_get("title")?,
-            description: row.try_get("description")?,
-            status: row.try_get("status")?,
-            priority: row.try_get("priority")?,
-            assignee_id: row.try_get("assignee_id")?,
+        Self {
+            id: m.id,
+            title: m.title,
+            description: m.description,
+            status: m.status,
+            priority: m.priority,
+            assignee_id: m.assignee_id,
             labels,
-            room_id: row.try_get("room_id")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-            closed_at: row.try_get("closed_at")?,
+            room_id: m.room_id,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            closed_at: m.closed_at,
             links: None,
             recent_discussion: None,
-        })
+        }
     }
 }
 
@@ -70,14 +72,14 @@ pub struct TaskLink {
 }
 
 impl TaskLink {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            source_id: row.try_get("source_id")?,
-            target_id: row.try_get("target_id")?,
-            link_type: row.try_get("link_type")?,
-            created_at: row.try_get("created_at")?,
-        })
+    fn from_model(m: link_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            source_id: m.source_id,
+            target_id: m.target_id,
+            link_type: m.link_type,
+            created_at: m.created_at,
+        }
     }
 }
 
@@ -93,16 +95,16 @@ pub struct TaskEvent {
 }
 
 impl TaskEvent {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            task_id: row.try_get("task_id")?,
-            event_type: row.try_get("event_type")?,
-            old_value: row.try_get("old_value")?,
-            new_value: row.try_get("new_value")?,
-            actor_id: row.try_get("actor_id")?,
-            created_at: row.try_get("created_at")?,
-        })
+    fn from_model(m: event_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            task_id: m.task_id,
+            event_type: m.event_type,
+            old_value: m.old_value,
+            new_value: m.new_value,
+            actor_id: m.actor_id,
+            created_at: m.created_at,
+        }
     }
 }
 
@@ -132,7 +134,7 @@ pub struct TaskCommandResult {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn post_task_event_to_room(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     registry: Option<&NotificationRegistry>,
     task_id: &str,
     room_id: &str,
@@ -177,7 +179,7 @@ pub async fn post_task_event_to_room(
     let sender = actor_id.unwrap_or("system");
 
     messages::post_message(
-        pool,
+        db,
         PostMessageRequest {
             room_id: room_id.to_string(),
             sender_id: sender.to_string(),
@@ -194,7 +196,7 @@ pub async fn post_task_event_to_room(
 }
 
 pub async fn execute_task_command(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     cmd: TaskCommand,
     registry: Option<&NotificationRegistry>,
 ) -> Result<TaskCommandResult, NousError> {
@@ -210,7 +212,7 @@ pub async fn execute_task_command(
 
     match cmd.command.as_str() {
         "close" => {
-            let task = close_task(pool, &cmd.task_id, Some(&cmd.actor_id)).await?;
+            let task = close_task(db, &cmd.task_id, Some(&cmd.actor_id)).await?;
             Ok(make_result(true, "Task closed".to_string(), Some(task)))
         }
         "assign" => {
@@ -220,7 +222,7 @@ pub async fn execute_task_command(
                 ));
             }
             let task = update_task(
-                pool,
+                db,
                 &cmd.task_id,
                 None,
                 None,
@@ -244,7 +246,7 @@ pub async fn execute_task_command(
                 ));
             }
             let task = update_task(
-                pool,
+                db,
                 &cmd.task_id,
                 Some(&cmd.args[0]),
                 None,
@@ -268,7 +270,7 @@ pub async fn execute_task_command(
                 ));
             }
             let task = update_task(
-                pool,
+                db,
                 &cmd.task_id,
                 None,
                 Some(&cmd.args[0]),
@@ -292,7 +294,7 @@ pub async fn execute_task_command(
                 ));
             }
             link_tasks(
-                pool,
+                db,
                 &cmd.task_id,
                 &cmd.args[0],
                 &cmd.args[1],
@@ -313,7 +315,7 @@ pub async fn execute_task_command(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_task(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     title: &str,
     description: Option<&str>,
     priority: Option<&str>,
@@ -334,7 +336,7 @@ pub async fn create_task(
     let effective_room_id = if create_room {
         let room_name = format!("task-{id}");
         let room = rooms::create_room(
-            pool,
+            db,
             &room_name,
             Some(&format!("Discussion for task: {title}")),
             None,
@@ -347,33 +349,37 @@ pub async fn create_task(
 
     let labels_json = labels.map(|l| serde_json::to_string(l).unwrap_or_else(|_| "[]".to_string()));
 
-    sqlx::query(
-        "INSERT INTO tasks (id, title, description, priority, assignee_id, labels, room_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(title)
-    .bind(description)
-    .bind(priority)
-    .bind(assignee_id)
-    .bind(&labels_json)
-    .bind(&effective_room_id)
-    .execute(pool)
-    .await?;
+    let model = task_entity::ActiveModel {
+        id: Set(id.clone()),
+        title: Set(title.to_string()),
+        description: Set(description.map(String::from)),
+        status: Set("open".to_string()),
+        priority: Set(priority.to_string()),
+        assignee_id: Set(assignee_id.map(String::from)),
+        labels: Set(labels_json),
+        room_id: Set(effective_room_id.clone()),
+        created_at: NotSet,
+        updated_at: NotSet,
+        closed_at: Set(None),
+    };
 
-    let event_id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO task_events (id, task_id, event_type, new_value, actor_id) VALUES (?, ?, 'created', ?, ?)",
-    )
-    .bind(&event_id)
-    .bind(&id)
-    .bind(title)
-    .bind(actor_id)
-    .execute(pool)
-    .await?;
+    task_entity::Entity::insert(model).exec(db).await?;
+
+    let event_model = event_entity::ActiveModel {
+        id: Set(Uuid::now_v7().to_string()),
+        task_id: Set(id.clone()),
+        event_type: Set("created".to_string()),
+        old_value: Set(None),
+        new_value: Set(Some(title.to_string())),
+        actor_id: Set(actor_id.map(String::from)),
+        created_at: NotSet,
+    };
+
+    event_entity::Entity::insert(event_model).exec(db).await?;
 
     if let Some(ref rid) = effective_room_id {
         let _ = post_task_event_to_room(
-            pool,
+            db,
             registry,
             &id,
             rid,
@@ -385,17 +391,17 @@ pub async fn create_task(
         .await;
     }
 
-    let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
-        .bind(&id)
-        .fetch_one(pool)
-        .await?;
+    let model = task_entity::Entity::find_by_id(&id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
 
-    Task::from_row(&row).map_err(NousError::Sqlite)
+    Ok(Task::from_model(model))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn list_tasks(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     status: Option<&str>,
     assignee_id: Option<&str>,
     label: Option<&str>,
@@ -419,7 +425,7 @@ pub async fn list_tasks(
 
     let mut sql = String::from("SELECT tasks.* FROM tasks");
     let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut values: Vec<sea_orm::Value> = Vec::new();
 
     if label.is_some() {
         sql.push_str(", json_each(tasks.labels) AS je");
@@ -427,17 +433,17 @@ pub async fn list_tasks(
 
     if let Some(s) = status {
         conditions.push("tasks.status = ?".to_string());
-        binds.push(s.to_string());
+        values.push(s.to_string().into());
     }
 
     if let Some(a) = assignee_id {
         conditions.push("tasks.assignee_id = ?".to_string());
-        binds.push(a.to_string());
+        values.push(a.to_string().into());
     }
 
     if let Some(l) = label {
         conditions.push("je.value = ?".to_string());
-        binds.push(l.to_string());
+        values.push(l.to_string().into());
     }
 
     if !conditions.is_empty() {
@@ -446,37 +452,39 @@ pub async fn list_tasks(
     }
 
     sql.push_str(&format!(" ORDER BY {order_clause} LIMIT ? OFFSET ?"));
-    binds.push(limit.to_string());
-    binds.push(offset.to_string());
+    values.push((limit as i32).into());
+    values.push((offset as i32).into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Task::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
-}
-
-pub async fn get_task(pool: &SqlitePool, id: &str) -> Result<Task, NousError> {
-    let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            &sql,
+            values,
+        ))
         .await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
-    let mut task = Task::from_row(&row).map_err(NousError::Sqlite)?;
+    let mut tasks = Vec::new();
+    for row in rows {
+        let m = <task_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        tasks.push(Task::from_model(m));
+    }
+    Ok(tasks)
+}
 
-    let links = list_links(pool, id).await?;
+pub async fn get_task(db: &DatabaseConnection, id: &str) -> Result<Task, NousError> {
+    let model = task_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
+
+    let mut task = Task::from_model(model);
+
+    let links = list_links(db, id).await?;
     task.links = Some(links);
 
     if let Some(ref room_id) = task.room_id {
         let msgs = messages::read_messages(
-            pool,
+            db,
             messages::ReadMessagesRequest {
                 room_id: room_id.clone(),
                 since: None,
@@ -501,7 +509,7 @@ pub async fn get_task(pool: &SqlitePool, id: &str) -> Result<Task, NousError> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_task(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     status: Option<&str>,
     priority: Option<&str>,
@@ -511,44 +519,45 @@ pub async fn update_task(
     actor_id: Option<&str>,
     registry: Option<&NotificationRegistry>,
 ) -> Result<Task, NousError> {
-    let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let existing_model = task_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
-    let existing = Task::from_row(&row).map_err(NousError::Sqlite)?;
+    let existing = Task::from_model(existing_model);
 
     if let Some(new_status) = status {
         if new_status != existing.status {
-            let event_id = Uuid::now_v7().to_string();
-            sqlx::query(
-                "INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor_id) VALUES (?, ?, 'status_changed', ?, ?, ?)",
-            )
-            .bind(&event_id)
-            .bind(id)
-            .bind(&existing.status)
-            .bind(new_status)
-            .bind(actor_id)
-            .execute(pool)
+            let event_model = event_entity::ActiveModel {
+                id: Set(Uuid::now_v7().to_string()),
+                task_id: Set(id.to_string()),
+                event_type: Set("status_changed".to_string()),
+                old_value: Set(Some(existing.status.clone())),
+                new_value: Set(Some(new_status.to_string())),
+                actor_id: Set(actor_id.map(String::from)),
+                created_at: NotSet,
+            };
+            event_entity::Entity::insert(event_model).exec(db).await?;
+
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE tasks SET status = ? WHERE id = ?",
+                [new_status.into(), id.into()],
+            ))
             .await?;
 
-            sqlx::query("UPDATE tasks SET status = ? WHERE id = ?")
-                .bind(new_status)
-                .bind(id)
-                .execute(pool)
-                .await?;
-
             if new_status == "closed" {
-                sqlx::query("UPDATE tasks SET closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
+                db.execute(Statement::from_sql_and_values(
+                    sea_orm::DbBackend::Sqlite,
+                    "UPDATE tasks SET closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                    [id.into()],
+                ))
+                .await?;
             }
 
             if let Some(ref rid) = existing.room_id {
                 let _ = post_task_event_to_room(
-                    pool,
+                    db,
                     registry,
                     id,
                     rid,
@@ -564,27 +573,27 @@ pub async fn update_task(
 
     if let Some(new_priority) = priority {
         if new_priority != existing.priority {
-            let event_id = Uuid::now_v7().to_string();
-            sqlx::query(
-                "INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor_id) VALUES (?, ?, 'priority_changed', ?, ?, ?)",
-            )
-            .bind(&event_id)
-            .bind(id)
-            .bind(&existing.priority)
-            .bind(new_priority)
-            .bind(actor_id)
-            .execute(pool)
-            .await?;
+            let event_model = event_entity::ActiveModel {
+                id: Set(Uuid::now_v7().to_string()),
+                task_id: Set(id.to_string()),
+                event_type: Set("priority_changed".to_string()),
+                old_value: Set(Some(existing.priority.clone())),
+                new_value: Set(Some(new_priority.to_string())),
+                actor_id: Set(actor_id.map(String::from)),
+                created_at: NotSet,
+            };
+            event_entity::Entity::insert(event_model).exec(db).await?;
 
-            sqlx::query("UPDATE tasks SET priority = ? WHERE id = ?")
-                .bind(new_priority)
-                .bind(id)
-                .execute(pool)
-                .await?;
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE tasks SET priority = ? WHERE id = ?",
+                [new_priority.into(), id.into()],
+            ))
+            .await?;
 
             if let Some(ref rid) = existing.room_id {
                 let _ = post_task_event_to_room(
-                    pool,
+                    db,
                     registry,
                     id,
                     rid,
@@ -601,7 +610,7 @@ pub async fn update_task(
     if let Some(new_assignee) = assignee_id {
         let old_assignee = existing.assignee_id.as_deref().unwrap_or("");
         if new_assignee != old_assignee {
-            match agents::get_agent_by_id(pool, new_assignee).await {
+            match agents::get_agent_by_id(db, new_assignee).await {
                 Ok(agent) => {
                     tracing::info!(
                         task_id = id,
@@ -619,27 +628,27 @@ pub async fn update_task(
                 }
             }
 
-            let event_id = Uuid::now_v7().to_string();
-            sqlx::query(
-                "INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
-            )
-            .bind(&event_id)
-            .bind(id)
-            .bind(old_assignee)
-            .bind(new_assignee)
-            .bind(actor_id)
-            .execute(pool)
-            .await?;
+            let event_model = event_entity::ActiveModel {
+                id: Set(Uuid::now_v7().to_string()),
+                task_id: Set(id.to_string()),
+                event_type: Set("assigned".to_string()),
+                old_value: Set(Some(old_assignee.to_string())),
+                new_value: Set(Some(new_assignee.to_string())),
+                actor_id: Set(actor_id.map(String::from)),
+                created_at: NotSet,
+            };
+            event_entity::Entity::insert(event_model).exec(db).await?;
 
-            sqlx::query("UPDATE tasks SET assignee_id = ? WHERE id = ?")
-                .bind(new_assignee)
-                .bind(id)
-                .execute(pool)
-                .await?;
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE tasks SET assignee_id = ? WHERE id = ?",
+                [new_assignee.into(), id.into()],
+            ))
+            .await?;
 
             if let Some(ref rid) = existing.room_id {
                 let _ = post_task_event_to_room(
-                    pool,
+                    db,
                     registry,
                     id,
                     rid,
@@ -654,37 +663,39 @@ pub async fn update_task(
     }
 
     if let Some(desc) = description {
-        sqlx::query("UPDATE tasks SET description = ? WHERE id = ?")
-            .bind(desc)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE tasks SET description = ? WHERE id = ?",
+            [desc.into(), id.into()],
+        ))
+        .await?;
     }
 
     if let Some(new_labels) = labels {
         let labels_json = serde_json::to_string(new_labels).unwrap_or_else(|_| "[]".to_string());
-        sqlx::query("UPDATE tasks SET labels = ? WHERE id = ?")
-            .bind(&labels_json)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE tasks SET labels = ? WHERE id = ?",
+            [labels_json.into(), id.into()],
+        ))
+        .await?;
     }
 
-    let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
+    let model = task_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
 
-    Task::from_row(&row).map_err(NousError::Sqlite)
+    Ok(Task::from_model(model))
 }
 
 pub async fn close_task(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     actor_id: Option<&str>,
 ) -> Result<Task, NousError> {
     update_task(
-        pool,
+        db,
         id,
         Some("closed"),
         None,
@@ -698,7 +709,7 @@ pub async fn close_task(
 }
 
 pub async fn link_tasks(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     source_id: &str,
     target_id: &str,
     link_type: &str,
@@ -720,16 +731,16 @@ pub async fn link_tasks(
             }
             visited.insert(current.clone());
 
-            let rows = sqlx::query(
-                "SELECT target_id FROM task_links WHERE source_id = ? AND link_type = ?",
-            )
-            .bind(&current)
-            .bind(link_type)
-            .fetch_all(pool)
-            .await?;
+            let rows = db
+                .query_all(Statement::from_sql_and_values(
+                    sea_orm::DbBackend::Sqlite,
+                    "SELECT target_id FROM task_links WHERE source_id = ? AND link_type = ?",
+                    [current.clone().into(), link_type.into()],
+                ))
+                .await?;
 
             for row in &rows {
-                let tid: String = row.try_get("target_id").map_err(NousError::Sqlite)?;
+                let tid: String = row.try_get("", "target_id")?;
                 stack.push(tid);
             }
         }
@@ -737,48 +748,50 @@ pub async fn link_tasks(
 
     let id = Uuid::now_v7().to_string();
 
-    sqlx::query("INSERT INTO task_links (id, source_id, target_id, link_type) VALUES (?, ?, ?, ?)")
-        .bind(&id)
-        .bind(source_id)
-        .bind(target_id)
-        .bind(link_type)
-        .execute(pool)
-        .await?;
+    let model = link_entity::ActiveModel {
+        id: Set(id.clone()),
+        source_id: Set(source_id.to_string()),
+        target_id: Set(target_id.to_string()),
+        link_type: Set(link_type.to_string()),
+        created_at: NotSet,
+    };
 
-    let event_id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO task_events (id, task_id, event_type, new_value, actor_id) VALUES (?, ?, 'linked', ?, ?)",
-    )
-    .bind(&event_id)
-    .bind(source_id)
-    .bind(format!("{link_type}:{target_id}"))
-    .bind(actor_id)
-    .execute(pool)
-    .await?;
+    link_entity::Entity::insert(model).exec(db).await?;
 
-    let row = sqlx::query("SELECT * FROM task_links WHERE id = ?")
-        .bind(&id)
-        .fetch_one(pool)
-        .await?;
+    let event_model = event_entity::ActiveModel {
+        id: Set(Uuid::now_v7().to_string()),
+        task_id: Set(source_id.to_string()),
+        event_type: Set("linked".to_string()),
+        old_value: Set(None),
+        new_value: Set(Some(format!("{link_type}:{target_id}"))),
+        actor_id: Set(actor_id.map(String::from)),
+        created_at: NotSet,
+    };
 
-    TaskLink::from_row(&row).map_err(NousError::Sqlite)
+    event_entity::Entity::insert(event_model).exec(db).await?;
+
+    let model = link_entity::Entity::find_by_id(&id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("link '{id}' not found")))?;
+
+    Ok(TaskLink::from_model(model))
 }
 
 pub async fn unlink_tasks(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     source_id: &str,
     target_id: &str,
     link_type: &str,
     actor_id: Option<&str>,
 ) -> Result<(), NousError> {
-    let result = sqlx::query(
-        "DELETE FROM task_links WHERE source_id = ? AND target_id = ? AND link_type = ?",
-    )
-    .bind(source_id)
-    .bind(target_id)
-    .bind(link_type)
-    .execute(pool)
-    .await?;
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "DELETE FROM task_links WHERE source_id = ? AND target_id = ? AND link_type = ?",
+            [source_id.into(), target_id.into(), link_type.into()],
+        ))
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!(
@@ -786,33 +799,37 @@ pub async fn unlink_tasks(
         )));
     }
 
-    let event_id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO task_events (id, task_id, event_type, old_value, actor_id) VALUES (?, ?, 'unlinked', ?, ?)",
-    )
-    .bind(&event_id)
-    .bind(source_id)
-    .bind(format!("{link_type}:{target_id}"))
-    .bind(actor_id)
-    .execute(pool)
-    .await?;
+    let event_model = event_entity::ActiveModel {
+        id: Set(Uuid::now_v7().to_string()),
+        task_id: Set(source_id.to_string()),
+        event_type: Set("unlinked".to_string()),
+        old_value: Set(Some(format!("{link_type}:{target_id}"))),
+        new_value: Set(None),
+        actor_id: Set(actor_id.map(String::from)),
+        created_at: NotSet,
+    };
+
+    event_entity::Entity::insert(event_model).exec(db).await?;
 
     Ok(())
 }
 
-pub async fn list_links(pool: &SqlitePool, task_id: &str) -> Result<TaskLinks, NousError> {
-    let rows = sqlx::query("SELECT * FROM task_links WHERE source_id = ? OR target_id = ?")
-        .bind(task_id)
-        .bind(task_id)
-        .fetch_all(pool)
+pub async fn list_links(db: &DatabaseConnection, task_id: &str) -> Result<TaskLinks, NousError> {
+    let models = link_entity::Entity::find()
+        .filter(
+            sea_orm::Condition::any()
+                .add(link_entity::Column::SourceId.eq(task_id))
+                .add(link_entity::Column::TargetId.eq(task_id)),
+        )
+        .all(db)
         .await?;
 
     let mut blocked_by = Vec::new();
     let mut parent = Vec::new();
     let mut related_to = Vec::new();
 
-    for row in &rows {
-        let link = TaskLink::from_row(row).map_err(NousError::Sqlite)?;
+    for m in models {
+        let link = TaskLink::from_model(m);
         match link.link_type.as_str() {
             "blocked_by" if link.source_id == task_id => {
                 blocked_by.push(link.target_id);
@@ -839,37 +856,35 @@ pub async fn list_links(pool: &SqlitePool, task_id: &str) -> Result<TaskLinks, N
 }
 
 pub async fn add_note(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
     sender_id: &str,
     content: &str,
 ) -> Result<serde_json::Value, NousError> {
-    let row = sqlx::query("SELECT room_id FROM tasks WHERE id = ?")
-        .bind(task_id)
-        .fetch_optional(pool)
-        .await?;
+    let task_model = task_entity::Entity::find_by_id(task_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{task_id}' not found")))?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("task '{task_id}' not found")))?;
-    let room_id: Option<String> = row.try_get("room_id").map_err(NousError::Sqlite)?;
-
-    let room_id = match room_id {
+    let room_id = match task_model.room_id {
         Some(rid) => rid,
         None => {
             // Auto-create a room for this task
             let room_name = format!("task-{task_id}");
             let room = rooms::create_room(
-                pool,
+                db,
                 &room_name,
                 Some(&format!("Auto-created discussion room for task {task_id}")),
                 None,
             )
             .await?;
             // Link the room to the task
-            sqlx::query("UPDATE tasks SET room_id = ? WHERE id = ?")
-                .bind(&room.id)
-                .bind(task_id)
-                .execute(pool)
-                .await?;
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE tasks SET room_id = ? WHERE id = ?",
+                [room.id.clone().into(), task_id.into()],
+            ))
+            .await?;
             room.id
         }
     };
@@ -879,7 +894,7 @@ pub async fn add_note(
     });
 
     let msg = messages::post_message(
-        pool,
+        db,
         messages::PostMessageRequest {
             room_id,
             sender_id: sender_id.to_string(),
@@ -892,42 +907,46 @@ pub async fn add_note(
     )
     .await?;
 
-    let event_id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO task_events (id, task_id, event_type, new_value, actor_id) VALUES (?, ?, 'note_added', ?, ?)",
-    )
-    .bind(&event_id)
-    .bind(task_id)
-    .bind(&msg.id)
-    .bind(sender_id)
-    .execute(pool)
-    .await?;
+    let event_model = event_entity::ActiveModel {
+        id: Set(Uuid::now_v7().to_string()),
+        task_id: Set(task_id.to_string()),
+        event_type: Set("note_added".to_string()),
+        old_value: Set(None),
+        new_value: Set(Some(msg.id.clone())),
+        actor_id: Set(Some(sender_id.to_string())),
+        created_at: NotSet,
+    };
+
+    event_entity::Entity::insert(event_model).exec(db).await?;
 
     serde_json::to_value(&msg).map_err(|e| NousError::Internal(e.to_string()))
 }
 
 pub async fn task_history(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<TaskEvent>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
 
-    let rows =
-        sqlx::query("SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT ?")
-            .bind(task_id)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+            [task_id.into(), (limit as i32).into()],
+        ))
+        .await?;
 
-    rows.iter()
-        .map(TaskEvent::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let mut events = Vec::new();
+    for row in rows {
+        let m = <event_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        events.push(TaskEvent::from_model(m));
+    }
+    Ok(events)
 }
 
 pub async fn search_tasks(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     query: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Task>, NousError> {
@@ -937,21 +956,23 @@ pub async fn search_tasks(
 
     let limit = limit.unwrap_or(20).min(100);
 
-    let rows = sqlx::query(
-        "SELECT t.* FROM tasks t \
-         JOIN tasks_fts fts ON t.rowid = fts.rowid \
-         WHERE tasks_fts MATCH ?1 \
-         LIMIT ?2",
-    )
-    .bind(query)
-    .bind(limit as i64)
-    .fetch_all(pool)
-    .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT t.* FROM tasks t \
+             JOIN tasks_fts fts ON t.rowid = fts.rowid \
+             WHERE tasks_fts MATCH ?1 \
+             LIMIT ?2",
+            [query.into(), (limit as i64).into()],
+        ))
+        .await?;
 
-    rows.iter()
-        .map(Task::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let mut tasks = Vec::new();
+    for row in rows {
+        let m = <task_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        tasks.push(Task::from_model(m));
+    }
+    Ok(tasks)
 }
 
 // --- Task Dependencies ---
@@ -966,26 +987,26 @@ pub struct TaskDependency {
 }
 
 impl TaskDependency {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            task_id: row.try_get("task_id")?,
-            depends_on_task_id: row.try_get("depends_on_task_id")?,
-            dep_type: row.try_get("dep_type")?,
-            created_at: row.try_get("created_at")?,
-        })
+    fn from_model(m: dep_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            task_id: m.task_id,
+            depends_on_task_id: m.depends_on_task_id,
+            dep_type: m.dep_type,
+            created_at: m.created_at,
+        }
     }
 }
 
 pub async fn add_dependency(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
     depends_on_task_id: &str,
     dep_type: Option<&str>,
 ) -> Result<TaskDependency, NousError> {
     // Validate both tasks exist
-    let _ = get_task(pool, task_id).await?;
-    let _ = get_task(pool, depends_on_task_id).await?;
+    let _ = get_task(db, task_id).await?;
+    let _ = get_task(db, depends_on_task_id).await?;
 
     if task_id == depends_on_task_id {
         return Err(NousError::Validation("task cannot depend on itself".into()));
@@ -999,56 +1020,59 @@ pub async fn add_dependency(
     }
 
     // Check for circular dependencies
-    if would_create_cycle(pool, task_id, depends_on_task_id).await? {
+    if would_create_cycle(db, task_id, depends_on_task_id).await? {
         return Err(NousError::Conflict(
             "would create circular dependency".into(),
         ));
     }
 
     let id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dep_type) VALUES (?, ?, ?, ?)"
-    )
-    .bind(&id)
-    .bind(task_id)
-    .bind(depends_on_task_id)
-    .bind(dep_type)
-    .execute(pool)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.message().contains("UNIQUE") => {
-            NousError::Conflict("dependency already exists".into())
-        }
-        _ => NousError::Sqlite(e),
-    })?;
+    let model = dep_entity::ActiveModel {
+        id: Set(id.clone()),
+        task_id: Set(task_id.to_string()),
+        depends_on_task_id: Set(depends_on_task_id.to_string()),
+        dep_type: Set(dep_type.to_string()),
+        created_at: NotSet,
+    };
 
-    get_dependency_by_id(pool, &id).await
+    let result = dep_entity::Entity::insert(model).exec(db).await;
+    match result {
+        Ok(_) => {}
+        Err(ref e) if e.to_string().contains("2067") || e.to_string().contains("UNIQUE") => {
+            return Err(NousError::Conflict("dependency already exists".into()));
+        }
+        Err(e) => return Err(NousError::SeaOrm(e)),
+    }
+
+    get_dependency_by_id(db, &id).await
 }
 
-async fn get_dependency_by_id(pool: &SqlitePool, id: &str) -> Result<TaskDependency, NousError> {
-    let row = sqlx::query("SELECT * FROM task_dependencies WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    let row = row.ok_or_else(|| NousError::NotFound(format!("dependency '{id}' not found")))?;
-    TaskDependency::from_row(&row).map_err(NousError::Sqlite)
+async fn get_dependency_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<TaskDependency, NousError> {
+    let model = dep_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("dependency '{id}' not found")))?;
+
+    Ok(TaskDependency::from_model(model))
 }
 
 pub async fn remove_dependency(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
     depends_on_task_id: &str,
     dep_type: Option<&str>,
 ) -> Result<(), NousError> {
     let dep_type = dep_type.unwrap_or("blocked_by");
-    let result = sqlx::query(
-        "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ? AND dep_type = ?"
-    )
-    .bind(task_id)
-    .bind(depends_on_task_id)
-    .bind(dep_type)
-    .execute(pool)
-    .await?;
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ? AND dep_type = ?",
+            [task_id.into(), depends_on_task_id.into(), dep_type.into()],
+        ))
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound("dependency not found".into()));
@@ -1057,25 +1081,27 @@ pub async fn remove_dependency(
 }
 
 pub async fn list_dependencies(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
 ) -> Result<Vec<TaskDependency>, NousError> {
-    let rows = sqlx::query(
-        "SELECT * FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ? ORDER BY created_at DESC"
-    )
-    .bind(task_id)
-    .bind(task_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT * FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ? ORDER BY created_at DESC",
+            [task_id.into(), task_id.into()],
+        ))
+        .await?;
 
-    rows.iter()
-        .map(TaskDependency::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let mut deps = Vec::new();
+    for row in rows {
+        let m = <dep_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        deps.push(TaskDependency::from_model(m));
+    }
+    Ok(deps)
 }
 
 async fn would_create_cycle(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_id: &str,
     depends_on_task_id: &str,
 ) -> Result<bool, NousError> {
@@ -1091,15 +1117,15 @@ async fn would_create_cycle(
         if !visited.insert(current.clone()) {
             continue;
         }
-        let rows =
-            sqlx::query("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?")
-                .bind(&current)
-                .fetch_all(pool)
-                .await?;
+        let rows = db
+            .query_all(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?",
+                [current.into()],
+            ))
+            .await?;
         for row in rows {
-            let dep: String = row
-                .try_get("depends_on_task_id")
-                .map_err(NousError::Sqlite)?;
+            let dep: String = row.try_get("", "depends_on_task_id")?;
             queue.push_back(dep);
         }
     }
@@ -1122,28 +1148,27 @@ pub struct TaskTemplate {
 }
 
 impl TaskTemplate {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        let labels_str: String = row.try_get("default_labels")?;
-        let default_labels: Vec<String> = serde_json::from_str(&labels_str).unwrap_or_default();
-        let checklist_str: String = row.try_get("checklist")?;
-        let checklist: Vec<String> = serde_json::from_str(&checklist_str).unwrap_or_default();
+    fn from_model(m: template_entity::Model) -> Self {
+        let default_labels: Vec<String> =
+            serde_json::from_str(&m.default_labels).unwrap_or_default();
+        let checklist: Vec<String> = serde_json::from_str(&m.checklist).unwrap_or_default();
 
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            title_pattern: row.try_get("title_pattern")?,
-            description_template: row.try_get("description_template")?,
-            default_priority: row.try_get("default_priority")?,
+        Self {
+            id: m.id,
+            name: m.name,
+            title_pattern: m.title_pattern,
+            description_template: m.description_template,
+            default_priority: m.default_priority,
             default_labels,
             checklist,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
 pub async fn create_template(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     name: &str,
     title_pattern: &str,
     description_template: Option<&str>,
@@ -1167,63 +1192,83 @@ pub async fn create_template(
     let labels_json = serde_json::to_string(&default_labels.unwrap_or(&[])).unwrap();
     let checklist_json = serde_json::to_string(&checklist.unwrap_or(&[])).unwrap();
 
-    sqlx::query(
-        "INSERT INTO task_templates (id, name, title_pattern, description_template, default_priority, default_labels, checklist) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&id)
-    .bind(name.trim())
-    .bind(title_pattern.trim())
-    .bind(description_template)
-    .bind(priority)
-    .bind(&labels_json)
-    .bind(&checklist_json)
-    .execute(pool)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.message().contains("UNIQUE") => {
-            NousError::Conflict(format!("template '{}' already exists", name.trim()))
-        }
-        _ => NousError::Sqlite(e),
-    })?;
+    let model = template_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(name.trim().to_string()),
+        title_pattern: Set(title_pattern.trim().to_string()),
+        description_template: Set(description_template.map(String::from)),
+        default_priority: Set(priority.to_string()),
+        default_labels: Set(labels_json),
+        checklist: Set(checklist_json),
+        created_at: NotSet,
+        updated_at: NotSet,
+    };
 
-    get_template(pool, &id).await
+    let result = template_entity::Entity::insert(model).exec(db).await;
+    match result {
+        Ok(_) => {}
+        Err(ref e) if e.to_string().contains("2067") || e.to_string().contains("UNIQUE") => {
+            return Err(NousError::Conflict(format!(
+                "template '{}' already exists",
+                name.trim()
+            )));
+        }
+        Err(e) => return Err(NousError::SeaOrm(e)),
+    }
+
+    get_template(db, &id).await
 }
 
-pub async fn get_template(pool: &SqlitePool, id: &str) -> Result<TaskTemplate, NousError> {
-    let row = sqlx::query("SELECT * FROM task_templates WHERE id = ? OR name = ?")
-        .bind(id)
-        .bind(id)
-        .fetch_optional(pool)
+pub async fn get_template(db: &DatabaseConnection, id: &str) -> Result<TaskTemplate, NousError> {
+    // Try by ID first
+    let model = template_entity::Entity::find_by_id(id).one(db).await?;
+    if let Some(m) = model {
+        return Ok(TaskTemplate::from_model(m));
+    }
+
+    // Try by name
+    let model = template_entity::Entity::find()
+        .filter(template_entity::Column::Name.eq(id))
+        .one(db)
         .await?;
-    let row = row.ok_or_else(|| NousError::NotFound(format!("template '{id}' not found")))?;
-    TaskTemplate::from_row(&row).map_err(NousError::Sqlite)
+
+    match model {
+        Some(m) => Ok(TaskTemplate::from_model(m)),
+        None => Err(NousError::NotFound(format!("template '{id}' not found"))),
+    }
 }
 
 pub async fn list_templates(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     limit: Option<u32>,
 ) -> Result<Vec<TaskTemplate>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
-    let rows = sqlx::query("SELECT * FROM task_templates ORDER BY created_at DESC LIMIT ?")
-        .bind(limit)
-        .fetch_all(pool)
+
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT * FROM task_templates ORDER BY created_at DESC LIMIT ?",
+            [(limit as i32).into()],
+        ))
         .await?;
-    rows.iter()
-        .map(TaskTemplate::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+
+    let mut templates = Vec::new();
+    for row in rows {
+        let m = <template_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        templates.push(TaskTemplate::from_model(m));
+    }
+    Ok(templates)
 }
 
 pub async fn create_from_template(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     template_id: &str,
     title_vars: Option<&HashMap<String, String>>,
     overrides_description: Option<&str>,
     overrides_assignee: Option<&str>,
     overrides_labels: Option<&[String]>,
 ) -> Result<Task, NousError> {
-    let template = get_template(pool, template_id).await?;
+    let template = get_template(db, template_id).await?;
 
     // Substitute variables in title pattern: {{var_name}} -> value
     let mut title = template.title_pattern.clone();
@@ -1252,7 +1297,7 @@ pub async fn create_from_template(
     };
 
     create_task(
-        pool,
+        db,
         &title,
         description.as_deref(),
         Some(&template.default_priority),
@@ -1280,12 +1325,15 @@ pub struct BatchError {
     pub error: String,
 }
 
-pub async fn batch_close(pool: &SqlitePool, task_ids: &[String]) -> Result<BatchResult, NousError> {
+pub async fn batch_close(
+    db: &DatabaseConnection,
+    task_ids: &[String],
+) -> Result<BatchResult, NousError> {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match close_task(pool, id, None).await {
+        match close_task(db, id, None).await {
             Ok(_) => succeeded.push(id.clone()),
             Err(e) => failed.push(BatchError {
                 id: id.clone(),
@@ -1298,7 +1346,7 @@ pub async fn batch_close(pool: &SqlitePool, task_ids: &[String]) -> Result<Batch
 }
 
 pub async fn batch_update_status(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_ids: &[String],
     status: &str,
 ) -> Result<BatchResult, NousError> {
@@ -1306,7 +1354,7 @@ pub async fn batch_update_status(
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match update_task(pool, id, Some(status), None, None, None, None, None, None).await {
+        match update_task(db, id, Some(status), None, None, None, None, None, None).await {
             Ok(_) => succeeded.push(id.clone()),
             Err(e) => failed.push(BatchError {
                 id: id.clone(),
@@ -1319,7 +1367,7 @@ pub async fn batch_update_status(
 }
 
 pub async fn batch_assign(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     task_ids: &[String],
     assignee_id: &str,
 ) -> Result<BatchResult, NousError> {
@@ -1328,7 +1376,7 @@ pub async fn batch_assign(
 
     for id in task_ids {
         match update_task(
-            pool,
+            db,
             id,
             None,
             None,
@@ -1359,23 +1407,23 @@ mod tests {
     use crate::rooms::create_room;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, TempDir) {
+    async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
-        let pool = pools.fts.clone();
-        (pool, tmp)
+        pools.run_migrations().await.unwrap();
+        let db = pools.fts.clone();
+        (db, tmp)
     }
 
     #[tokio::test]
     async fn test_post_task_event_to_room_status_change() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "task-event-room", None, None)
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "task-event-room", None, None)
             .await
             .unwrap();
 
         let task = create_task(
-            &pool,
+            &db,
             "Bridge test task",
             None,
             None,
@@ -1390,7 +1438,7 @@ mod tests {
         .unwrap();
 
         post_task_event_to_room(
-            &pool,
+            &db,
             None,
             &task.id,
             &room.id,
@@ -1403,7 +1451,7 @@ mod tests {
         .unwrap();
 
         let msgs = read_messages(
-            &pool,
+            &db,
             ReadMessagesRequest {
                 room_id: room.id.clone(),
                 since: None,
@@ -1427,10 +1475,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_task_event_not_posted_when_no_room() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
         let task = create_task(
-            &pool,
+            &db,
             "No room task",
             None,
             None,
@@ -1447,7 +1495,7 @@ mod tests {
         assert!(task.room_id.is_none());
 
         let result = update_task(
-            &pool,
+            &db,
             &task.id,
             Some("in_progress"),
             None,
@@ -1464,10 +1512,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_task_command_close() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
         let task = create_task(
-            &pool,
+            &db,
             "Close cmd",
             None,
             None,
@@ -1482,7 +1530,7 @@ mod tests {
         .unwrap();
 
         let result = execute_task_command(
-            &pool,
+            &db,
             TaskCommand {
                 command: "close".to_string(),
                 task_id: task.id.clone(),
@@ -1502,10 +1550,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_task_command_assign() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
         let task = create_task(
-            &pool,
+            &db,
             "Assign cmd",
             None,
             None,
@@ -1520,7 +1568,7 @@ mod tests {
         .unwrap();
 
         let result = execute_task_command(
-            &pool,
+            &db,
             TaskCommand {
                 command: "assign".to_string(),
                 task_id: task.id.clone(),
@@ -1539,10 +1587,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_task_command_invalid() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
         let task = create_task(
-            &pool,
+            &db,
             "Invalid cmd",
             None,
             None,
@@ -1557,7 +1605,7 @@ mod tests {
         .unwrap();
 
         let result = execute_task_command(
-            &pool,
+            &db,
             TaskCommand {
                 command: "foobar".to_string(),
                 task_id: task.id.clone(),
@@ -1573,13 +1621,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_task_with_room_posts_event() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "update-event-room", None, None)
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "update-event-room", None, None)
             .await
             .unwrap();
 
         let task = create_task(
-            &pool,
+            &db,
             "Room event task",
             None,
             None,
@@ -1594,7 +1642,7 @@ mod tests {
         .unwrap();
 
         update_task(
-            &pool,
+            &db,
             &task.id,
             Some("in_progress"),
             None,
@@ -1608,7 +1656,7 @@ mod tests {
         .unwrap();
 
         let msgs = read_messages(
-            &pool,
+            &db,
             ReadMessagesRequest {
                 room_id: room.id.clone(),
                 since: None,

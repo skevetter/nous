@@ -1,12 +1,14 @@
 pub mod cron_parser;
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 pub use cron_parser::{Clock, CronExpr, MockClock, SystemClock};
 
+use crate::entities::schedule_runs as run_entity;
+use crate::entities::schedules as sched_entity;
 use crate::error::NousError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,26 +33,26 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            cron_expr: row.try_get("cron_expr")?,
-            trigger_at: row.try_get("trigger_at")?,
-            timezone: row.try_get("timezone")?,
-            enabled: row.try_get::<i32, _>("enabled")? != 0,
-            action_type: row.try_get("action_type")?,
-            action_payload: row.try_get("action_payload")?,
-            desired_outcome: row.try_get("desired_outcome")?,
-            max_retries: row.try_get("max_retries")?,
-            timeout_secs: row.try_get("timeout_secs")?,
-            max_output_bytes: row.try_get("max_output_bytes")?,
-            max_runs: row.try_get("max_runs")?,
-            last_run_at: row.try_get("last_run_at")?,
-            next_run_at: row.try_get("next_run_at")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+    fn from_model(m: sched_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            cron_expr: m.cron_expr,
+            trigger_at: m.trigger_at,
+            timezone: m.timezone,
+            enabled: m.enabled,
+            action_type: m.action_type,
+            action_payload: m.action_payload,
+            desired_outcome: m.desired_outcome,
+            max_retries: m.max_retries,
+            timeout_secs: m.timeout_secs,
+            max_output_bytes: m.max_output_bytes,
+            max_runs: m.max_runs,
+            last_run_at: m.last_run_at,
+            next_run_at: m.next_run_at,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
@@ -69,25 +71,25 @@ pub struct ScheduleRun {
 }
 
 impl ScheduleRun {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            schedule_id: row.try_get("schedule_id")?,
-            started_at: row.try_get("started_at")?,
-            finished_at: row.try_get("finished_at")?,
-            status: row.try_get("status")?,
-            exit_code: row.try_get("exit_code")?,
-            output: row.try_get("output")?,
-            error: row.try_get("error")?,
-            attempt: row.try_get("attempt")?,
-            duration_ms: row.try_get("duration_ms")?,
-        })
+    fn from_model(m: run_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            schedule_id: m.schedule_id,
+            started_at: m.started_at,
+            finished_at: m.finished_at,
+            status: m.status,
+            exit_code: m.exit_code,
+            output: m.output,
+            error: m.error,
+            attempt: m.attempt,
+            duration_ms: m.duration_ms,
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_schedule(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     name: &str,
     cron_expr: &str,
     trigger_at: Option<i64>,
@@ -126,47 +128,42 @@ pub async fn create_schedule(
 
     let next_run_at = compute_next_run(cron_expr, trigger_at, clock.now_utc());
 
-    sqlx::query(
-        "INSERT INTO schedules (id, name, cron_expr, trigger_at, timezone, action_type, action_payload, \
-         desired_outcome, max_retries, timeout_secs, max_output_bytes, max_runs, next_run_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(name)
-    .bind(cron_expr)
-    .bind(trigger_at)
-    .bind(timezone)
-    .bind(action_type)
-    .bind(action_payload)
-    .bind(desired_outcome)
-    .bind(max_retries)
-    .bind(timeout_secs)
-    .bind(max_output_bytes)
-    .bind(max_runs)
-    .bind(next_run_at)
-    .execute(pool)
-    .await?;
+    let model = sched_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(name.to_string()),
+        cron_expr: Set(cron_expr.to_string()),
+        trigger_at: Set(trigger_at),
+        timezone: Set(timezone.to_string()),
+        enabled: Set(true),
+        action_type: Set(action_type.to_string()),
+        action_payload: Set(action_payload.to_string()),
+        desired_outcome: Set(desired_outcome.map(String::from)),
+        max_retries: Set(max_retries),
+        timeout_secs: Set(timeout_secs),
+        max_output_bytes: Set(max_output_bytes),
+        max_runs: Set(max_runs),
+        last_run_at: Set(None),
+        next_run_at: Set(next_run_at),
+        created_at: Set(0), // DB default via trigger
+        updated_at: Set(0), // DB default via trigger
+    };
 
-    let row = sqlx::query("SELECT * FROM schedules WHERE id = ?")
-        .bind(&id)
-        .fetch_one(pool)
-        .await?;
+    sched_entity::Entity::insert(model).exec(db).await?;
 
-    Schedule::from_row(&row).map_err(NousError::Sqlite)
+    get_schedule(db, &id).await
 }
 
-pub async fn get_schedule(pool: &SqlitePool, id: &str) -> Result<Schedule, NousError> {
-    let row = sqlx::query("SELECT * FROM schedules WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_schedule(db: &DatabaseConnection, id: &str) -> Result<Schedule, NousError> {
+    let model = sched_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("schedule '{id}' not found")))?;
-    Schedule::from_row(&row).map_err(NousError::Sqlite)
+    match model {
+        Some(m) => Ok(Schedule::from_model(m)),
+        None => Err(NousError::NotFound(format!("schedule '{id}' not found"))),
+    }
 }
 
 pub async fn list_schedules(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     enabled: Option<bool>,
     action_type: Option<&str>,
     limit: Option<u32>,
@@ -175,16 +172,16 @@ pub async fn list_schedules(
 
     let mut sql = String::from("SELECT * FROM schedules");
     let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut values: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(e) = enabled {
         conditions.push("enabled = ?".to_string());
-        binds.push(if e { "1".to_string() } else { "0".to_string() });
+        values.push(if e { 1i32.into() } else { 0i32.into() });
     }
 
     if let Some(at) = action_type {
         conditions.push("action_type = ?".to_string());
-        binds.push(at.to_string());
+        values.push(at.to_string().into());
     }
 
     if !conditions.is_empty() {
@@ -193,23 +190,27 @@ pub async fn list_schedules(
     }
 
     sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-    binds.push(limit.to_string());
+    values.push((limit as i32).into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            &sql,
+            values,
+        ))
+        .await?;
+
+    let mut schedules = Vec::new();
+    for row in rows {
+        let m = <sched_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        schedules.push(Schedule::from_model(m));
     }
-
-    let rows = query.fetch_all(pool).await?;
-    rows.iter()
-        .map(Schedule::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(schedules)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_schedule(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     name: Option<&str>,
     cron_expr: Option<&str>,
@@ -223,7 +224,7 @@ pub async fn update_schedule(
     max_runs: Option<i32>,
     clock: &dyn Clock,
 ) -> Result<Schedule, NousError> {
-    let existing = get_schedule(pool, id).await?;
+    let existing = get_schedule(db, id).await?;
 
     if let Some(expr) = cron_expr {
         if expr != "@once" {
@@ -239,27 +240,27 @@ pub async fn update_schedule(
     let final_enabled = enabled.unwrap_or(existing.enabled);
 
     let mut sets: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut values: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(n) = name {
         sets.push("name = ?".to_string());
-        binds.push(n.to_string());
+        values.push(n.to_string().into());
     }
     if let Some(c) = cron_expr {
         sets.push("cron_expr = ?".to_string());
-        binds.push(c.to_string());
+        values.push(c.to_string().into());
     }
     if let Some(t) = trigger_at {
         if let Some(ts) = t {
             sets.push("trigger_at = ?".to_string());
-            binds.push(ts.to_string());
+            values.push(ts.into());
         } else {
             sets.push("trigger_at = NULL".to_string());
         }
     }
     if let Some(e) = enabled {
         sets.push("enabled = ?".to_string());
-        binds.push(if e { "1".to_string() } else { "0".to_string() });
+        values.push(if e { 1i32.into() } else { 0i32.into() });
     }
     if let Some(at) = action_type {
         let valid_actions = ["mcp_tool", "shell", "http"];
@@ -267,42 +268,42 @@ pub async fn update_schedule(
             return Err(NousError::Validation(format!("invalid action_type: {at}")));
         }
         sets.push("action_type = ?".to_string());
-        binds.push(at.to_string());
+        values.push(at.to_string().into());
     }
     if let Some(ap) = action_payload {
         sets.push("action_payload = ?".to_string());
-        binds.push(ap.to_string());
+        values.push(ap.to_string().into());
     }
     if let Some(d) = desired_outcome {
         if let Some(val) = d {
             sets.push("desired_outcome = ?".to_string());
-            binds.push(val.to_string());
+            values.push(val.to_string().into());
         } else {
             sets.push("desired_outcome = NULL".to_string());
         }
     }
     if let Some(mr) = max_retries {
         sets.push("max_retries = ?".to_string());
-        binds.push(mr.to_string());
+        values.push(mr.into());
     }
     if let Some(ts) = timeout_secs {
         if let Some(val) = ts {
             sets.push("timeout_secs = ?".to_string());
-            binds.push(val.to_string());
+            values.push(val.into());
         } else {
             sets.push("timeout_secs = NULL".to_string());
         }
     }
     if let Some(mr) = max_runs {
         sets.push("max_runs = ?".to_string());
-        binds.push(mr.to_string());
+        values.push(mr.into());
     }
 
     if final_enabled {
         let next = compute_next_run(final_cron, final_trigger_at, clock.now_utc());
         if let Some(n) = next {
             sets.push("next_run_at = ?".to_string());
-            binds.push(n.to_string());
+            values.push(n.into());
         } else {
             sets.push("next_run_at = NULL".to_string());
         }
@@ -313,69 +314,69 @@ pub async fn update_schedule(
     sets.push("updated_at = strftime('%s','now')".to_string());
 
     if sets.is_empty() {
-        return get_schedule(pool, id).await;
+        return get_schedule(db, id).await;
     }
 
     let sql = format!("UPDATE schedules SET {} WHERE id = ?", sets.join(", "));
-    binds.push(id.to_string());
+    values.push(id.to_string().into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-    query.execute(pool).await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        &sql,
+        values,
+    ))
+    .await?;
 
-    get_schedule(pool, id).await
+    get_schedule(db, id).await
 }
 
-pub async fn delete_schedule(pool: &SqlitePool, id: &str) -> Result<(), NousError> {
-    let result = sqlx::query("DELETE FROM schedules WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
+pub async fn delete_schedule(db: &DatabaseConnection, id: &str) -> Result<(), NousError> {
+    let result = sched_entity::Entity::delete_by_id(id).exec(db).await?;
 
-    if result.rows_affected() == 0 {
+    if result.rows_affected == 0 {
         return Err(NousError::NotFound(format!("schedule '{id}' not found")));
     }
     Ok(())
 }
 
 pub async fn list_runs(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     schedule_id: &str,
     status: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<ScheduleRun>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
 
-    let (sql, binds) = if let Some(s) = status {
-        (
-            "SELECT * FROM schedule_runs WHERE schedule_id = ? AND status = ? ORDER BY started_at DESC LIMIT ?".to_string(),
-            vec![schedule_id.to_string(), s.to_string(), limit.to_string()],
-        )
-    } else {
-        (
-            "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY started_at DESC LIMIT ?"
-                .to_string(),
-            vec![schedule_id.to_string(), limit.to_string()],
-        )
-    };
+    let mut sql = String::from("SELECT * FROM schedule_runs WHERE schedule_id = ?");
+    let mut values: Vec<sea_orm::Value> = vec![schedule_id.to_string().into()];
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
+    if let Some(s) = status {
+        sql.push_str(" AND status = ?");
+        values.push(s.to_string().into());
     }
 
-    let rows = query.fetch_all(pool).await?;
-    rows.iter()
-        .map(ScheduleRun::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    sql.push_str(" ORDER BY started_at DESC LIMIT ?");
+    values.push((limit as i32).into());
+
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            &sql,
+            values,
+        ))
+        .await?;
+
+    let mut runs = Vec::new();
+    for row in rows {
+        let m = <run_entity::Model as sea_orm::FromQueryResult>::from_query_result(&row, "")?;
+        runs.push(ScheduleRun::from_model(m));
+    }
+    Ok(runs)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn record_run(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     schedule_id: &str,
     started_at: i64,
     finished_at: i64,
@@ -388,78 +389,100 @@ pub async fn record_run(
     let id = Uuid::now_v7().to_string();
     let duration_ms = (finished_at - started_at) * 1000;
 
-    sqlx::query(
-        "INSERT INTO schedule_runs (id, schedule_id, started_at, finished_at, status, exit_code, output, error, attempt, duration_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(schedule_id)
-    .bind(started_at)
-    .bind(finished_at)
-    .bind(status)
-    .bind(exit_code)
-    .bind(output)
-    .bind(error)
-    .bind(attempt)
-    .bind(duration_ms)
-    .execute(pool)
+    let model = run_entity::ActiveModel {
+        id: Set(id.clone()),
+        schedule_id: Set(schedule_id.to_string()),
+        started_at: Set(started_at),
+        finished_at: Set(Some(finished_at)),
+        status: Set(status.to_string()),
+        exit_code: Set(exit_code),
+        output: Set(output.map(String::from)),
+        error: Set(error.map(String::from)),
+        attempt: Set(attempt),
+        duration_ms: Set(Some(duration_ms)),
+    };
+
+    run_entity::Entity::insert(model).exec(db).await?;
+
+    // Update last_run_at on the schedule
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+        [finished_at.into(), schedule_id.to_string().into()],
+    ))
     .await?;
 
-    sqlx::query("UPDATE schedules SET last_run_at = ? WHERE id = ?")
-        .bind(finished_at)
-        .bind(schedule_id)
-        .execute(pool)
-        .await?;
-
     // Purge runs exceeding max_runs
-    let max_runs: Option<i32> = sqlx::query_scalar("SELECT max_runs FROM schedules WHERE id = ?")
-        .bind(schedule_id)
-        .fetch_optional(pool)
+    let schedule = sched_entity::Entity::find_by_id(schedule_id)
+        .one(db)
         .await?;
 
-    if let Some(max) = max_runs {
-        sqlx::query(
+    if let Some(s) = schedule {
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "DELETE FROM schedule_runs WHERE id IN (\
              SELECT id FROM schedule_runs WHERE schedule_id = ? \
              ORDER BY started_at DESC LIMIT -1 OFFSET ?)",
-        )
-        .bind(schedule_id)
-        .bind(max)
-        .execute(pool)
+            [schedule_id.to_string().into(), s.max_runs.into()],
+        ))
         .await?;
     }
 
-    let row = sqlx::query("SELECT * FROM schedule_runs WHERE id = ?")
-        .bind(&id)
-        .fetch_one(pool)
-        .await?;
-
-    ScheduleRun::from_row(&row).map_err(NousError::Sqlite)
+    let run_model = run_entity::Entity::find_by_id(&id).one(db).await?;
+    match run_model {
+        Some(m) => Ok(ScheduleRun::from_model(m)),
+        None => Err(NousError::NotFound(format!(
+            "schedule run '{id}' not found"
+        ))),
+    }
 }
 
-pub async fn schedule_health(pool: &SqlitePool) -> Result<serde_json::Value, NousError> {
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schedules")
-        .fetch_one(pool)
+pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Value, NousError> {
+    let total_row = db
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT COUNT(*) as cnt FROM schedules",
+            [],
+        ))
         .await?;
+    let total: i64 = total_row
+        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
+        .unwrap_or(0);
 
-    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schedules WHERE enabled = 1")
-        .fetch_one(pool)
+    let active_row = db
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT COUNT(*) as cnt FROM schedules WHERE enabled = 1",
+            [],
+        ))
         .await?;
+    let active: i64 = active_row
+        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
+        .unwrap_or(0);
 
-    let failing: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT s.id) FROM schedules s \
-         JOIN schedule_runs r ON r.schedule_id = s.id \
-         WHERE r.status = 'failed' \
-         AND r.started_at = (SELECT MAX(r2.started_at) FROM schedule_runs r2 WHERE r2.schedule_id = s.id)",
-    )
-    .fetch_one(pool)
-    .await?;
+    let failing_row = db
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT COUNT(DISTINCT s.id) as cnt FROM schedules s \
+             JOIN schedule_runs r ON r.schedule_id = s.id \
+             WHERE r.status = 'failed' \
+             AND r.started_at = (SELECT MAX(r2.started_at) FROM schedule_runs r2 WHERE r2.schedule_id = s.id)",
+            [],
+        ))
+        .await?;
+    let failing: i64 = failing_row
+        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
+        .unwrap_or(0);
 
-    let next_upcoming: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(next_run_at) FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await?;
+    let next_row = db
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT MIN(next_run_at) as val FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL",
+            [],
+        ))
+        .await?;
+    let next_upcoming: Option<i64> =
+        next_row.and_then(|r| r.try_get_by::<Option<i64>, _>("val").ok().flatten());
 
     Ok(serde_json::json!({
         "total": total,
@@ -469,23 +492,25 @@ pub async fn schedule_health(pool: &SqlitePool) -> Result<serde_json::Value, Nou
     }))
 }
 
-pub async fn list_due_schedules(pool: &SqlitePool, now: i64) -> Result<Vec<Schedule>, NousError> {
-    let rows = sqlx::query("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ?")
-        .bind(now)
-        .fetch_all(pool)
+pub async fn list_due_schedules(
+    db: &DatabaseConnection,
+    now: i64,
+) -> Result<Vec<Schedule>, NousError> {
+    let models = sched_entity::Entity::find()
+        .filter(sched_entity::Column::Enabled.eq(true))
+        .filter(sched_entity::Column::NextRunAt.lte(now))
+        .all(db)
         .await?;
-    rows.iter()
-        .map(Schedule::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+
+    Ok(models.into_iter().map(Schedule::from_model).collect())
 }
 
 pub async fn advance_next_run_at(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     clock: &dyn Clock,
 ) -> Result<Option<i64>, NousError> {
-    let schedule = get_schedule(pool, id).await?;
+    let schedule = get_schedule(db, id).await?;
 
     if schedule.cron_expr.starts_with("@once") {
         if let Some(t) = schedule.trigger_at {
@@ -503,24 +528,26 @@ pub async fn advance_next_run_at(
     match next {
         Some(ts) => {
             let now = clock.now_utc();
-            sqlx::query("UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?")
-                .bind(ts)
-                .bind(now)
-                .bind(id)
-                .execute(pool)
-                .await?;
+            db.execute(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
+                [ts.into(), now.into(), id.to_string().into()],
+            ))
+            .await?;
             Ok(Some(ts))
         }
         None => Ok(None),
     }
 }
 
-pub async fn mark_stale_runs_failed(pool: &SqlitePool) -> Result<u64, NousError> {
-    let result = sqlx::query(
-        "UPDATE schedule_runs SET status = 'failed', error = 'process restarted' WHERE status = 'running'",
-    )
-    .execute(pool)
-    .await?;
+pub async fn mark_stale_runs_failed(db: &DatabaseConnection) -> Result<u64, NousError> {
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE schedule_runs SET status = 'failed', error = 'process restarted' WHERE status = 'running'",
+            [],
+        ))
+        .await?;
     Ok(result.rows_affected())
 }
 

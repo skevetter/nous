@@ -2,9 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use nous_core::db::DatabaseConnection;
+use sea_orm::{ConnectionTrait, Statement};
 use serde::Deserialize;
 use serde_json::Value;
-use sqlx::SqlitePool;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -117,13 +118,18 @@ async fn run_loop(
     tracing::info!("scheduler stopped");
 }
 
-async fn next_wake_duration(pool: &SqlitePool, clock: &dyn Clock) -> Duration {
-    let next: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(next_run_at) FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(None);
+async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Duration {
+    let result = pool
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT MIN(next_run_at) FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL",
+        ))
+        .await;
+
+    let next: Option<i64> = result.ok().flatten().and_then(|row| {
+        use sea_orm::TryGetable;
+        i64::try_get_by(&row, 0usize).ok()
+    });
 
     match next {
         Some(ts) => {

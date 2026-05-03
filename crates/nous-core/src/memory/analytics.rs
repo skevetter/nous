@@ -1,6 +1,8 @@
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::Serialize;
-use sqlx::SqlitePool;
 
+use crate::entities::search_events as se_entity;
 use crate::error::NousError;
 
 #[derive(Debug, Clone, Serialize)]
@@ -13,19 +15,22 @@ pub struct SearchEvent {
     pub agent_id: Option<String>,
 }
 
-pub async fn record_search_event(pool: &SqlitePool, event: &SearchEvent) -> Result<(), NousError> {
-    sqlx::query(
-        "INSERT INTO search_events (query_text, search_type, result_count, latency_ms, workspace_id, agent_id) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&event.query_text)
-    .bind(&event.search_type)
-    .bind(event.result_count)
-    .bind(event.latency_ms)
-    .bind(&event.workspace_id)
-    .bind(&event.agent_id)
-    .execute(pool)
-    .await?;
+pub async fn record_search_event(
+    db: &DatabaseConnection,
+    event: &SearchEvent,
+) -> Result<(), NousError> {
+    let model = se_entity::ActiveModel {
+        id: Default::default(),
+        query_text: Set(event.query_text.clone()),
+        search_type: Set(event.search_type.clone()),
+        result_count: Set(event.result_count as i32),
+        latency_ms: Set(event.latency_ms as i32),
+        workspace_id: Set(event.workspace_id.clone()),
+        agent_id: Set(event.agent_id.clone()),
+        created_at: NotSet,
+    };
+
+    se_entity::Entity::insert(model).exec(db).await?;
     Ok(())
 }
 
@@ -47,7 +52,7 @@ pub struct TopQuery {
 }
 
 pub async fn get_search_stats(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     since: Option<&str>,
 ) -> Result<SearchStats, NousError> {
     let since_clause = if since.is_some() {
@@ -56,50 +61,63 @@ pub async fn get_search_stats(
         ""
     };
 
-    let total_sql = format!("SELECT COUNT(*) FROM search_events{since_clause}");
-    let total_searches: i64 = if let Some(since_val) = since {
-        sqlx::query_scalar(&total_sql)
-            .bind(since_val)
-            .fetch_one(pool)
-            .await?
-    } else {
-        sqlx::query_scalar(&total_sql).fetch_one(pool).await?
+    // Total count
+    let total_sql = format!("SELECT COUNT(*) as cnt FROM search_events{since_clause}");
+    let total_searches: i64 = {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(since_val) = since {
+            values.push(since_val.into());
+        }
+        let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &total_sql, values);
+        let row = db.query_one(stmt).await?;
+        row.map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
+            .unwrap_or(0)
     };
 
+    // Type counts
     let type_count_sql = format!(
         "SELECT \
-         COALESCE(SUM(CASE WHEN search_type = 'fts' THEN 1 ELSE 0 END), 0), \
-         COALESCE(SUM(CASE WHEN search_type = 'vector' THEN 1 ELSE 0 END), 0), \
-         COALESCE(SUM(CASE WHEN search_type = 'hybrid' THEN 1 ELSE 0 END), 0) \
+         COALESCE(SUM(CASE WHEN search_type = 'fts' THEN 1 ELSE 0 END), 0) as fts_cnt, \
+         COALESCE(SUM(CASE WHEN search_type = 'vector' THEN 1 ELSE 0 END), 0) as vec_cnt, \
+         COALESCE(SUM(CASE WHEN search_type = 'hybrid' THEN 1 ELSE 0 END), 0) as hyb_cnt \
          FROM search_events{since_clause}"
     );
-
-    let (fts_count, vector_count, hybrid_count): (i64, i64, i64) = if let Some(since_val) = since {
-        sqlx::query_as::<_, (i64, i64, i64)>(&type_count_sql)
-            .bind(since_val)
-            .fetch_one(pool)
-            .await?
-    } else {
-        sqlx::query_as::<_, (i64, i64, i64)>(&type_count_sql)
-            .fetch_one(pool)
-            .await?
+    let (fts_count, vector_count, hybrid_count): (i64, i64, i64) = {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(since_val) = since {
+            values.push(since_val.into());
+        }
+        let stmt =
+            Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &type_count_sql, values);
+        let row = db.query_one(stmt).await?;
+        match row {
+            Some(r) => (
+                r.try_get_by::<i64, _>("fts_cnt").unwrap_or(0),
+                r.try_get_by::<i64, _>("vec_cnt").unwrap_or(0),
+                r.try_get_by::<i64, _>("hyb_cnt").unwrap_or(0),
+            ),
+            None => (0, 0, 0),
+        }
     };
 
+    // Zero-result count
     let zero_sql = format!(
-        "SELECT COUNT(*) FROM search_events WHERE result_count = 0{}",
+        "SELECT COUNT(*) as cnt FROM search_events WHERE result_count = 0{}",
         if since.is_some() {
             " AND created_at >= ?"
         } else {
             ""
         }
     );
-    let zero_count: i64 = if let Some(since_val) = since {
-        sqlx::query_scalar(&zero_sql)
-            .bind(since_val)
-            .fetch_one(pool)
-            .await?
-    } else {
-        sqlx::query_scalar(&zero_sql).fetch_one(pool).await?
+    let zero_count: i64 = {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(since_val) = since {
+            values.push(since_val.into());
+        }
+        let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &zero_sql, values);
+        let row = db.query_one(stmt).await?;
+        row.map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
+            .unwrap_or(0)
     };
 
     let zero_result_rate = if total_searches > 0 {
@@ -108,36 +126,39 @@ pub async fn get_search_stats(
         0.0
     };
 
+    // Avg latency
     let avg_sql = format!(
-        "SELECT CAST(COALESCE(AVG(latency_ms * 1.0), 0.0) AS REAL) FROM search_events{since_clause}"
+        "SELECT CAST(COALESCE(AVG(latency_ms * 1.0), 0.0) AS REAL) as avg_lat FROM search_events{since_clause}"
     );
-    let avg_latency_ms: f64 = if let Some(since_val) = since {
-        sqlx::query_scalar(&avg_sql)
-            .bind(since_val)
-            .fetch_one(pool)
-            .await?
-    } else {
-        sqlx::query_scalar(&avg_sql).fetch_one(pool).await?
+    let avg_latency_ms: f64 = {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(since_val) = since {
+            values.push(since_val.into());
+        }
+        let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &avg_sql, values);
+        let row = db.query_one(stmt).await?;
+        row.map(|r| r.try_get_by::<f64, _>("avg_lat").unwrap_or(0.0))
+            .unwrap_or(0.0)
     };
 
+    // Top queries
     let top_sql = format!(
         "SELECT query_text, COUNT(*) as cnt FROM search_events{since_clause} \
          GROUP BY query_text ORDER BY cnt DESC LIMIT 10"
     );
-    let top_queries: Vec<TopQuery> = if let Some(since_val) = since {
-        sqlx::query_as::<_, (String, i64)>(&top_sql)
-            .bind(since_val)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|(query_text, count)| TopQuery { query_text, count })
-            .collect()
-    } else {
-        sqlx::query_as::<_, (String, i64)>(&top_sql)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|(query_text, count)| TopQuery { query_text, count })
+    let top_queries: Vec<TopQuery> = {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        if let Some(since_val) = since {
+            values.push(since_val.into());
+        }
+        let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &top_sql, values);
+        let rows = db.query_all(stmt).await?;
+        rows.iter()
+            .filter_map(|r| {
+                let query_text: String = r.try_get_by("query_text").ok()?;
+                let count: i64 = r.try_get_by("cnt").ok()?;
+                Some(TopQuery { query_text, count })
+            })
             .collect()
     };
 

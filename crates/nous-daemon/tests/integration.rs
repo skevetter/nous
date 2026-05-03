@@ -17,7 +17,7 @@ use tower::ServiceExt;
 async fn test_state() -> (AppState, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
@@ -39,7 +39,7 @@ async fn test_state() -> (AppState, TempDir) {
 async fn test_state_no_embedder() -> (AppState, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
@@ -2287,7 +2287,7 @@ async fn sandbox_spawn_creates_entry_in_manager() {
 
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let sandbox_manager = Arc::new(Mutex::new(SandboxManager::new()));
 

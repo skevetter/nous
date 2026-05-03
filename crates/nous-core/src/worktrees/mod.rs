@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{
+    Condition, ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::entities::worktrees as wt_entity;
 use crate::error::NousError;
 
 // --- Types ---
@@ -67,19 +70,19 @@ pub struct Worktree {
 }
 
 impl Worktree {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            slug: row.try_get("slug")?,
-            path: row.try_get("path")?,
-            branch: row.try_get("branch")?,
-            repo_root: row.try_get("repo_root")?,
-            agent_id: row.try_get("agent_id")?,
-            task_id: row.try_get("task_id")?,
-            status: row.try_get("status")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+    fn from_model(m: wt_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            slug: m.slug,
+            path: m.path,
+            branch: m.branch,
+            repo_root: m.repo_root,
+            agent_id: m.agent_id,
+            task_id: m.task_id,
+            status: m.status,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
@@ -111,167 +114,155 @@ pub struct ListWorktreesFilter {
 
 // --- DB operations ---
 
-pub async fn insert_worktree(pool: &SqlitePool, wt: &Worktree) -> Result<(), NousError> {
-    sqlx::query(
-        "INSERT INTO worktrees (id, slug, path, branch, repo_root, agent_id, task_id, status) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&wt.id)
-    .bind(&wt.slug)
-    .bind(&wt.path)
-    .bind(&wt.branch)
-    .bind(&wt.repo_root)
-    .bind(&wt.agent_id)
-    .bind(&wt.task_id)
-    .bind(&wt.status)
-    .execute(pool)
-    .await?;
+pub async fn insert_worktree(db: &DatabaseConnection, wt: &Worktree) -> Result<(), NousError> {
+    let model = wt_entity::ActiveModel {
+        id: Set(wt.id.clone()),
+        slug: Set(wt.slug.clone()),
+        path: Set(wt.path.clone()),
+        branch: Set(wt.branch.clone()),
+        repo_root: Set(wt.repo_root.clone()),
+        agent_id: Set(wt.agent_id.clone()),
+        task_id: Set(wt.task_id.clone()),
+        status: Set(wt.status.clone()),
+        created_at: Set(wt.created_at.clone()),
+        updated_at: Set(wt.updated_at.clone()),
+    };
+
+    wt_entity::Entity::insert(model).exec(db).await?;
 
     Ok(())
 }
 
-pub async fn get_worktree_by_id(pool: &SqlitePool, id: &str) -> Result<Worktree, NousError> {
-    let row = sqlx::query("SELECT * FROM worktrees WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_worktree_by_id(db: &DatabaseConnection, id: &str) -> Result<Worktree, NousError> {
+    let model = wt_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("worktree '{id}' not found")))?;
-    Worktree::from_row(&row).map_err(NousError::Sqlite)
+    match model {
+        Some(m) => Ok(Worktree::from_model(m)),
+        None => Err(NousError::NotFound(format!("worktree '{id}' not found"))),
+    }
 }
 
 pub async fn get_worktree_by_slug(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     slug: &str,
     repo_root: Option<&str>,
 ) -> Result<Worktree, NousError> {
-    let row = if let Some(root) = repo_root {
-        sqlx::query("SELECT * FROM worktrees WHERE slug = ? AND repo_root = ?")
-            .bind(slug)
-            .bind(root)
-            .fetch_optional(pool)
-            .await?
-    } else {
-        sqlx::query("SELECT * FROM worktrees WHERE slug = ?")
-            .bind(slug)
-            .fetch_optional(pool)
-            .await?
-    };
+    let mut query = wt_entity::Entity::find().filter(wt_entity::Column::Slug.eq(slug));
 
-    let row =
-        row.ok_or_else(|| NousError::NotFound(format!("worktree slug '{slug}' not found")))?;
-    Worktree::from_row(&row).map_err(NousError::Sqlite)
+    if let Some(root) = repo_root {
+        query = query.filter(wt_entity::Column::RepoRoot.eq(root));
+    }
+
+    let model = query.one(db).await?;
+
+    match model {
+        Some(m) => Ok(Worktree::from_model(m)),
+        None => Err(NousError::NotFound(format!(
+            "worktree slug '{slug}' not found"
+        ))),
+    }
 }
 
 pub async fn list_worktrees(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: &ListWorktreesFilter,
 ) -> Result<Vec<Worktree>, NousError> {
     let limit = filter.limit.unwrap_or(50).min(200);
     let offset = filter.offset.unwrap_or(0);
 
-    let mut sql = String::from("SELECT * FROM worktrees");
-    let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut condition = Condition::all();
 
     if let Some(ref s) = filter.status {
-        conditions.push("status = ?".to_string());
-        binds.push(s.as_str().to_string());
+        condition = condition.add(wt_entity::Column::Status.eq(s.as_str()));
     }
 
     if let Some(ref a) = filter.agent_id {
-        conditions.push("agent_id = ?".to_string());
-        binds.push(a.clone());
+        condition = condition.add(wt_entity::Column::AgentId.eq(a.as_str()));
     }
 
     if let Some(ref t) = filter.task_id {
-        conditions.push("task_id = ?".to_string());
-        binds.push(t.clone());
+        condition = condition.add(wt_entity::Column::TaskId.eq(t.as_str()));
     }
 
     if let Some(ref r) = filter.repo_root {
-        conditions.push("repo_root = ?".to_string());
-        binds.push(r.clone());
+        condition = condition.add(wt_entity::Column::RepoRoot.eq(r.as_str()));
     }
 
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    let models = wt_entity::Entity::find()
+        .filter(condition)
+        .order_by_desc(wt_entity::Column::CreatedAt)
+        .limit(limit as u64)
+        .offset(offset as u64)
+        .all(db)
+        .await?;
 
-    sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-    binds.push(limit.to_string());
-    binds.push(offset.to_string());
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Worktree::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(Worktree::from_model).collect())
 }
 
 pub async fn update_worktree_status(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     status: WorktreeStatus,
 ) -> Result<Worktree, NousError> {
-    let result = sqlx::query("UPDATE worktrees SET status = ? WHERE id = ?")
-        .bind(status.as_str())
-        .bind(id)
-        .execute(pool)
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE worktrees SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [status.as_str().into(), id.into()],
+        ))
         .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("worktree '{id}' not found")));
     }
 
-    get_worktree_by_id(pool, id).await
+    get_worktree_by_id(db, id).await
 }
 
 pub async fn update_worktree(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     req: &UpdateWorktreeRequest,
 ) -> Result<Worktree, NousError> {
-    let _existing = get_worktree_by_id(pool, id).await?;
+    let _existing = get_worktree_by_id(db, id).await?;
 
     if let Some(ref agent_id) = req.agent_id {
-        sqlx::query("UPDATE worktrees SET agent_id = ? WHERE id = ?")
-            .bind(agent_id)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE worktrees SET agent_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [agent_id.as_str().into(), id.into()],
+        ))
+        .await?;
     }
 
     if let Some(ref task_id) = req.task_id {
-        sqlx::query("UPDATE worktrees SET task_id = ? WHERE id = ?")
-            .bind(task_id)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE worktrees SET task_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [task_id.as_str().into(), id.into()],
+        ))
+        .await?;
     }
 
     if let Some(status) = req.status {
-        sqlx::query("UPDATE worktrees SET status = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE worktrees SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [status.as_str().into(), id.into()],
+        ))
+        .await?;
     }
 
-    get_worktree_by_id(pool, id).await
+    get_worktree_by_id(db, id).await
 }
 
-pub async fn delete_worktree(pool: &SqlitePool, id: &str) -> Result<(), NousError> {
-    let result = sqlx::query("UPDATE worktrees SET status = 'deleted' WHERE id = ?")
-        .bind(id)
-        .execute(pool)
+pub async fn delete_worktree(db: &DatabaseConnection, id: &str) -> Result<(), NousError> {
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE worktrees SET status = 'deleted', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [id.into()],
+        ))
         .await?;
 
     if result.rows_affected() == 0 {
@@ -287,15 +278,21 @@ fn resolve_worktree_id_or_slug(id_or_slug: &str) -> bool {
     id_or_slug.len() == 36 && id_or_slug.chars().filter(|c| *c == '-').count() == 4
 }
 
-async fn get_by_id_or_slug(pool: &SqlitePool, id_or_slug: &str) -> Result<Worktree, NousError> {
+async fn get_by_id_or_slug(
+    db: &DatabaseConnection,
+    id_or_slug: &str,
+) -> Result<Worktree, NousError> {
     if resolve_worktree_id_or_slug(id_or_slug) {
-        get_worktree_by_id(pool, id_or_slug).await
+        get_worktree_by_id(db, id_or_slug).await
     } else {
-        get_worktree_by_slug(pool, id_or_slug, None).await
+        get_worktree_by_slug(db, id_or_slug, None).await
     }
 }
 
-pub async fn create(pool: &SqlitePool, req: CreateWorktreeRequest) -> Result<Worktree, NousError> {
+pub async fn create(
+    db: &DatabaseConnection,
+    req: CreateWorktreeRequest,
+) -> Result<Worktree, NousError> {
     if req.branch.trim().is_empty() {
         return Err(NousError::Validation("branch cannot be empty".into()));
     }
@@ -334,23 +331,23 @@ pub async fn create(pool: &SqlitePool, req: CreateWorktreeRequest) -> Result<Wor
         updated_at: String::new(),
     };
 
-    insert_worktree(pool, &wt).await?;
-    get_worktree_by_id(pool, &wt.id).await
+    insert_worktree(db, &wt).await?;
+    get_worktree_by_id(db, &wt.id).await
 }
 
 pub async fn list(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: ListWorktreesFilter,
 ) -> Result<Vec<Worktree>, NousError> {
-    list_worktrees(pool, &filter).await
+    list_worktrees(db, &filter).await
 }
 
-pub async fn get(pool: &SqlitePool, id_or_slug: &str) -> Result<Worktree, NousError> {
-    get_by_id_or_slug(pool, id_or_slug).await
+pub async fn get(db: &DatabaseConnection, id_or_slug: &str) -> Result<Worktree, NousError> {
+    get_by_id_or_slug(db, id_or_slug).await
 }
 
-pub async fn archive(pool: &SqlitePool, id_or_slug: &str) -> Result<Worktree, NousError> {
-    let wt = get_by_id_or_slug(pool, id_or_slug).await?;
+pub async fn archive(db: &DatabaseConnection, id_or_slug: &str) -> Result<Worktree, NousError> {
+    let wt = get_by_id_or_slug(db, id_or_slug).await?;
 
     let output = Command::new("git")
         .args(["worktree", "remove", &wt.path])
@@ -367,11 +364,11 @@ pub async fn archive(pool: &SqlitePool, id_or_slug: &str) -> Result<Worktree, No
         }
     }
 
-    update_worktree_status(pool, &wt.id, WorktreeStatus::Archived).await
+    update_worktree_status(db, &wt.id, WorktreeStatus::Archived).await
 }
 
-pub async fn delete(pool: &SqlitePool, id_or_slug: &str) -> Result<(), NousError> {
-    let wt = get_by_id_or_slug(pool, id_or_slug).await?;
+pub async fn delete(db: &DatabaseConnection, id_or_slug: &str) -> Result<(), NousError> {
+    let wt = get_by_id_or_slug(db, id_or_slug).await?;
 
     let path = PathBuf::from(&wt.path);
     if path.exists() {
@@ -386,15 +383,15 @@ pub async fn delete(pool: &SqlitePool, id_or_slug: &str) -> Result<(), NousError
         .current_dir(&wt.repo_root)
         .output();
 
-    update_worktree_status(pool, &wt.id, WorktreeStatus::Deleted).await?;
+    update_worktree_status(db, &wt.id, WorktreeStatus::Deleted).await?;
     Ok(())
 }
 
 pub async fn update_status(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id_or_slug: &str,
     status: WorktreeStatus,
 ) -> Result<Worktree, NousError> {
-    let wt = get_by_id_or_slug(pool, id_or_slug).await?;
-    update_worktree_status(pool, &wt.id, status).await
+    let wt = get_by_id_or_slug(db, id_or_slug).await?;
+    update_worktree_status(db, &wt.id, status).await
 }

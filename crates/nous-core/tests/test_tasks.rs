@@ -9,7 +9,7 @@ use tempfile::TempDir;
 async fn test_direct_cycle_detection_blocked_by() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task_a = tasks::create_task(
         &pools.fts, "Task A", None, None, None, None, None, false, None, None,
@@ -41,7 +41,7 @@ async fn test_direct_cycle_detection_blocked_by() {
 async fn test_indirect_cycle_detection_parent() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task_a = tasks::create_task(
         &pools.fts, "Task A", None, None, None, None, None, false, None, None,
@@ -81,7 +81,7 @@ async fn test_indirect_cycle_detection_parent() {
 async fn test_related_to_allows_bidirectional() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task_a = tasks::create_task(
         &pools.fts, "Task A", None, None, None, None, None, false, None, None,
@@ -109,7 +109,7 @@ async fn test_related_to_allows_bidirectional() {
 async fn test_fts_trigger_on_insert() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let _task = tasks::create_task(
         &pools.fts,
@@ -127,20 +127,30 @@ async fn test_fts_trigger_on_insert() {
     .unwrap();
 
     // Query FTS5 table to verify content was indexed
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'authentication'")
-            .fetch_one(&pools.fts)
-            .await
-            .unwrap();
-
-    assert_eq!(row.0, 1, "FTS5 should have indexed the task title");
-
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'OAuth2'")
-        .fetch_one(&pools.fts)
+    use sea_orm::{ConnectionTrait, Statement, TryGetable};
+    let row = pools
+        .fts
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'authentication'",
+        ))
         .await
+        .unwrap()
         .unwrap();
+    let count: i64 = i64::try_get_by(&row, 0usize).unwrap();
+    assert_eq!(count, 1, "FTS5 should have indexed the task title");
 
-    assert_eq!(row.0, 1, "FTS5 should have indexed the task description");
+    let row = pools
+        .fts
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'OAuth2'",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let count: i64 = i64::try_get_by(&row, 0usize).unwrap();
+    assert_eq!(count, 1, "FTS5 should have indexed the task description");
 
     pools.close().await;
 }
@@ -149,7 +159,7 @@ async fn test_fts_trigger_on_insert() {
 async fn test_fts_trigger_on_update() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -182,12 +192,18 @@ async fn test_fts_trigger_on_update() {
     .unwrap();
 
     // Verify FTS5 reflects the updated content
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'unique'")
-        .fetch_one(&pools.fts)
+    use sea_orm::{ConnectionTrait, Statement, TryGetable};
+    let row = pools
+        .fts
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM tasks_fts WHERE content MATCH 'unique'",
+        ))
         .await
+        .unwrap()
         .unwrap();
-
-    assert_eq!(row.0, 1, "FTS5 should have updated with new description");
+    let count: i64 = i64::try_get_by(&row, 0usize).unwrap();
+    assert_eq!(count, 1, "FTS5 should have updated with new description");
 
     pools.close().await;
 }
@@ -196,7 +212,7 @@ async fn test_fts_trigger_on_update() {
 async fn test_tasks_au_trigger_updates_timestamp() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -257,7 +273,7 @@ async fn test_tasks_au_trigger_updates_timestamp() {
 async fn test_create_task_minimal() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -290,7 +306,7 @@ async fn test_create_task_minimal() {
 async fn test_create_task_full() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let labels = vec!["bug".to_string(), "urgent".to_string()];
     let task = tasks::create_task(
@@ -321,7 +337,7 @@ async fn test_create_task_full() {
 async fn test_create_task_empty_title_fails() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let result = tasks::create_task(
         &pools.fts, "  ", None, None, None, None, None, false, None, None,
@@ -336,7 +352,7 @@ async fn test_create_task_empty_title_fails() {
 async fn test_create_task_with_room_creation() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -365,7 +381,7 @@ async fn test_create_task_with_room_creation() {
 async fn test_list_tasks_filter_by_status() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let t1 = tasks::create_task(
         &pools.fts,
@@ -426,7 +442,7 @@ async fn test_list_tasks_filter_by_status() {
 async fn test_list_tasks_filter_by_assignee() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     tasks::create_task(
         &pools.fts,
@@ -479,7 +495,7 @@ async fn test_list_tasks_filter_by_assignee() {
 async fn test_list_tasks_filter_by_label() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let labels_bug = vec!["bug".to_string()];
     let labels_feat = vec!["feature".to_string()];
@@ -525,7 +541,7 @@ async fn test_list_tasks_filter_by_label() {
 async fn test_list_tasks_pagination() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     for i in 0..5 {
         tasks::create_task(
@@ -566,7 +582,7 @@ async fn test_list_tasks_pagination() {
 async fn test_update_task_status() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -614,7 +630,7 @@ async fn test_update_task_status() {
 async fn test_update_task_priority() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -659,7 +675,7 @@ async fn test_update_task_priority() {
 async fn test_update_task_assignee() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -704,7 +720,7 @@ async fn test_update_task_assignee() {
 async fn test_close_task() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts, "Close me", None, None, None, None, None, false, None, None,
@@ -725,7 +741,7 @@ async fn test_close_task() {
 async fn test_get_task_not_found() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let result = tasks::get_task(&pools.fts, "nonexistent-id").await;
     assert!(matches!(result, Err(NousError::NotFound(_))));
@@ -737,7 +753,7 @@ async fn test_get_task_not_found() {
 async fn test_link_then_unlink() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let t1 = tasks::create_task(
         &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
@@ -774,7 +790,7 @@ async fn test_link_then_unlink() {
 async fn test_unlink_nonexistent_fails() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let t1 = tasks::create_task(
         &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
@@ -797,7 +813,7 @@ async fn test_unlink_nonexistent_fails() {
 async fn test_add_note_auto_creates_room() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -830,7 +846,7 @@ async fn test_add_note_auto_creates_room() {
 async fn test_add_note_with_room() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -860,7 +876,7 @@ async fn test_add_note_with_room() {
 async fn test_task_history() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let task = tasks::create_task(
         &pools.fts,
@@ -909,7 +925,7 @@ async fn test_task_history() {
 async fn test_search_tasks_empty_query_fails() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let result = tasks::search_tasks(&pools.fts, "  ", None).await;
     assert!(matches!(result, Err(NousError::Validation(_))));
@@ -921,7 +937,7 @@ async fn test_search_tasks_empty_query_fails() {
 async fn test_search_tasks_finds_by_title() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     tasks::create_task(
         &pools.fts,

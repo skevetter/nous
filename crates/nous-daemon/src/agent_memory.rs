@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use nous_core::agents::definition::{MemoryScope, RetrievalStrategy};
+use nous_core::db::DatabaseConnection;
 use nous_core::db::VecPool;
 use nous_core::error::NousError;
 use nous_core::memory::{
@@ -9,10 +10,9 @@ use nous_core::memory::{
 use rig::vector_store::request::Filter;
 use rig::vector_store::{VectorSearchRequest, VectorStoreError, VectorStoreIndex};
 use serde::Deserialize;
-use sqlx::SqlitePool;
 
 pub struct NousMemoryIndex {
-    fts_pool: SqlitePool,
+    fts_pool: DatabaseConnection,
     vec_pool: VecPool,
     embedder: Arc<dyn Embedder>,
     workspace_id: String,
@@ -27,7 +27,7 @@ pub struct NousMemoryIndex {
 impl NousMemoryIndex {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        fts_pool: SqlitePool,
+        fts_pool: DatabaseConnection,
         vec_pool: VecPool,
         embedder: Arc<dyn Embedder>,
         workspace_id: String,
@@ -327,7 +327,7 @@ pub async fn extract_and_save_memories(
     agent_id: &str,
     workspace_id: &str,
     allowed_types: &[MemoryType],
-    fts_pool: &SqlitePool,
+    fts_pool: &DatabaseConnection,
 ) -> Result<Vec<String>, NousError> {
     let blocks = parse_memory_blocks(response);
     let mut saved_ids = Vec::new();
@@ -362,7 +362,7 @@ mod tests {
     use nous_core::memory::MockEmbedder;
 
     fn make_index(
-        fts_pool: SqlitePool,
+        fts_pool: DatabaseConnection,
         vec_pool: VecPool,
         scope: MemoryScope,
         retrieval: RetrievalStrategy,
@@ -468,7 +468,7 @@ mod tests {
         rt.block_on(async {
             let tmp = tempfile::TempDir::new().unwrap();
             let pools = nous_core::db::DbPools::connect(tmp.path()).await.unwrap();
-            pools.run_migrations("porter unicode61").await.unwrap();
+            pools.run_migrations().await.unwrap();
 
             for strategy in [
                 RetrievalStrategy::Fts,
@@ -583,7 +583,7 @@ END_MEMORY"#;
         rt.block_on(async {
             let tmp = tempfile::TempDir::new().unwrap();
             let pools = nous_core::db::DbPools::connect(tmp.path()).await.unwrap();
-            pools.run_migrations("porter unicode61").await.unwrap();
+            pools.run_migrations().await.unwrap();
 
             let response = r#"Here is my analysis.
 MEMORY[type=decision, importance=high, title="Use SQLite for storage"]

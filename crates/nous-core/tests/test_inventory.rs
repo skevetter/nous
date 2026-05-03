@@ -9,11 +9,15 @@ use tempfile::TempDir;
 async fn setup() -> (DbPools, TempDir) {
     let db_dir = TempDir::new().unwrap();
     let pools = DbPools::connect(db_dir.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     (pools, db_dir)
 }
 
-async fn create_test_agent(pool: &sqlx::SqlitePool, name: &str, namespace: &str) -> String {
+async fn create_test_agent(
+    pool: &nous_core::db::DatabaseConnection,
+    name: &str,
+    namespace: &str,
+) -> String {
     let agent = agents::register_agent(
         pool,
         RegisterAgentRequest {

@@ -8,7 +8,7 @@ use tempfile::TempDir;
 async fn setup() -> (DbPools, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     (pools, tmp)
 }
 

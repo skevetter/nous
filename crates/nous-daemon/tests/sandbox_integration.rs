@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
+use nous_core::db::DatabaseConnection;
 use nous_core::db::DbPools;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::sandbox::SandboxManager;
 use nous_daemon::state::AppState;
-use sqlx::SqlitePool;
+use sea_orm::{ConnectionTrait, Statement};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -16,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 async fn setup() -> (AppState, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     let sandbox_mgr = Arc::new(tokio::sync::Mutex::new(SandboxManager::new()));
     let state = AppState {
         pool: pools.fts.clone(),
@@ -35,51 +36,57 @@ async fn setup() -> (AppState, TempDir) {
     (state, tmp)
 }
 
-async fn create_test_agent(pool: &SqlitePool, agent_id: &str) {
-    sqlx::query(
+async fn create_test_agent(pool: &DatabaseConnection, agent_id: &str) {
+    pool.execute(Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Sqlite,
         "INSERT INTO agents (id, name, agent_type, namespace, status, process_type, metadata_json, created_at, updated_at) \
          VALUES (?, ?, 'engineer', 'default', 'active', 'sandbox', '{\"sandbox\":{\"image\":\"ubuntu:24.04\"}}', \
          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-    )
-    .bind(agent_id)
-    .bind(format!("test-agent-{}", agent_id))
-    .execute(pool)
+        [agent_id.into(), format!("test-agent-{}", agent_id).into()],
+    ))
     .await
     .unwrap();
 }
 
 async fn insert_sandbox_process(
-    pool: &SqlitePool,
+    pool: &DatabaseConnection,
     agent_id: &str,
     status: &str,
     sandbox_name: &str,
 ) -> String {
     let id = uuid::Uuid::now_v7().to_string();
-    sqlx::query(
+    pool.execute(Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Sqlite,
         "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
          max_output_bytes, restart_policy, restart_count, max_restarts, \
          sandbox_image, sandbox_name, created_at, updated_at) \
          VALUES (?, ?, 'sandbox', '', ?, 65536, 'never', 0, 3, \
          'ubuntu:24.04', ?, \
          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-    )
-    .bind(&id)
-    .bind(agent_id)
-    .bind(status)
-    .bind(sandbox_name)
-    .execute(pool)
+        [
+            id.clone().into(),
+            agent_id.into(),
+            status.into(),
+            sandbox_name.into(),
+        ],
+    ))
     .await
     .unwrap();
     id
 }
 
-async fn get_process_status(pool: &SqlitePool, process_id: &str) -> String {
-    let row: (String,) = sqlx::query_as("SELECT status FROM agent_processes WHERE id = ?")
-        .bind(process_id)
-        .fetch_one(pool)
+async fn get_process_status(pool: &DatabaseConnection, process_id: &str) -> String {
+    use sea_orm::TryGetable;
+    let row = pool
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT status FROM agent_processes WHERE id = ?",
+            [process_id.into()],
+        ))
         .await
+        .unwrap()
         .unwrap();
-    row.0
+    String::try_get_by(&row, 0usize).unwrap()
 }
 
 #[tokio::test]
@@ -156,19 +163,20 @@ async fn test_missing_sandbox_name_skipped() {
     create_test_agent(&state.pool, crash_agent).await;
     let crash_id = {
         let id = uuid::Uuid::now_v7().to_string();
-        sqlx::query(
-            "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
+        state
+            .pool
+            .execute(Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
              max_output_bytes, restart_policy, restart_count, max_restarts, \
              sandbox_image, sandbox_name, created_at, updated_at) \
              VALUES (?, ?, 'sandbox', '', 'running', 65536, 'never', 0, 3, \
              'ubuntu:24.04', NULL, \
              strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-        )
-        .bind(&id)
-        .bind(crash_agent)
-        .execute(&state.pool)
-        .await
-        .unwrap();
+                [id.clone().into(), crash_agent.into()],
+            ))
+            .await
+            .unwrap();
         id
     };
 
@@ -223,9 +231,13 @@ async fn test_sandbox_spawn_does_not_affect_shell() {
     create_test_agent(&state.pool, agent_id).await;
 
     // Override the agent's process_type so shell spawn works
-    sqlx::query("UPDATE agents SET process_type = 'shell' WHERE id = ?")
-        .bind(agent_id)
-        .execute(&state.pool)
+    state
+        .pool
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE agents SET process_type = 'shell' WHERE id = ?",
+            [agent_id.into()],
+        ))
         .await
         .unwrap();
 

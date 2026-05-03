@@ -93,7 +93,7 @@ async fn execute(cmd: ChatCommands, port: Option<u16>) -> Result<(), Box<dyn std
     }
     config.ensure_dirs()?;
     let pools = DbPools::connect(&config.data_dir).await?;
-    pools.run_migrations(&config.search.tokenizer).await?;
+    pools.run_migrations().await?;
     let pool = &pools.fts;
 
     match cmd {

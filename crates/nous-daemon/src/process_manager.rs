@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "sandbox")]
-use sqlx::SqlitePool;
+use nous_core::db::DatabaseConnection;
 
 use nous_core::agents::processes::{self, Invocation, Process};
 #[cfg(feature = "sandbox")]
@@ -221,15 +221,17 @@ impl ProcessRegistry {
         };
 
         // Update sandbox_name and status to running
-        sqlx::query(
-            "UPDATE agent_processes SET sandbox_name = ?, status = 'running', \
+        use sea_orm::{ConnectionTrait, Statement};
+        state
+            .pool
+            .execute(Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE agent_processes SET sandbox_name = ?, status = 'running', \
              started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-        )
-        .bind(&sandbox_name)
-        .bind(&process.id)
-        .execute(&state.pool)
-        .await?;
+                [sandbox_name.clone().into(), process.id.clone().into()],
+            ))
+            .await?;
 
         let cancel = CancellationToken::new();
         let handle = ProcessHandle {
@@ -1058,20 +1060,24 @@ impl ProcessRegistry {
     #[cfg(feature = "sandbox")]
     pub async fn recover_sandboxes(
         &self,
-        pool: &SqlitePool,
+        pool: &DatabaseConnection,
         sandbox_mgr: &Arc<tokio::sync::Mutex<crate::sandbox::SandboxManager>>,
     ) -> Result<(), NousError> {
-        let rows = sqlx::query(
-            "SELECT * FROM agent_processes WHERE process_type = 'sandbox' AND status IN ('running', 'starting')",
-        )
-        .fetch_all(pool)
-        .await?;
+        use sea_orm::{ConnectionTrait, Statement};
+        let rows = pool
+            .query_all(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT * FROM agent_processes WHERE process_type = 'sandbox' AND status IN ('running', 'starting')",
+            ))
+            .await?;
 
-        let processes: Vec<Process> = rows
-            .iter()
-            .map(Process::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)?;
+        let mut processes = Vec::new();
+        for row in &rows {
+            use sea_orm::TryGetable;
+            let id: String = row.try_get_by("id")?;
+            let proc = processes::get_process_by_id(pool, &id).await?;
+            processes.push(proc);
+        }
 
         let mut recovered = 0u32;
         let mut crashed = 0u32;

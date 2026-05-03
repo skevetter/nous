@@ -57,7 +57,7 @@ async fn execute(
     config.ensure_dirs()?;
 
     let pools = DbPools::connect(&config.data_dir).await?;
-    pools.run_migrations(&config.search.tokenizer).await?;
+    pools.run_migrations().await?;
 
     let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
         match OnnxEmbeddingModel::load(None) {

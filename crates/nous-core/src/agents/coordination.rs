@@ -1,5 +1,5 @@
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 use crate::error::NousError;
 use crate::messages::{self, Message, MessageType, PostMessageRequest};
@@ -45,7 +45,7 @@ pub struct PresenceEvent {
 }
 
 pub async fn post_handoff(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     registry: Option<&NotificationRegistry>,
     room_id: &str,
     from_agent: &str,
@@ -77,7 +77,7 @@ pub async fn post_handoff(
     );
 
     messages::post_message(
-        pool,
+        db,
         PostMessageRequest {
             room_id: room_id.to_string(),
             sender_id: from_agent.to_string(),
@@ -92,7 +92,7 @@ pub async fn post_handoff(
 }
 
 pub async fn broadcast_presence(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     registry: Option<&NotificationRegistry>,
     event: &PresenceEvent,
 ) -> Result<(), NousError> {
@@ -110,7 +110,7 @@ pub async fn broadcast_presence(
     let content = format!("Agent {} is now {}", event.agent_name, event.status);
 
     messages::post_message(
-        pool,
+        db,
         PostMessageRequest {
             room_id: event.room_id.clone(),
             sender_id: event.agent_id.clone(),
@@ -133,20 +133,18 @@ mod tests {
     use crate::rooms::create_room;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, TempDir) {
+    async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
-        let pool = pools.fts.clone();
-        (pool, tmp)
+        pools.run_migrations().await.unwrap();
+        let db = pools.fts.clone();
+        (db, tmp)
     }
 
     #[tokio::test]
     async fn test_post_handoff_creates_message_with_metadata() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "handoff-room", None, None)
-            .await
-            .unwrap();
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "handoff-room", None, None).await.unwrap();
 
         let payload = HandoffPayload {
             task_id: Some("TASK-001".into()),
@@ -157,7 +155,7 @@ mod tests {
             deadline: None,
         };
 
-        let msg = post_handoff(&pool, None, &room.id, "agent-a", "agent-b", payload)
+        let msg = post_handoff(&db, None, &room.id, "agent-a", "agent-b", payload)
             .await
             .unwrap();
 
@@ -174,10 +172,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_presence_posts_to_room() {
-        let (pool, _tmp) = setup().await;
-        let room = create_room(&pool, "presence-room", None, None)
-            .await
-            .unwrap();
+        let (db, _tmp) = setup().await;
+        let room = create_room(&db, "presence-room", None, None).await.unwrap();
 
         let event = PresenceEvent {
             agent_id: "agent-x".into(),
@@ -187,10 +183,10 @@ mod tests {
             room_id: room.id.clone(),
         };
 
-        broadcast_presence(&pool, None, &event).await.unwrap();
+        broadcast_presence(&db, None, &event).await.unwrap();
 
         let msgs = messages::read_messages(
-            &pool,
+            &db,
             messages::ReadMessagesRequest {
                 room_id: room.id.clone(),
                 since: None,
