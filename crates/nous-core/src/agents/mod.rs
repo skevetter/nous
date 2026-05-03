@@ -561,31 +561,29 @@ pub async fn list_ancestors(
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
     let ns = namespace.unwrap_or("default");
-    let mut ancestors = Vec::new();
-    let mut current_id = agent_id.to_string();
 
-    loop {
-        let row = db
-            .query_one(Statement::from_sql_and_values(
-                sea_orm::DbBackend::Sqlite,
-                "SELECT parent_id FROM agent_relationships WHERE child_id = ? AND namespace = ?",
-                [current_id.clone().into(), ns.into()],
-            ))
-            .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "WITH RECURSIVE ancestor_chain(agent_id, depth) AS ( \
+               SELECT r.parent_id, 1 FROM agent_relationships r \
+               WHERE r.child_id = ? AND r.namespace = ? \
+             UNION ALL \
+               SELECT r.parent_id, ac.depth + 1 FROM agent_relationships r \
+               INNER JOIN ancestor_chain ac ON ac.agent_id = r.child_id \
+               WHERE r.namespace = ? \
+             ) \
+             SELECT a.* FROM ancestor_chain ac \
+             INNER JOIN agents a ON a.id = ac.agent_id \
+             ORDER BY ac.depth DESC",
+            [agent_id.into(), ns.into(), ns.into()],
+        ))
+        .await?;
 
-        match row {
-            Some(r) => {
-                let parent_id: String = r.try_get_by("parent_id")?;
-                let parent = get_agent_by_id(db, &parent_id).await?;
-                ancestors.push(parent);
-                current_id = parent_id;
-            }
-            None => break,
-        }
-    }
-
-    ancestors.reverse();
-    Ok(ancestors)
+    rows.iter()
+        .map(Agent::from_query_result)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::SeaOrm)
 }
 
 pub async fn get_tree(
@@ -595,11 +593,30 @@ pub async fn get_tree(
 ) -> Result<Vec<TreeNode>, NousError> {
     let ns = namespace.unwrap_or("default");
 
-    let roots = if let Some(id) = root_id {
-        vec![get_agent_by_id(db, id).await?]
+    let all_agents: Vec<Agent> = if let Some(id) = root_id {
+        let rows = db
+            .query_all(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "WITH RECURSIVE subtree(agent_id) AS ( \
+                   SELECT ? \
+                 UNION ALL \
+                   SELECT r.child_id FROM agent_relationships r \
+                   INNER JOIN subtree s ON s.agent_id = r.parent_id \
+                   WHERE r.namespace = ? \
+                 ) \
+                 SELECT a.* FROM subtree s \
+                 INNER JOIN agents a ON a.id = s.agent_id \
+                 ORDER BY a.created_at",
+                [id.into(), ns.into()],
+            ))
+            .await?;
+
+        rows.iter()
+            .map(Agent::from_query_result)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NousError::SeaOrm)?
     } else {
         let models = agent_entity::Entity::find()
-            .filter(agent_entity::Column::ParentAgentId.is_null())
             .filter(agent_entity::Column::Namespace.eq(ns))
             .order_by_asc(agent_entity::Column::CreatedAt)
             .all(db)
@@ -608,29 +625,38 @@ pub async fn get_tree(
         models.into_iter().map(Agent::from_model).collect()
     };
 
-    let mut tree = Vec::new();
-    for root in roots {
-        let node = build_tree_node(db, root, ns).await?;
-        tree.push(node);
+    let mut children_map: std::collections::HashMap<String, Vec<Agent>> =
+        std::collections::HashMap::new();
+    let mut roots: Vec<Agent> = Vec::new();
+
+    for agent in all_agents {
+        match (&root_id, &agent.parent_agent_id) {
+            (Some(id), _) if agent.id == *id => roots.push(agent),
+            (None, None) => roots.push(agent),
+            _ => {
+                if let Some(ref pid) = agent.parent_agent_id {
+                    children_map.entry(pid.clone()).or_default().push(agent);
+                }
+            }
+        }
     }
 
-    Ok(tree)
-}
-
-async fn build_tree_node(
-    db: &DatabaseConnection,
-    agent: Agent,
-    namespace: &str,
-) -> Result<TreeNode, NousError> {
-    let children_agents = list_children(db, &agent.id, Some(namespace)).await?;
-    let mut children = Vec::new();
-
-    for child in children_agents {
-        let node = Box::pin(build_tree_node(db, child, namespace)).await?;
-        children.push(node);
+    fn build_node(
+        agent: Agent,
+        children_map: &mut std::collections::HashMap<String, Vec<Agent>>,
+    ) -> TreeNode {
+        let child_agents = children_map.remove(&agent.id).unwrap_or_default();
+        let children = child_agents
+            .into_iter()
+            .map(|child| build_node(child, children_map))
+            .collect();
+        TreeNode { agent, children }
     }
 
-    Ok(TreeNode { agent, children })
+    Ok(roots
+        .into_iter()
+        .map(|root| build_node(root, &mut children_map))
+        .collect())
 }
 
 // --- Search ---
