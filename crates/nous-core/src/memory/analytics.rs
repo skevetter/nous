@@ -172,3 +172,278 @@ pub async fn get_search_stats(
         top_queries,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DbPools;
+    use tempfile::TempDir;
+
+    async fn setup() -> (DatabaseConnection, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let pools = DbPools::connect(tmp.path()).await.unwrap();
+        pools.run_migrations().await.unwrap();
+        pools
+            .fts
+            .execute_unprepared(
+                "INSERT OR IGNORE INTO agents (id, name, namespace, status) \
+                 VALUES ('agent-1', 'agent-1', 'default', 'active')",
+            )
+            .await
+            .unwrap();
+        (pools.fts, tmp)
+    }
+
+    fn fts_event(query: &str, results: i64, latency: i64) -> SearchEvent {
+        SearchEvent {
+            query_text: query.to_string(),
+            search_type: "fts".to_string(),
+            result_count: results,
+            latency_ms: latency,
+            workspace_id: None,
+            agent_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn record_search_event_inserts_row() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("hello", 5, 12)).await.unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.total_searches, 1);
+    }
+
+    #[tokio::test]
+    async fn record_multiple_events() {
+        let (db, _tmp) = setup().await;
+        for i in 0..5 {
+            record_search_event(&db, &fts_event(&format!("q{i}"), i, 10))
+                .await
+                .unwrap();
+        }
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.total_searches, 5);
+    }
+
+    #[tokio::test]
+    async fn record_event_with_workspace_and_agent() {
+        let (db, _tmp) = setup().await;
+        let event = SearchEvent {
+            query_text: "test".to_string(),
+            search_type: "vector".to_string(),
+            result_count: 3,
+            latency_ms: 50,
+            workspace_id: Some("ws-1".to_string()),
+            agent_id: Some("agent-1".to_string()),
+        };
+        record_search_event(&db, &event).await.unwrap();
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.vector_count, 1);
+    }
+
+    #[tokio::test]
+    async fn get_stats_empty_db() {
+        let (db, _tmp) = setup().await;
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.total_searches, 0);
+        assert_eq!(stats.fts_count, 0);
+        assert_eq!(stats.vector_count, 0);
+        assert_eq!(stats.hybrid_count, 0);
+        assert_eq!(stats.zero_result_rate, 0.0);
+        assert_eq!(stats.avg_latency_ms, 0.0);
+        assert!(stats.top_queries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_stats_counts_by_type() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("a", 1, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("b", 2, 20)).await.unwrap();
+        record_search_event(
+            &db,
+            &SearchEvent {
+                query_text: "c".to_string(),
+                search_type: "vector".to_string(),
+                result_count: 3,
+                latency_ms: 30,
+                workspace_id: None,
+                agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        record_search_event(
+            &db,
+            &SearchEvent {
+                query_text: "d".to_string(),
+                search_type: "hybrid".to_string(),
+                result_count: 4,
+                latency_ms: 40,
+                workspace_id: None,
+                agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.total_searches, 4);
+        assert_eq!(stats.fts_count, 2);
+        assert_eq!(stats.vector_count, 1);
+        assert_eq!(stats.hybrid_count, 1);
+    }
+
+    #[tokio::test]
+    async fn zero_result_rate_all_zero() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("a", 0, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("b", 0, 20)).await.unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert!((stats.zero_result_rate - 100.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn zero_result_rate_partial() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("a", 0, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("b", 5, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("c", 3, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("d", 0, 10)).await.unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert!((stats.zero_result_rate - 50.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn avg_latency_calculation() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("a", 1, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("b", 1, 20)).await.unwrap();
+        record_search_event(&db, &fts_event("c", 1, 30)).await.unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert!((stats.avg_latency_ms - 20.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn top_queries_ordered_by_frequency() {
+        let (db, _tmp) = setup().await;
+        for _ in 0..5 {
+            record_search_event(&db, &fts_event("popular", 1, 10)).await.unwrap();
+        }
+        for _ in 0..3 {
+            record_search_event(&db, &fts_event("medium", 1, 10)).await.unwrap();
+        }
+        record_search_event(&db, &fts_event("rare", 1, 10)).await.unwrap();
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.top_queries.len(), 3);
+        assert_eq!(stats.top_queries[0].query_text, "popular");
+        assert_eq!(stats.top_queries[0].count, 5);
+        assert_eq!(stats.top_queries[1].query_text, "medium");
+        assert_eq!(stats.top_queries[1].count, 3);
+        assert_eq!(stats.top_queries[2].query_text, "rare");
+        assert_eq!(stats.top_queries[2].count, 1);
+    }
+
+    #[tokio::test]
+    async fn top_queries_limited_to_10() {
+        let (db, _tmp) = setup().await;
+        for i in 0..15 {
+            record_search_event(&db, &fts_event(&format!("query-{i}"), 1, 10))
+                .await
+                .unwrap();
+        }
+
+        let stats = get_search_stats(&db, None).await.unwrap();
+        assert_eq!(stats.top_queries.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn temporal_filter_since_excludes_old_events() {
+        let (db, _tmp) = setup().await;
+        // Insert an event with an old timestamp
+        db.execute_unprepared(
+            "INSERT INTO search_events (query_text, search_type, result_count, latency_ms, created_at) \
+             VALUES ('old-query', 'fts', 1, 10, '2020-01-01T00:00:00')",
+        )
+        .await
+        .unwrap();
+        // Insert a recent event
+        record_search_event(&db, &fts_event("new-query", 2, 20)).await.unwrap();
+
+        let stats = get_search_stats(&db, Some("2025-01-01T00:00:00")).await.unwrap();
+        assert_eq!(stats.total_searches, 1);
+        assert_eq!(stats.top_queries[0].query_text, "new-query");
+    }
+
+    #[tokio::test]
+    async fn temporal_filter_since_includes_all_when_old() {
+        let (db, _tmp) = setup().await;
+        record_search_event(&db, &fts_event("a", 1, 10)).await.unwrap();
+        record_search_event(&db, &fts_event("b", 2, 20)).await.unwrap();
+
+        let stats = get_search_stats(&db, Some("2000-01-01T00:00:00")).await.unwrap();
+        assert_eq!(stats.total_searches, 2);
+    }
+
+    #[tokio::test]
+    async fn temporal_filter_affects_type_counts() {
+        let (db, _tmp) = setup().await;
+        db.execute_unprepared(
+            "INSERT INTO search_events (query_text, search_type, result_count, latency_ms, created_at) \
+             VALUES ('old', 'vector', 5, 50, '2020-01-01T00:00:00')",
+        )
+        .await
+        .unwrap();
+        record_search_event(
+            &db,
+            &SearchEvent {
+                query_text: "new".to_string(),
+                search_type: "hybrid".to_string(),
+                result_count: 3,
+                latency_ms: 30,
+                workspace_id: None,
+                agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats = get_search_stats(&db, Some("2025-01-01T00:00:00")).await.unwrap();
+        assert_eq!(stats.vector_count, 0);
+        assert_eq!(stats.hybrid_count, 1);
+    }
+
+    #[tokio::test]
+    async fn temporal_filter_affects_zero_result_rate() {
+        let (db, _tmp) = setup().await;
+        db.execute_unprepared(
+            "INSERT INTO search_events (query_text, search_type, result_count, latency_ms, created_at) \
+             VALUES ('old-zero', 'fts', 0, 10, '2020-01-01T00:00:00')",
+        )
+        .await
+        .unwrap();
+        record_search_event(&db, &fts_event("new-hit", 5, 10)).await.unwrap();
+
+        let stats = get_search_stats(&db, Some("2025-01-01T00:00:00")).await.unwrap();
+        assert_eq!(stats.zero_result_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn temporal_filter_affects_avg_latency() {
+        let (db, _tmp) = setup().await;
+        db.execute_unprepared(
+            "INSERT INTO search_events (query_text, search_type, result_count, latency_ms, created_at) \
+             VALUES ('old', 'fts', 1, 1000, '2020-01-01T00:00:00')",
+        )
+        .await
+        .unwrap();
+        record_search_event(&db, &fts_event("new", 1, 50)).await.unwrap();
+
+        let stats = get_search_stats(&db, Some("2025-01-01T00:00:00")).await.unwrap();
+        assert!((stats.avg_latency_ms - 50.0).abs() < 0.01);
+    }
+}
