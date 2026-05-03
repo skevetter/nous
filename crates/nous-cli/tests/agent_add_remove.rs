@@ -25,7 +25,11 @@ fn agent_add_full_definition() {
 
     let skills_dir = config_home.join("nous").join("skills");
     fs::create_dir_all(&skills_dir).unwrap();
-    fs::write(skills_dir.join("code-review.md"), "# Code Review\nGuidelines.").unwrap();
+    fs::write(
+        skills_dir.join("code-review.md"),
+        "# Code Review\nGuidelines.",
+    )
+    .unwrap();
 
     let toml_path = tmp.path().join("agent.toml");
     fs::write(
@@ -140,7 +144,14 @@ fn agent_remove_by_name() {
 
     // First register an agent
     let output = run_nous(
-        &["agent", "register", "--name", "removable", "--type", "engineer"],
+        &[
+            "agent",
+            "register",
+            "--name",
+            "removable",
+            "--type",
+            "engineer",
+        ],
         config_str,
         data_str,
     );
@@ -171,7 +182,14 @@ fn agent_remove_by_uuid() {
 
     // Register an agent to get its ID
     let output = run_nous(
-        &["agent", "register", "--name", "removable-uuid", "--type", "engineer"],
+        &[
+            "agent",
+            "register",
+            "--name",
+            "removable-uuid",
+            "--type",
+            "engineer",
+        ],
         config_str,
         data_str,
     );
@@ -205,7 +223,14 @@ fn agent_remove_cascade() {
 
     // Register parent
     let output = run_nous(
-        &["agent", "register", "--name", "parent-cascade", "--type", "manager"],
+        &[
+            "agent",
+            "register",
+            "--name",
+            "parent-cascade",
+            "--type",
+            "manager",
+        ],
         config_str,
         data_str,
     );
@@ -217,8 +242,14 @@ fn agent_remove_cascade() {
     // Register child
     let output = run_nous(
         &[
-            "agent", "register", "--name", "child-cascade", "--type", "engineer",
-            "--parent", parent_id,
+            "agent",
+            "register",
+            "--name",
+            "child-cascade",
+            "--type",
+            "engineer",
+            "--parent",
+            parent_id,
         ],
         config_str,
         data_str,
@@ -292,7 +323,11 @@ version = "1.0.0"
     assert_eq!(agent["name"].as_str().unwrap(), "roundtrip-agent");
 
     // Remove
-    let output = run_nous(&["agent", "remove", "roundtrip-agent"], config_str, data_str);
+    let output = run_nous(
+        &["agent", "remove", "roundtrip-agent"],
+        config_str,
+        data_str,
+    );
     assert!(output.status.success());
 
     // Verify it's gone

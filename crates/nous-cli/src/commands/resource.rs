@@ -302,8 +302,7 @@ async fn execute(
             println!("{}", serde_json::to_string_pretty(&resource)?);
         }
         ResourceCommands::Transfer { from, to } => {
-            let count =
-                resources::transfer_ownership(pool, &from, to.as_deref()).await?;
+            let count = resources::transfer_ownership(pool, &from, to.as_deref()).await?;
             println!("{{\"transferred\": {count}}}");
         }
     }

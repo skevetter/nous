@@ -10,15 +10,19 @@ use crate::tools::{
 
 fn canonicalize_path(path: &std::path::Path) -> Result<PathBuf, ToolError> {
     if path.exists() {
-        std::fs::canonicalize(path)
-            .map_err(|e| ToolError::InvalidArgs(format!("cannot resolve path '{}': {e}", path.display())))
+        std::fs::canonicalize(path).map_err(|e| {
+            ToolError::InvalidArgs(format!("cannot resolve path '{}': {e}", path.display()))
+        })
     } else {
         let mut current = path.to_path_buf();
         let mut tail = Vec::new();
         loop {
             if current.exists() {
                 let base = std::fs::canonicalize(&current).map_err(|e| {
-                    ToolError::InvalidArgs(format!("cannot resolve path '{}': {e}", current.display()))
+                    ToolError::InvalidArgs(format!(
+                        "cannot resolve path '{}': {e}",
+                        current.display()
+                    ))
                 })?;
                 let mut result = base;
                 for component in tail.into_iter().rev() {

@@ -10,8 +10,8 @@ use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
 use commands::resource::ResourceCommands;
 use commands::schedule::ScheduleCommands;
-use commands::task::TaskCommands;
 use commands::skill::SkillCommands;
+use commands::task::TaskCommands;
 use commands::worktree::WorktreeCommands;
 
 #[derive(Parser)]
