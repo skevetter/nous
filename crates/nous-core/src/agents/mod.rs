@@ -65,7 +65,7 @@ impl std::str::FromStr for AgentStatus {
             "blocked" => Ok(Self::Blocked),
             "done" => Ok(Self::Done),
             other => Err(NousError::Validation(format!(
-                "invalid agent status: '{other}'"
+                "invalid agent status: '{other}'. Valid values: active, inactive, archived, running, idle, blocked, done"
             ))),
         }
     }
@@ -107,7 +107,7 @@ impl std::str::FromStr for ArtifactType {
             "schedule" => Ok(Self::Schedule),
             "branch" => Ok(Self::Branch),
             other => Err(NousError::Validation(format!(
-                "invalid artifact type: '{other}'"
+                "invalid artifact type: '{other}'. Valid values: worktree, room, schedule, branch"
             ))),
         }
     }
@@ -146,7 +146,7 @@ impl std::str::FromStr for ArtifactStatus {
             "archived" => Ok(Self::Archived),
             "deleted" => Ok(Self::Deleted),
             other => Err(NousError::Validation(format!(
-                "invalid artifact status: '{other}'"
+                "invalid artifact status: '{other}'. Valid values: active, archived, deleted"
             ))),
         }
     }
