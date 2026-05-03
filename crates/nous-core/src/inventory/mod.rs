@@ -305,8 +305,7 @@ pub async fn search_fts(
     namespace: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<InventoryItem>, NousError> {
-    let resources =
-        crate::resources::search_fts(pool, query_str, namespace, limit).await?;
+    let resources = crate::resources::search_fts(pool, query_str, namespace, limit).await?;
     Ok(resources.iter().map(InventoryItem::from_resource).collect())
 }
 

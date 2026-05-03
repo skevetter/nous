@@ -475,11 +475,7 @@ pub async fn archive_resource(pool: &SqlitePool, id: &str) -> Result<Resource, N
     get_resource_by_id(pool, id).await
 }
 
-pub async fn deregister_resource(
-    pool: &SqlitePool,
-    id: &str,
-    hard: bool,
-) -> Result<(), NousError> {
+pub async fn deregister_resource(pool: &SqlitePool, id: &str, hard: bool) -> Result<(), NousError> {
     let existing = get_resource_by_id(pool, id).await?;
 
     if hard {
