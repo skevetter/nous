@@ -10,6 +10,7 @@ pub struct AgentDefinition {
     pub process: Option<ProcessSection>,
     pub skills: Option<SkillsSection>,
     pub tools: Option<ToolsSection>,
+    pub memory: Option<MemorySection>,
     pub metadata: Option<MetadataSection>,
 }
 
@@ -46,6 +47,57 @@ pub struct ExecutionConfig {
     pub max_retries: Option<u32>,
     pub max_output_bytes: Option<usize>,
     pub sandbox_required: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySection {
+    #[serde(default = "default_scope")]
+    pub scope: MemoryScope,
+    #[serde(default = "default_retrieval")]
+    pub retrieval: RetrievalStrategy,
+    #[serde(default = "default_context_size")]
+    pub context_size: u32,
+    #[serde(default)]
+    pub auto_save: Vec<String>,
+    #[serde(default = "default_importance")]
+    pub importance_default: String,
+    #[serde(default)]
+    pub session_tracking: bool,
+    pub workspace_override: Option<String>,
+}
+
+fn default_scope() -> MemoryScope {
+    MemoryScope::Agent
+}
+
+fn default_retrieval() -> RetrievalStrategy {
+    RetrievalStrategy::Hybrid
+}
+
+fn default_context_size() -> u32 {
+    5
+}
+
+fn default_importance() -> String {
+    "moderate".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    Workspace,
+    Agent,
+    Session,
+    Shared(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RetrievalStrategy {
+    Fts,
+    Vector,
+    Hybrid,
+    Recency,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,8 +142,50 @@ pub struct ResolvedSkill {
 pub fn load_definition(path: &Path) -> Result<AgentDefinition, NousError> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| NousError::Config(format!("failed to read {}: {e}", path.display())))?;
-    toml::from_str(&contents)
-        .map_err(|e| NousError::Config(format!("failed to parse {}: {e}", path.display())))
+    let def: AgentDefinition = toml::from_str(&contents)
+        .map_err(|e| NousError::Config(format!("failed to parse {}: {e}", path.display())))?;
+    validate_definition(&def)?;
+    Ok(def)
+}
+
+const VALID_MEMORY_TYPES: &[&str] = &[
+    "decision",
+    "convention",
+    "bugfix",
+    "architecture",
+    "fact",
+    "observation",
+];
+
+const VALID_IMPORTANCE_LEVELS: &[&str] = &["low", "moderate", "high"];
+
+fn validate_definition(def: &AgentDefinition) -> Result<(), NousError> {
+    if let Some(memory) = &def.memory {
+        for entry in &memory.auto_save {
+            if !VALID_MEMORY_TYPES.contains(&entry.as_str()) {
+                return Err(NousError::Validation(format!(
+                    "invalid auto_save type '{}': must be one of {:?}",
+                    entry, VALID_MEMORY_TYPES
+                )));
+            }
+        }
+
+        if !VALID_IMPORTANCE_LEVELS.contains(&memory.importance_default.as_str()) {
+            return Err(NousError::Validation(format!(
+                "invalid importance_default '{}': must be one of {:?}",
+                memory.importance_default, VALID_IMPORTANCE_LEVELS
+            )));
+        }
+
+        if let MemoryScope::Shared(ids) = &memory.scope {
+            if ids.is_empty() {
+                return Err(NousError::Validation(
+                    "shared scope requires at least one agent ID".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_skills(refs: &[String], skills_dir: &Path) -> Result<Vec<ResolvedSkill>, NousError> {
@@ -315,7 +409,10 @@ tags    = ["review", "quality"]
 
         let tools = def.tools.unwrap();
         let allow = tools.allow.unwrap();
-        assert_eq!(allow, vec!["fs_read", "fs_search", "code_grep", "shell_exec"]);
+        assert_eq!(
+            allow,
+            vec!["fs_read", "fs_search", "code_grep", "shell_exec"]
+        );
 
         let deny = tools.deny.unwrap();
         assert_eq!(deny, vec!["fs_delete", "shell_kill"]);
@@ -347,5 +444,161 @@ tags    = ["review", "quality"]
         let def: AgentDefinition = toml::from_str(toml_str).unwrap();
         assert!(def.tools.is_none());
         assert_eq!(def.agent.name, "reviewer");
+    }
+
+    #[test]
+    fn test_parse_memory_section() {
+        let toml_str = r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+scope = "workspace"
+retrieval = "hybrid"
+context_size = 10
+auto_save = ["decision", "convention"]
+importance_default = "high"
+session_tracking = true
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        let mem = def.memory.unwrap();
+        assert_eq!(mem.scope, MemoryScope::Workspace);
+        assert_eq!(mem.retrieval, RetrievalStrategy::Hybrid);
+        assert_eq!(mem.context_size, 10);
+        assert_eq!(mem.auto_save, vec!["decision", "convention"]);
+        assert_eq!(mem.importance_default, "high");
+        assert!(mem.session_tracking);
+        assert!(mem.workspace_override.is_none());
+    }
+
+    #[test]
+    fn test_parse_memory_defaults() {
+        let toml_str = r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        let mem = def.memory.unwrap();
+        assert_eq!(mem.scope, MemoryScope::Agent);
+        assert_eq!(mem.retrieval, RetrievalStrategy::Hybrid);
+        assert_eq!(mem.context_size, 5);
+        assert!(mem.auto_save.is_empty());
+        assert_eq!(mem.importance_default, "moderate");
+        assert!(!mem.session_tracking);
+        assert!(mem.workspace_override.is_none());
+    }
+
+    #[test]
+    fn test_parse_memory_shared_scope() {
+        let toml_str = r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+scope = {shared = ["agent-1", "agent-2"]}
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        let mem = def.memory.unwrap();
+        assert_eq!(
+            mem.scope,
+            MemoryScope::Shared(vec!["agent-1".to_string(), "agent-2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_validate_invalid_auto_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        std::fs::write(
+            &path,
+            r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+auto_save = ["decision", "invalid_type"]
+"#,
+        )
+        .unwrap();
+        let result = load_definition(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NousError::Validation(msg) => assert!(msg.contains("invalid_type")),
+            other => panic!("expected Validation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_invalid_importance() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        std::fs::write(
+            &path,
+            r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+importance_default = "critical"
+"#,
+        )
+        .unwrap();
+        let result = load_definition(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NousError::Validation(msg) => assert!(msg.contains("critical")),
+            other => panic!("expected Validation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_empty_shared_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        std::fs::write(
+            &path,
+            r#"
+[agent]
+name    = "mem-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[memory]
+scope = {shared = []}
+"#,
+        )
+        .unwrap();
+        let result = load_definition(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NousError::Validation(msg) => {
+                assert!(msg.contains("shared scope requires at least one agent ID"))
+            }
+            other => panic!("expected Validation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_backward_compat_no_memory() {
+        let def: AgentDefinition = toml::from_str(FULL_TOML).unwrap();
+        assert!(def.memory.is_none());
+        assert_eq!(def.agent.name, "reviewer");
+        assert_eq!(def.agent.r#type, "engineer");
+        assert_eq!(def.agent.version, "1.2.0");
+        assert!(def.process.is_some());
+        assert!(def.skills.is_some());
+        assert!(def.metadata.is_some());
     }
 }
