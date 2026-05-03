@@ -4,6 +4,18 @@ mod common;
 
 use nous_core::error::NousError;
 use nous_core::tasks;
+use sea_orm::ConnectionTrait;
+
+async fn seed_agents(pool: &nous_core::db::DatabaseConnection) {
+    for agent_id in [
+        "agent-1", "agent-42", "creator-1", "actor-1", "actor", "closer",
+        "alice", "bob", "new-agent",
+    ] {
+        pool.execute_unprepared(
+            &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+        ).await.unwrap();
+    }
+}
 
 #[tokio::test]
 async fn test_direct_cycle_detection_blocked_by() {
@@ -291,6 +303,7 @@ async fn test_create_task_minimal() {
 #[tokio::test]
 async fn test_create_task_full() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let labels = vec!["bug".to_string(), "urgent".to_string()];
     let task = tasks::create_task(tasks::CreateTaskParams {
@@ -421,6 +434,7 @@ async fn test_list_tasks_filter_by_status() {
 #[tokio::test]
 async fn test_list_tasks_filter_by_assignee() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -563,6 +577,7 @@ async fn test_list_tasks_pagination() {
 #[tokio::test]
 async fn test_update_task_status() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -652,6 +667,7 @@ async fn test_update_task_priority() {
 #[tokio::test]
 async fn test_update_task_assignee() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -695,6 +711,7 @@ async fn test_update_task_assignee() {
 #[tokio::test]
 async fn test_close_task() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Close me", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -780,6 +797,7 @@ async fn test_unlink_nonexistent_fails() {
 #[tokio::test]
 async fn test_add_note_auto_creates_room() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -811,6 +829,7 @@ async fn test_add_note_auto_creates_room() {
 #[tokio::test]
 async fn test_add_note_with_room() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -839,6 +858,7 @@ async fn test_add_note_with_room() {
 #[tokio::test]
 async fn test_task_history() {
     let (pools, _tmp) = common::setup_test_db().await;
+    seed_agents(&pools.fts).await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,

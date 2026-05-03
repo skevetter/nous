@@ -1332,6 +1332,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations().await.unwrap();
+        for agent_id in ["agent-1", "agent-2", "agent-3", "test-agent"] {
+            pools.fts.execute_unprepared(
+                &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+            ).await.unwrap();
+        }
         (pools.fts, pools.vec, tmp)
     }
 

@@ -379,6 +379,11 @@ mod tests {
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations().await.unwrap();
         let db = pools.fts.clone();
+        for agent_id in ["agent-1", "agent-2", "agent-3", "agent-eq", "persist-agent"] {
+            db.execute_unprepared(
+                &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+            ).await.unwrap();
+        }
         (db, tmp)
     }
 
