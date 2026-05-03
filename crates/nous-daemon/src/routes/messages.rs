@@ -1,5 +1,4 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
@@ -7,6 +6,7 @@ use serde::Deserialize;
 use nous_core::messages::{post_message, read_messages, PostMessageRequest, ReadMessagesRequest};
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -43,7 +43,7 @@ pub async fn post(
         Some(&state.registry),
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(msg)))
+    Ok(ApiResponse::created(msg))
 }
 
 pub async fn read(
@@ -62,5 +62,5 @@ pub async fn read(
         },
     )
     .await?;
-    Ok(Json(messages))
+    Ok(ApiResponse::ok(messages))
 }

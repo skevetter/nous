@@ -3,6 +3,7 @@ pub mod embedding;
 pub mod error;
 pub mod llm_client;
 pub mod process_manager;
+pub mod response;
 pub mod routes;
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
@@ -205,7 +206,7 @@ mod tests {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json, serde_json::json!({"status": "ok"}));
+        assert_eq!(json, serde_json::json!({"data": {"status": "ok"}}));
     }
 
     #[tokio::test]
@@ -234,8 +235,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["name"], "test-room");
-        assert_eq!(json["purpose"], "Testing");
+        assert_eq!(json["data"]["name"], "test-room");
+        assert_eq!(json["data"]["purpose"], "Testing");
     }
 
     #[tokio::test]
@@ -259,9 +260,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.len(), 1);
-        assert_eq!(json[0]["name"], "room-a");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["name"], "room-a");
     }
 
     #[tokio::test]
@@ -285,7 +287,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["name"], "get-room");
+        assert_eq!(json["data"]["name"], "get-room");
     }
 
     #[tokio::test]
@@ -357,8 +359,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["content"], "Hello!");
-        assert_eq!(json["sender_id"], "agent-1");
+        assert_eq!(json["data"]["content"], "Hello!");
+        assert_eq!(json["data"]["sender_id"], "agent-1");
     }
 
     #[tokio::test]
@@ -397,9 +399,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.len(), 1);
-        assert_eq!(json[0]["content"], "Test message");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["content"], "Test message");
     }
 
     #[tokio::test]
@@ -438,9 +441,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.len(), 1);
-        assert!(json[0]["content"].as_str().unwrap().contains("Deploy"));
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert!(data[0]["content"].as_str().unwrap().contains("Deploy"));
     }
 
     #[tokio::test]
@@ -527,9 +531,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["title"], "Test task");
-        assert_eq!(json["status"], "open");
-        assert_eq!(json["priority"], "medium");
+        assert_eq!(json["data"]["title"], "Test task");
+        assert_eq!(json["data"]["status"], "open");
+        assert_eq!(json["data"]["priority"], "medium");
     }
 
     #[tokio::test]
@@ -565,9 +569,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json.len(), 1);
-        assert_eq!(json[0]["title"], "Listed task");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["title"], "Listed task");
     }
 
     #[tokio::test]
@@ -604,7 +609,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["title"], "Get me");
+        assert_eq!(json["data"]["title"], "Get me");
     }
 
     #[tokio::test]
@@ -666,7 +671,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "in_progress");
+        assert_eq!(json["data"]["status"], "in_progress");
     }
 
     #[tokio::test]
@@ -704,8 +709,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "closed");
-        assert!(json["closed_at"].as_str().is_some());
+        assert_eq!(json["data"]["status"], "closed");
+        assert!(json["data"]["closed_at"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -939,7 +944,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["parent"].as_array().unwrap().len(), 1);
+        assert_eq!(json["data"]["parent"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -984,7 +989,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["content"], "A note");
+        assert_eq!(json["data"]["content"], "A note");
     }
 
     #[tokio::test]

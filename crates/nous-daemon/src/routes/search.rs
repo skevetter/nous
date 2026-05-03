@@ -1,11 +1,11 @@
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 
 use nous_core::messages::{search_messages, SearchMessagesRequest};
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -28,5 +28,5 @@ pub async fn search(
         },
     )
     .await?;
-    Ok(Json(results))
+    Ok(ApiResponse::ok(results))
 }

@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -85,7 +85,7 @@ pub async fn save(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(mem)))
+    Ok(ApiResponse::created(mem))
 }
 
 pub async fn get(
@@ -93,7 +93,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let mem = nous_core::memory::get_memory_by_id(&state.pool, &id).await?;
-    Ok(Json(mem))
+    Ok(ApiResponse::ok(mem))
 }
 
 pub async fn update(
@@ -121,7 +121,7 @@ pub async fn update(
         },
     )
     .await?;
-    Ok(Json(mem))
+    Ok(ApiResponse::ok(mem))
 }
 
 pub async fn search(
@@ -152,7 +152,7 @@ pub async fn search(
         },
     )
     .await?;
-    Ok(Json(results))
+    Ok(ApiResponse::ok(results))
 }
 
 pub async fn context(
@@ -169,7 +169,7 @@ pub async fn context(
         },
     )
     .await?;
-    Ok(Json(results))
+    Ok(ApiResponse::ok(results))
 }
 
 pub async fn relate(
@@ -186,7 +186,7 @@ pub async fn relate(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(rel)))
+    Ok(ApiResponse::created(rel))
 }
 
 pub async fn list_relations(
@@ -194,7 +194,7 @@ pub async fn list_relations(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let relations = nous_core::memory::list_relations(&state.pool, &id).await?;
-    Ok(Json(relations))
+    Ok(ApiResponse::ok(relations))
 }
 
 #[derive(Deserialize)]

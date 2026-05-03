@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -82,7 +82,7 @@ pub async fn register(
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(agent)))
+    Ok(ApiResponse::created(agent))
 }
 
 pub async fn get(
@@ -90,7 +90,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let agent = nous_core::agents::get_agent_by_id(&state.pool, &id).await?;
-    Ok(Json(agent))
+    Ok(ApiResponse::ok(agent))
 }
 
 pub async fn list(
@@ -114,7 +114,7 @@ pub async fn list(
     )
     .await?;
 
-    Ok(Json(agents))
+    Ok(ApiResponse::ok(agents))
 }
 
 pub async fn deregister(
@@ -124,7 +124,7 @@ pub async fn deregister(
 ) -> Result<impl IntoResponse, AppError> {
     let cascade = params.cascade.unwrap_or(false);
     let result = nous_core::agents::deregister_agent(&state.pool, &id, cascade).await?;
-    Ok(Json(serde_json::json!({ "result": result })))
+    Ok(ApiResponse::ok(serde_json::json!({ "result": result })))
 }
 
 pub async fn heartbeat(
@@ -138,7 +138,7 @@ pub async fn heartbeat(
         .map(|s| s.parse::<nous_core::agents::AgentStatus>())
         .transpose()?;
     nous_core::agents::heartbeat(&state.pool, &id, status).await?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(ApiResponse::ok(serde_json::json!({ "ok": true })))
 }
 
 pub async fn tree(
@@ -151,7 +151,7 @@ pub async fn tree(
         params.namespace.as_deref(),
     )
     .await?;
-    Ok(Json(tree))
+    Ok(ApiResponse::ok(tree))
 }
 
 pub async fn children(
@@ -161,7 +161,7 @@ pub async fn children(
 ) -> Result<impl IntoResponse, AppError> {
     let children =
         nous_core::agents::list_children(&state.pool, &id, params.namespace.as_deref()).await?;
-    Ok(Json(children))
+    Ok(ApiResponse::ok(children))
 }
 
 pub async fn ancestors(
@@ -171,7 +171,7 @@ pub async fn ancestors(
 ) -> Result<impl IntoResponse, AppError> {
     let ancestors =
         nous_core::agents::list_ancestors(&state.pool, &id, params.namespace.as_deref()).await?;
-    Ok(Json(ancestors))
+    Ok(ApiResponse::ok(ancestors))
 }
 
 pub async fn search(
@@ -185,7 +185,7 @@ pub async fn search(
         params.limit,
     )
     .await?;
-    Ok(Json(results))
+    Ok(ApiResponse::ok(results))
 }
 
 pub async fn stale(
@@ -196,7 +196,7 @@ pub async fn stale(
     let agents =
         nous_core::agents::list_stale_agents(&state.pool, threshold, params.namespace.as_deref())
             .await?;
-    Ok(Json(agents))
+    Ok(ApiResponse::ok(agents))
 }
 
 // --- Artifact routes ---
@@ -237,7 +237,7 @@ pub async fn register_artifact(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(artifact)))
+    Ok(ApiResponse::created(artifact))
 }
 
 pub async fn list_artifacts(
@@ -262,7 +262,7 @@ pub async fn list_artifacts(
         },
     )
     .await?;
-    Ok(Json(artifacts))
+    Ok(ApiResponse::ok(artifacts))
 }
 
 pub async fn deregister_artifact(
@@ -270,7 +270,7 @@ pub async fn deregister_artifact(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     nous_core::agents::deregister_artifact(&state.pool, &id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(crate::response::no_content())
 }
 
 // --- P7: Agent lifecycle, versioning, templates ---
@@ -288,7 +288,7 @@ pub async fn inspect(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let inspection = nous_core::agents::inspect_agent(&state.pool, &id).await?;
-    Ok(Json(inspection))
+    Ok(ApiResponse::ok(inspection))
 }
 
 pub async fn list_versions(
@@ -298,7 +298,7 @@ pub async fn list_versions(
 ) -> Result<impl IntoResponse, AppError> {
     let limit = params.limit;
     let versions = nous_core::agents::list_versions(&state.pool, &id, limit).await?;
-    Ok(Json(versions))
+    Ok(ApiResponse::ok(versions))
 }
 
 pub async fn record_version(
@@ -315,7 +315,7 @@ pub async fn record_version(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(version)))
+    Ok(ApiResponse::created(version))
 }
 
 pub async fn rollback(
@@ -324,7 +324,7 @@ pub async fn rollback(
     Json(body): Json<RollbackBody>,
 ) -> Result<impl IntoResponse, AppError> {
     let version = nous_core::agents::rollback_agent(&state.pool, &id, &body.version_id).await?;
-    Ok(Json(version))
+    Ok(ApiResponse::ok(version))
 }
 
 #[derive(Deserialize)]
@@ -337,7 +337,7 @@ pub async fn notify_upgrade(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     nous_core::agents::set_upgrade_available(&state.pool, &id, true).await?;
-    Ok(Json(serde_json::json!({"notified": true})))
+    Ok(ApiResponse::ok(serde_json::json!({"notified": true})))
 }
 
 pub async fn list_outdated(
@@ -350,7 +350,7 @@ pub async fn list_outdated(
         params.limit,
     )
     .await?;
-    Ok(Json(agents))
+    Ok(ApiResponse::ok(agents))
 }
 
 // --- Template routes ---
@@ -394,7 +394,7 @@ pub async fn create_template(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(template)))
+    Ok(ApiResponse::created(template))
 }
 
 pub async fn list_templates(
@@ -407,7 +407,7 @@ pub async fn list_templates(
         params.limit,
     )
     .await?;
-    Ok(Json(templates))
+    Ok(ApiResponse::ok(templates))
 }
 
 pub async fn get_template(
@@ -415,7 +415,7 @@ pub async fn get_template(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let template = nous_core::agents::get_template_by_id(&state.pool, &id).await?;
-    Ok(Json(template))
+    Ok(ApiResponse::ok(template))
 }
 
 pub async fn instantiate(
@@ -433,5 +433,5 @@ pub async fn instantiate(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(agent)))
+    Ok(ApiResponse::created(agent))
 }
