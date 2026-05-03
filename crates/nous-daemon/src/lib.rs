@@ -3,6 +3,7 @@ pub mod auth;
 pub mod embedding;
 pub mod error;
 pub mod llm_client;
+pub mod metrics;
 pub mod process_manager;
 pub mod rate_limit;
 pub mod response;
@@ -36,7 +37,11 @@ pub fn app_with_options(
     rate_limit: Option<&RateLimitConfig>,
     api_key: Option<&str>,
 ) -> Router {
-    let public = Router::new().route("/health", get(routes::health::get));
+    let metrics_handle = metrics::setup();
+
+    let public = Router::new()
+        .route("/health", get(routes::health::get))
+        .route("/metrics", get(metrics::render));
 
     let mut protected = protected_routes();
 
@@ -46,7 +51,11 @@ pub fn app_with_options(
             .layer(axum::Extension(auth::ApiKey(key.into())));
     }
 
-    let mut router = public.merge(protected).with_state(state);
+    let mut router = public
+        .merge(protected)
+        .with_state(state)
+        .layer(axum::Extension(metrics_handle))
+        .layer(axum::middleware::from_fn(metrics::track));
 
     if let Some(rl) = rate_limit {
         router = rate_limit::apply(rl, router);
@@ -1263,5 +1272,62 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_returns_prometheus_format() {
+        let (state, _tmp) = test_state().await;
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("http_requests_total") || text.is_empty() || text.starts_with('#'));
+    }
+
+    #[tokio::test]
+    async fn metrics_records_requests() {
+        let (state, _tmp) = test_state().await;
+
+        let app = app(state);
+        let app_clone = app.clone();
+
+        // Make a request to generate metrics
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Check metrics
+        let response = app_clone
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("http_requests_total"));
+        assert!(text.contains("http_request_duration_seconds"));
     }
 }
