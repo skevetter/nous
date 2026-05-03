@@ -186,20 +186,34 @@ impl ProcessRegistry {
 
         // Spawn the monitor task
         let state_clone = state.clone();
+        let monitor_agent_id = agent_id.to_string();
         tokio::spawn(async move {
-            Self::monitor_process(MonitorProcessParams {
-                state: state_clone,
-                process_id,
-                agent_id: agent_id_owned,
-                cancel,
-                timeout_secs: timeout,
-                restart_policy: restart_p,
-                max_restarts: max_r,
-                command: command_owned,
-                working_dir: working_dir_owned,
-                env: env_owned,
-            })
-            .await;
+            let result = std::panic::AssertUnwindSafe(
+                Self::monitor_process(MonitorProcessParams {
+                    state: state_clone,
+                    process_id,
+                    agent_id: agent_id_owned,
+                    cancel,
+                    timeout_secs: timeout,
+                    restart_policy: restart_p,
+                    max_restarts: max_r,
+                    command: command_owned,
+                    working_dir: working_dir_owned,
+                    env: env_owned,
+                }),
+            );
+            if let Err(panic_info) = futures::FutureExt::catch_unwind(result).await {
+                let msg = panic_info
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("unknown panic");
+                tracing::error!(
+                    agent_id = %monitor_agent_id,
+                    panic = %msg,
+                    "process monitor task panicked"
+                );
+            }
         });
 
         Ok(process)

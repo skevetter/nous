@@ -7,6 +7,7 @@ edition.workspace = true
 axum = "0.8"
 chrono = { workspace = true }
 dirs = { workspace = true }
+futures = "0.3"
 libc = "0.2"
 nous-core = { path = "../nous-core" }
 regex = "1"
