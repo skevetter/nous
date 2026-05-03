@@ -1,3 +1,4 @@
+pub mod agent_memory;
 pub mod embedding;
 pub mod error;
 pub mod llm_client;
