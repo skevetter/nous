@@ -9,10 +9,13 @@ use nous_core::agents;
 use nous_core::inventory;
 use nous_core::memory;
 use nous_core::messages::{
-    post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
-    SearchMessagesRequest,
+    get_thread, mark_read, post_message, read_messages, search_messages, unread_count,
+    GetThreadRequest, MarkReadRequest, MessageType, PostMessageRequest, ReadMessagesRequest,
+    SearchMessagesRequest, UnreadCountRequest,
 };
-use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
+use nous_core::notifications::{
+    room_wait, room_wait_persistent, subscribe_to_room, unsubscribe_from_room,
+};
 use nous_core::resources;
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::schedules;
@@ -107,7 +110,8 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                     "sender_id": { "type": "string" },
                     "content": { "type": "string" },
                     "reply_to": { "type": "string" },
-                    "metadata": { "type": "object" }
+                    "metadata": { "type": "object" },
+                    "message_type": { "type": "string", "enum": ["user", "system", "task_event", "command", "handoff"], "default": "user" }
                 },
                 "required": ["room_id", "sender_id", "content"]
             }),
@@ -141,13 +145,14 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
         },
         ToolSchema {
             name: "room_wait",
-            description: "Wait for a new message in a room",
+            description: "Wait for a new message in a room. When agent_id is provided, checks persistent notification queue first.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "room_id": { "type": "string" },
                     "timeout_ms": { "type": "integer" },
-                    "topics": { "type": "array", "items": { "type": "string" } }
+                    "topics": { "type": "array", "items": { "type": "string" } },
+                    "agent_id": { "type": "string", "description": "Agent ID for persistent wait (checks queued notifications first)" }
                 },
                 "required": ["room_id"]
             }),
@@ -1528,6 +1533,89 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+        ToolSchema {
+            name: "room_thread_view",
+            description: "View a message thread (root message and all replies)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string" },
+                    "root_message_id": { "type": "string" }
+                },
+                "required": ["room_id", "root_message_id"]
+            }),
+        },
+        ToolSchema {
+            name: "room_mark_read",
+            description: "Mark messages as read up to a given message ID",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "message_id": { "type": "string" }
+                },
+                "required": ["room_id", "agent_id", "message_id"]
+            }),
+        },
+        ToolSchema {
+            name: "room_unread_count",
+            description: "Get unread message count for an agent in a room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string" },
+                    "agent_id": { "type": "string" }
+                },
+                "required": ["room_id", "agent_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_presence",
+            description: "Post a presence status update for an agent to their registered room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string" },
+                    "status": { "type": "string", "enum": ["active", "idle", "blocked", "done"] }
+                },
+                "required": ["agent_id", "status"]
+            }),
+        },
+        ToolSchema {
+            name: "task_command",
+            description: "Execute a task operation from chat (close, assign, status, priority, link)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string", "description": "Room where command is issued" },
+                    "command": { "type": "string", "enum": ["close", "assign", "status", "priority", "link"] },
+                    "task_id": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "actor_id": { "type": "string" }
+                },
+                "required": ["command", "task_id", "actor_id"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_handoff",
+            description: "Send a structured work handoff from one agent to another",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "room_id": { "type": "string" },
+                    "from_agent": { "type": "string" },
+                    "to_agent": { "type": "string" },
+                    "task_id": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+                    "context": { "type": "object" },
+                    "deadline": { "type": "string" }
+                },
+                "required": ["room_id", "from_agent", "to_agent"]
+            }),
+        },
     ]
 }
 
@@ -1613,6 +1701,12 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(String::from);
             let metadata = args.get("metadata").filter(|v| !v.is_null()).cloned();
+            let message_type = args
+                .get("message_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<MessageType>())
+                .transpose()
+                .map_err(|e| nous_core::error::NousError::Validation(e))?;
             let msg = post_message(
                 &state.pool,
                 PostMessageRequest {
@@ -1621,6 +1715,7 @@ pub async fn dispatch(
                     content,
                     reply_to,
                     metadata,
+                    message_type,
                 },
                 Some(&state.registry),
             )
@@ -1674,7 +1769,20 @@ pub async fn dispatch(
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect()
                 });
-            let result = room_wait(&state.registry, room_id, timeout_ms, topics.as_deref()).await?;
+            let agent_id = args.get("agent_id").and_then(|v| v.as_str());
+            let result = if let Some(aid) = agent_id {
+                room_wait_persistent(
+                    &state.pool,
+                    &state.registry,
+                    room_id,
+                    aid,
+                    timeout_ms,
+                    topics.as_deref(),
+                )
+                .await?
+            } else {
+                room_wait(&state.registry, room_id, timeout_ms, topics.as_deref()).await?
+            };
             Ok(serde_json::to_value(result).unwrap())
         }
         "room_subscribe" => {
@@ -1721,6 +1829,7 @@ pub async fn dispatch(
                 room_id,
                 create_room_flag,
                 None,
+                None,
             )
             .await?;
             Ok(serde_json::to_value(task).unwrap())
@@ -1765,6 +1874,7 @@ pub async fn dispatch(
                 priority,
                 assignee_id,
                 description,
+                None,
                 None,
                 None,
             )
@@ -3450,6 +3560,137 @@ pub async fn dispatch(
             )
             .await?;
             Ok(serde_json::to_value(agent).unwrap())
+        }
+        "room_thread_view" => {
+            let room_id = require_str(args, "room_id")?.to_string();
+            let root_message_id = require_str(args, "root_message_id")?.to_string();
+            let thread = get_thread(
+                &state.pool,
+                GetThreadRequest {
+                    room_id,
+                    root_message_id,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(thread).unwrap())
+        }
+        "room_mark_read" => {
+            let room_id = require_str(args, "room_id")?.to_string();
+            let agent_id = require_str(args, "agent_id")?.to_string();
+            let message_id = require_str(args, "message_id")?.to_string();
+            let cursor = mark_read(
+                &state.pool,
+                MarkReadRequest {
+                    room_id,
+                    agent_id,
+                    message_id,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(cursor).unwrap())
+        }
+        "room_unread_count" => {
+            let room_id = require_str(args, "room_id")?.to_string();
+            let agent_id = require_str(args, "agent_id")?.to_string();
+            let cursor =
+                unread_count(&state.pool, UnreadCountRequest { room_id, agent_id }).await?;
+            Ok(serde_json::to_value(cursor).unwrap())
+        }
+        "agent_presence" => {
+            let agent_id = require_str(args, "agent_id")?;
+            let status = require_str(args, "status")?;
+            if !matches!(status, "active" | "idle" | "blocked" | "done") {
+                return Err(nous_core::error::NousError::Validation(format!(
+                    "invalid presence status: {status} (expected active, idle, blocked, or done)"
+                )));
+            }
+            let agent = agents::get_agent_by_id(&state.pool, agent_id).await?;
+            let room_id = agent.room.ok_or_else(|| {
+                nous_core::error::NousError::Validation(format!(
+                    "agent '{agent_id}' has no registered room"
+                ))
+            })?;
+            let metadata = serde_json::json!({
+                "topics": ["presence"],
+                "presence": { "agent_id": agent_id, "status": status }
+            });
+            let msg = post_message(
+                &state.pool,
+                PostMessageRequest {
+                    room_id,
+                    sender_id: agent_id.to_string(),
+                    content: format!("Agent {agent_id} is now {status}"),
+                    reply_to: None,
+                    metadata: Some(metadata),
+                    message_type: Some(MessageType::System),
+                },
+                Some(&state.registry),
+            )
+            .await?;
+            Ok(serde_json::to_value(msg).unwrap())
+        }
+        "task_command" => {
+            let command = require_str(args, "command")?.to_string();
+            let task_id = require_str(args, "task_id")?.to_string();
+            let actor_id = require_str(args, "actor_id")?.to_string();
+            let cmd_args: Vec<String> = args
+                .get("args")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+
+            let cmd = tasks::TaskCommand {
+                command,
+                task_id,
+                args: cmd_args,
+                actor_id,
+            };
+
+            let result =
+                tasks::execute_task_command(&state.pool, cmd, Some(&state.registry)).await?;
+            Ok(serde_json::to_value(result).unwrap())
+        }
+        "agent_handoff" => {
+            let room_id = require_str(args, "room_id")?.to_string();
+            let from_agent = require_str(args, "from_agent")?.to_string();
+            let to_agent = require_str(args, "to_agent")?.to_string();
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str().map(String::from));
+            let branch = args
+                .get("branch")
+                .and_then(|v| v.as_str().map(String::from));
+            let scope = args.get("scope").and_then(|v| v.as_str().map(String::from));
+            let acceptance_criteria: Vec<String> = args
+                .get("acceptance_criteria")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let context = args
+                .get("context")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let deadline = args
+                .get("deadline")
+                .and_then(|v| v.as_str().map(String::from));
+
+            let payload = agents::coordination::HandoffPayload {
+                task_id,
+                branch,
+                scope,
+                acceptance_criteria,
+                context,
+                deadline,
+            };
+
+            let msg = agents::coordination::post_handoff(
+                &state.pool,
+                Some(&state.registry),
+                &room_id,
+                &from_agent,
+                &to_agent,
+                payload,
+            )
+            .await?;
+            Ok(serde_json::to_value(msg).unwrap())
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

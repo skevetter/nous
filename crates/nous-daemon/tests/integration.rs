@@ -700,6 +700,7 @@ async fn e2e_worktree_lifecycle() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1777,6 +1778,7 @@ async fn mcp_room_mentions() {
             content: "Hey @agent-x please review this".into(),
             reply_to: None,
             metadata: None,
+            message_type: None,
         },
         None,
     )
@@ -1791,6 +1793,7 @@ async fn mcp_room_mentions() {
             content: "Unrelated message".into(),
             reply_to: None,
             metadata: None,
+            message_type: None,
         },
         None,
     )
@@ -1805,6 +1808,7 @@ async fn mcp_room_mentions() {
             content: "@agent-x second mention".into(),
             reply_to: None,
             metadata: None,
+            message_type: None,
         },
         None,
     )
@@ -1864,6 +1868,7 @@ async fn mcp_room_inspect() {
                 content: format!("Message {i}"),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )

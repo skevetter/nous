@@ -5,14 +5,26 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{broadcast, RwLock};
+use uuid::Uuid;
 
 use crate::error::NousError;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationPriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+    Urgent,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
     pub room_id: String,
     pub message_id: String,
     pub sender_id: String,
+    pub priority: NotificationPriority,
     pub topics: Vec<String>,
     pub mentions: Vec<String>,
 }
@@ -63,6 +75,30 @@ impl NotificationRegistry {
     pub async fn notify(&self, notification: Notification) {
         let sender = self.get_sender(&notification.room_id).await;
         let _ = sender.send(notification);
+    }
+
+    pub async fn notify_filtered(&self, pool: &SqlitePool, notification: Notification) {
+        let sender = self.get_sender(&notification.room_id).await;
+        let _ = sender.send(notification.clone());
+
+        let rows = sqlx::query("SELECT agent_id, topics FROM room_subscriptions WHERE room_id = ?")
+            .bind(&notification.room_id)
+            .fetch_all(pool)
+            .await;
+
+        if let Ok(rows) = rows {
+            for row in &rows {
+                let agent_id: String = row.get("agent_id");
+                let topics_str: Option<String> = row.try_get("topics").ok().flatten();
+                let sub_topics: Option<Vec<String>> = topics_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+
+                if should_notify_agent(&notification, &agent_id, sub_topics.as_deref()) {
+                    let _ = enqueue_notification(pool, &agent_id, &notification).await;
+                }
+            }
+        }
     }
 
     pub async fn remove_room(&self, room_id: &str) {
@@ -218,6 +254,136 @@ pub async fn room_wait(
     Ok(result)
 }
 
+pub fn should_notify_agent(
+    notification: &Notification,
+    agent_id: &str,
+    topics: Option<&[String]>,
+) -> bool {
+    if notification.mentions.iter().any(|m| m == agent_id) {
+        return true;
+    }
+
+    match topics {
+        None => true,
+        Some([]) => true,
+        Some(t) => notification.topics.iter().any(|nt| t.contains(nt)),
+    }
+}
+
+pub async fn enqueue_notification(
+    pool: &SqlitePool,
+    agent_id: &str,
+    notification: &Notification,
+) -> Result<(), NousError> {
+    let id = Uuid::now_v7().to_string();
+    let topics_json = serde_json::to_string(&notification.topics).unwrap_or_else(|_| "[]".into());
+    let mentions_json =
+        serde_json::to_string(&notification.mentions).unwrap_or_else(|_| "[]".into());
+    let priority = serde_json::to_string(&notification.priority)
+        .unwrap_or_else(|_| "\"normal\"".into())
+        .trim_matches('"')
+        .to_string();
+
+    sqlx::query(
+        "INSERT INTO notification_queue (id, agent_id, room_id, message_id, sender_id, priority, topics, mentions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(agent_id)
+    .bind(&notification.room_id)
+    .bind(&notification.message_id)
+    .bind(&notification.sender_id)
+    .bind(&priority)
+    .bind(&topics_json)
+    .bind(&mentions_json)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn dequeue_notification(
+    pool: &SqlitePool,
+    agent_id: &str,
+    room_id: Option<&str>,
+    topics: Option<&[String]>,
+) -> Result<Option<Notification>, NousError> {
+    let row = if let Some(rid) = room_id {
+        sqlx::query(
+            "SELECT id, room_id, message_id, sender_id, priority, topics, mentions FROM notification_queue WHERE agent_id = ? AND room_id = ? AND delivered = 0 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(agent_id)
+        .bind(rid)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, room_id, message_id, sender_id, priority, topics, mentions FROM notification_queue WHERE agent_id = ? AND delivered = 0 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(agent_id)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let queue_id: String = row.get("id");
+    let notif_topics: Vec<String> = row
+        .try_get::<String, _>("topics")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    if let Some(filter) = topics {
+        if !filter.is_empty() && !notif_topics.iter().any(|t| filter.contains(t)) {
+            return Ok(None);
+        }
+    }
+
+    sqlx::query("UPDATE notification_queue SET delivered = 1 WHERE id = ?")
+        .bind(&queue_id)
+        .execute(pool)
+        .await?;
+
+    let priority_str: String = row.try_get("priority").unwrap_or_else(|_| "normal".into());
+    let priority: NotificationPriority =
+        serde_json::from_str(&format!("\"{priority_str}\"")).unwrap_or_default();
+
+    let mentions: Vec<String> = row
+        .try_get::<String, _>("mentions")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    Ok(Some(Notification {
+        room_id: row.get("room_id"),
+        message_id: row.get("message_id"),
+        sender_id: row.get("sender_id"),
+        priority,
+        topics: notif_topics,
+        mentions,
+    }))
+}
+
+pub async fn room_wait_persistent(
+    pool: &SqlitePool,
+    registry: &NotificationRegistry,
+    room_id: &str,
+    agent_id: &str,
+    timeout_ms: Option<u64>,
+    topics: Option<&[String]>,
+) -> Result<WaitResult, NousError> {
+    if let Some(notification) = dequeue_notification(pool, agent_id, Some(room_id), topics).await? {
+        return Ok(WaitResult {
+            notification: Some(notification),
+            timed_out: false,
+        });
+    }
+
+    room_wait(registry, room_id, timeout_ms, topics).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +409,7 @@ mod tests {
             room_id: "room-1".into(),
             message_id: "msg-1".into(),
             sender_id: "agent-1".into(),
+            priority: NotificationPriority::Normal,
             topics: vec!["general".into()],
             mentions: vec![],
         };
@@ -267,6 +434,7 @@ mod tests {
                     room_id: "room-wait".into(),
                     message_id: "msg-wait".into(),
                     sender_id: "sender-1".into(),
+                    priority: NotificationPriority::Normal,
                     topics: vec![],
                     mentions: vec![],
                 })
@@ -308,6 +476,7 @@ mod tests {
                     room_id: "topic-room".into(),
                     message_id: "msg-unrelated".into(),
                     sender_id: "sender-1".into(),
+                    priority: NotificationPriority::Normal,
                     topics: vec!["unrelated".into()],
                     mentions: vec![],
                 })
@@ -319,6 +488,7 @@ mod tests {
                     room_id: "topic-room".into(),
                     message_id: "msg-matching".into(),
                     sender_id: "sender-1".into(),
+                    priority: NotificationPriority::Normal,
                     topics: vec!["deploy".into()],
                     mentions: vec![],
                 })
@@ -377,6 +547,7 @@ mod tests {
                 content: "Deploy started".into(),
                 reply_to: None,
                 metadata: Some(metadata),
+                message_type: None,
             },
             Some(&registry),
         )
@@ -388,5 +559,140 @@ mod tests {
         assert_eq!(notification.sender_id, "agent-1");
         assert_eq!(notification.topics, vec!["deployment"]);
         assert_eq!(notification.mentions, vec!["agent-2"]);
+    }
+
+    #[test]
+    fn test_should_notify_agent_mention_always() {
+        let notification = Notification {
+            room_id: "r".into(),
+            message_id: "m".into(),
+            sender_id: "s".into(),
+            priority: NotificationPriority::Normal,
+            topics: vec!["deploy".into()],
+            mentions: vec!["agent-x".into()],
+        };
+        let unrelated_topics = vec!["ci".into()];
+        assert!(should_notify_agent(
+            &notification,
+            "agent-x",
+            Some(&unrelated_topics)
+        ));
+    }
+
+    #[test]
+    fn test_should_notify_agent_topic_match() {
+        let notification = Notification {
+            room_id: "r".into(),
+            message_id: "m".into(),
+            sender_id: "s".into(),
+            priority: NotificationPriority::Normal,
+            topics: vec!["deploy".into(), "ci".into()],
+            mentions: vec![],
+        };
+        let topics = vec!["ci".into()];
+        assert!(should_notify_agent(&notification, "agent-y", Some(&topics)));
+    }
+
+    #[test]
+    fn test_should_notify_agent_topic_mismatch() {
+        let notification = Notification {
+            room_id: "r".into(),
+            message_id: "m".into(),
+            sender_id: "s".into(),
+            priority: NotificationPriority::Normal,
+            topics: vec!["deploy".into()],
+            mentions: vec![],
+        };
+        let topics = vec!["ci".into()];
+        assert!(!should_notify_agent(
+            &notification,
+            "agent-z",
+            Some(&topics)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_dequeue_notification() {
+        let (pool, _tmp) = setup().await;
+
+        let notification = Notification {
+            room_id: "room-eq".into(),
+            message_id: "msg-eq".into(),
+            sender_id: "sender-eq".into(),
+            priority: NotificationPriority::High,
+            topics: vec!["build".into()],
+            mentions: vec!["agent-eq".into()],
+        };
+
+        enqueue_notification(&pool, "agent-eq", &notification)
+            .await
+            .unwrap();
+
+        let dequeued = dequeue_notification(&pool, "agent-eq", None, None)
+            .await
+            .unwrap();
+        assert!(dequeued.is_some());
+        let d = dequeued.unwrap();
+        assert_eq!(d.room_id, "room-eq");
+        assert_eq!(d.message_id, "msg-eq");
+        assert_eq!(d.priority, NotificationPriority::High);
+        assert_eq!(d.topics, vec!["build".to_string()]);
+        assert_eq!(d.mentions, vec!["agent-eq".to_string()]);
+
+        let again = dequeue_notification(&pool, "agent-eq", None, None)
+            .await
+            .unwrap();
+        assert!(again.is_none());
+    }
+
+    #[test]
+    fn test_notification_priority_derivation() {
+        assert_eq!(
+            NotificationPriority::default(),
+            NotificationPriority::Normal
+        );
+
+        let low = NotificationPriority::Low;
+        let urgent = NotificationPriority::Urgent;
+        assert_ne!(low, urgent);
+
+        let json = serde_json::to_string(&NotificationPriority::High).unwrap();
+        assert_eq!(json, "\"high\"");
+        let parsed: NotificationPriority = serde_json::from_str("\"urgent\"").unwrap();
+        assert_eq!(parsed, NotificationPriority::Urgent);
+    }
+
+    #[tokio::test]
+    async fn test_room_wait_persistent_checks_queue_first() {
+        let (pool, _tmp) = setup().await;
+        let registry = NotificationRegistry::new();
+
+        let notification = Notification {
+            room_id: "persist-room".into(),
+            message_id: "persist-msg".into(),
+            sender_id: "persist-sender".into(),
+            priority: NotificationPriority::Normal,
+            topics: vec![],
+            mentions: vec![],
+        };
+
+        enqueue_notification(&pool, "persist-agent", &notification)
+            .await
+            .unwrap();
+
+        let result = room_wait_persistent(
+            &pool,
+            &registry,
+            "persist-room",
+            "persist-agent",
+            Some(50),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.timed_out);
+        assert!(result.notification.is_some());
+        assert_eq!(result.notification.unwrap().message_id, "persist-msg");
     }
 }

@@ -12,6 +12,24 @@ pub struct AgentDefinition {
     pub tools: Option<ToolsSection>,
     pub memory: Option<MemorySection>,
     pub metadata: Option<MetadataSection>,
+    pub chat: Option<ChatSection>,
+    pub tasks: Option<TaskSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatSection {
+    pub auto_subscribe: Option<Vec<String>>,
+    pub presence_broadcast: Option<bool>,
+    pub message_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TaskSection {
+    pub can_create: Option<bool>,
+    pub can_assign: Option<bool>,
+    pub can_close: Option<bool>,
+    pub auto_accept_assignments: Option<bool>,
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -600,5 +618,150 @@ scope = {shared = []}
         assert!(def.process.is_some());
         assert!(def.skills.is_some());
         assert!(def.metadata.is_some());
+    }
+
+    #[test]
+    fn test_parse_definition_with_chat_section() {
+        let toml_str = r#"
+[agent]
+name    = "chat-agent"
+type    = "engineer"
+version = "1.0.0"
+
+[chat]
+auto_subscribe = ["coord-team-alpha", "ns-eng"]
+presence_broadcast = true
+message_types = ["user", "handoff", "command"]
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        let chat = def.chat.unwrap();
+        assert_eq!(
+            chat.auto_subscribe.as_deref(),
+            Some(vec!["coord-team-alpha".to_string(), "ns-eng".to_string()].as_slice())
+        );
+        assert_eq!(chat.presence_broadcast, Some(true));
+        assert_eq!(
+            chat.message_types.as_deref(),
+            Some(
+                vec![
+                    "user".to_string(),
+                    "handoff".to_string(),
+                    "command".to_string()
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_definition_with_tasks_section() {
+        let toml_str = r#"
+[agent]
+name    = "task-agent"
+type    = "manager"
+version = "1.0.0"
+
+[tasks]
+can_create = true
+can_assign = true
+can_close = false
+auto_accept_assignments = true
+labels = ["eng", "impl"]
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        let tasks = def.tasks.unwrap();
+        assert_eq!(tasks.can_create, Some(true));
+        assert_eq!(tasks.can_assign, Some(true));
+        assert_eq!(tasks.can_close, Some(false));
+        assert_eq!(tasks.auto_accept_assignments, Some(true));
+        assert_eq!(
+            tasks.labels.as_deref(),
+            Some(vec!["eng".to_string(), "impl".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn test_parse_definition_minimal_no_chat_tasks() {
+        let toml_str = r#"
+[agent]
+name    = "minimal"
+type    = "engineer"
+version = "0.1.0"
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        assert!(def.chat.is_none());
+        assert!(def.tasks.is_none());
+    }
+
+    #[test]
+    fn test_parse_definition_with_both_chat_and_tasks() {
+        let toml_str = r#"
+[agent]
+name        = "coordinator"
+type        = "manager"
+version     = "1.0.0"
+namespace   = "eng"
+description = "Coordinates engineering tasks"
+
+[process]
+type          = "claude"
+spawn_command = "claude --model claude-opus-4-6"
+
+[skills]
+refs = ["planning", "code-review"]
+
+[metadata]
+model   = "global.anthropic.claude-opus-4-6-v1"
+timeout = 7200
+tags    = ["coordination", "management"]
+
+[chat]
+auto_subscribe     = ["ns-eng", "coord-coordinator"]
+presence_broadcast = true
+message_types      = ["user", "handoff", "command", "task_event"]
+
+[tasks]
+can_create              = true
+can_assign              = true
+can_close               = true
+auto_accept_assignments = false
+labels                  = ["managed"]
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(def.agent.name, "coordinator");
+        assert_eq!(def.agent.namespace.as_deref(), Some("eng"));
+        assert!(def.process.is_some());
+        assert!(def.skills.is_some());
+        assert!(def.metadata.is_some());
+
+        let chat = def.chat.unwrap();
+        assert_eq!(
+            chat.auto_subscribe.as_deref(),
+            Some(vec!["ns-eng".to_string(), "coord-coordinator".to_string()].as_slice())
+        );
+        assert_eq!(chat.presence_broadcast, Some(true));
+        assert_eq!(
+            chat.message_types.as_deref(),
+            Some(
+                vec![
+                    "user".to_string(),
+                    "handoff".to_string(),
+                    "command".to_string(),
+                    "task_event".to_string()
+                ]
+                .as_slice()
+            )
+        );
+
+        let tasks = def.tasks.unwrap();
+        assert_eq!(tasks.can_create, Some(true));
+        assert_eq!(tasks.can_assign, Some(true));
+        assert_eq!(tasks.can_close, Some(true));
+        assert_eq!(tasks.auto_accept_assignments, Some(false));
+        assert_eq!(
+            tasks.labels.as_deref(),
+            Some(vec!["managed".to_string()].as_slice())
+        );
     }
 }

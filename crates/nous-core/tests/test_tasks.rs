@@ -12,12 +12,12 @@ async fn test_direct_cycle_detection_blocked_by() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None,
+        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None,
+        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -44,17 +44,17 @@ async fn test_indirect_cycle_detection_parent() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None,
+        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None,
+        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let task_c = tasks::create_task(
-        &pools.fts, "Task C", None, None, None, None, None, false, None,
+        &pools.fts, "Task C", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -84,12 +84,12 @@ async fn test_related_to_allows_bidirectional() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None,
+        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None,
+        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -120,6 +120,7 @@ async fn test_fts_trigger_on_insert() {
         None,
         None,
         false,
+        None,
         None,
     )
     .await
@@ -160,6 +161,7 @@ async fn test_fts_trigger_on_update() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -174,6 +176,7 @@ async fn test_fts_trigger_on_update() {
         Some("Updated description with unique word"), // description
         None,                                         // labels
         None,                                         // actor_id
+        None,
     )
     .await
     .unwrap();
@@ -205,6 +208,7 @@ async fn test_tasks_au_trigger_updates_timestamp() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -220,6 +224,7 @@ async fn test_tasks_au_trigger_updates_timestamp() {
         &pools.fts,
         &task.id,
         Some("in_progress"), // status
+        None,
         None,
         None,
         None,
@@ -264,6 +269,7 @@ async fn test_create_task_minimal() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -297,6 +303,7 @@ async fn test_create_task_full() {
         None,
         false,
         Some("creator-1"),
+        None,
     )
     .await
     .unwrap();
@@ -316,8 +323,10 @@ async fn test_create_task_empty_title_fails() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations("porter unicode61").await.unwrap();
 
-    let result =
-        tasks::create_task(&pools.fts, "  ", None, None, None, None, None, false, None).await;
+    let result = tasks::create_task(
+        &pools.fts, "  ", None, None, None, None, None, false, None, None,
+    )
+    .await;
     assert!(matches!(result, Err(NousError::Validation(_))));
 
     pools.close().await;
@@ -338,6 +347,7 @@ async fn test_create_task_with_room_creation() {
         None,
         None,
         true,
+        None,
         None,
     )
     .await
@@ -367,6 +377,7 @@ async fn test_list_tasks_filter_by_status() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -379,6 +390,7 @@ async fn test_list_tasks_filter_by_status() {
         None,
         None,
         false,
+        None,
         None,
     )
     .await
@@ -426,6 +438,7 @@ async fn test_list_tasks_filter_by_assignee() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -438,6 +451,7 @@ async fn test_list_tasks_filter_by_assignee() {
         None,
         None,
         false,
+        None,
         None,
     )
     .await
@@ -479,6 +493,7 @@ async fn test_list_tasks_filter_by_label() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -491,6 +506,7 @@ async fn test_list_tasks_filter_by_label() {
         Some(&labels_feat),
         None,
         false,
+        None,
         None,
     )
     .await
@@ -521,6 +537,7 @@ async fn test_list_tasks_pagination() {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -561,6 +578,7 @@ async fn test_update_task_status() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -573,6 +591,7 @@ async fn test_update_task_status() {
         None,
         None,
         Some("actor-1"),
+        None,
     )
     .await
     .unwrap();
@@ -607,6 +626,7 @@ async fn test_update_task_priority() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -615,6 +635,7 @@ async fn test_update_task_priority() {
         &task.id,
         None,
         Some("critical"),
+        None,
         None,
         None,
         None,
@@ -650,6 +671,7 @@ async fn test_update_task_assignee() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -659,6 +681,7 @@ async fn test_update_task_assignee() {
         None,
         None,
         Some("new-agent"),
+        None,
         None,
         None,
         None,
@@ -684,7 +707,7 @@ async fn test_close_task() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let task = tasks::create_task(
-        &pools.fts, "Close me", None, None, None, None, None, false, None,
+        &pools.fts, "Close me", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -717,12 +740,12 @@ async fn test_link_then_unlink() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let t1 = tasks::create_task(
-        &pools.fts, "Task 1", None, None, None, None, None, false, None,
+        &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let t2 = tasks::create_task(
-        &pools.fts, "Task 2", None, None, None, None, None, false, None,
+        &pools.fts, "Task 2", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -754,12 +777,12 @@ async fn test_unlink_nonexistent_fails() {
     pools.run_migrations("porter unicode61").await.unwrap();
 
     let t1 = tasks::create_task(
-        &pools.fts, "Task 1", None, None, None, None, None, false, None,
+        &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
     let t2 = tasks::create_task(
-        &pools.fts, "Task 2", None, None, None, None, None, false, None,
+        &pools.fts, "Task 2", None, None, None, None, None, false, None, None,
     )
     .await
     .unwrap();
@@ -785,6 +808,7 @@ async fn test_add_note_auto_creates_room() {
         None,
         None,
         false,
+        None,
         None,
     )
     .await
@@ -818,6 +842,7 @@ async fn test_add_note_with_room() {
         None,
         true,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -847,6 +872,7 @@ async fn test_task_history() {
         None,
         false,
         Some("actor"),
+        None,
     )
     .await
     .unwrap();
@@ -859,6 +885,7 @@ async fn test_task_history() {
         None,
         None,
         Some("actor"),
+        None,
     )
     .await
     .unwrap();
@@ -906,6 +933,7 @@ async fn test_search_tasks_finds_by_title() {
         None,
         false,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -918,6 +946,7 @@ async fn test_search_tasks_finds_by_title() {
         None,
         None,
         false,
+        None,
         None,
     )
     .await

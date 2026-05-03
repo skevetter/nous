@@ -1,3 +1,4 @@
+pub mod coordination;
 pub mod definition;
 pub mod processes;
 pub mod sandbox;
@@ -8,6 +9,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::NousError;
+use crate::notifications::subscribe_to_room;
+use crate::rooms;
 
 // --- Types ---
 
@@ -362,6 +365,27 @@ pub async fn register_agent(
         .bind(&namespace)
         .execute(pool)
         .await?;
+
+        let parent = get_agent_by_id(pool, parent_id).await?;
+        let coord_room_name = format!("coord-{}-{}", namespace, parent.name);
+        match rooms::create_room(
+            pool,
+            &coord_room_name,
+            Some(&format!("Coordination room for {}", parent.name)),
+            None,
+        )
+        .await
+        {
+            Ok(room) => {
+                subscribe_to_room(pool, &room.id, parent_id, None).await?;
+                subscribe_to_room(pool, &room.id, &id, None).await?;
+            }
+            Err(NousError::Conflict(_)) => {
+                let room = rooms::get_room(pool, &coord_room_name).await?;
+                subscribe_to_room(pool, &room.id, &id, None).await?;
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     get_agent_by_id(pool, &id).await

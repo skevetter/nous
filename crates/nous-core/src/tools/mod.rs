@@ -309,6 +309,8 @@ mod resolve_tests {
             tools: None,
             memory: None,
             metadata: None,
+            chat: None,
+            tasks: None,
         }
     }
 

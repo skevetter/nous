@@ -375,6 +375,7 @@ mod tests {
                 content: "Test message".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -415,6 +416,7 @@ mod tests {
                 content: "Deploy completed successfully".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -461,7 +463,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 114);
+        assert_eq!(tools.len(), 120);
     }
 
     #[tokio::test]
@@ -543,6 +545,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -579,6 +582,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -634,6 +638,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -677,6 +682,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -715,6 +721,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -727,6 +734,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -770,6 +778,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -782,6 +791,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -829,6 +839,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -841,6 +852,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -888,6 +900,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -900,6 +913,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await
@@ -940,6 +954,7 @@ mod tests {
             None,
             None,
             true,
+            None,
             None,
         )
         .await
@@ -1017,6 +1032,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .await

@@ -5,8 +5,10 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::agents;
 use crate::error::NousError;
-use crate::messages;
+use crate::messages::{self, MessageType, PostMessageRequest};
+use crate::notifications::NotificationRegistry;
 use crate::rooms;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,204 @@ pub struct TaskLinks {
     pub related_to: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCommand {
+    pub command: String,
+    pub task_id: String,
+    pub args: Vec<String>,
+    pub actor_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCommandResult {
+    pub command: String,
+    pub task_id: String,
+    pub success: bool,
+    pub message: String,
+    pub task: Option<Task>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn post_task_event_to_room(
+    pool: &SqlitePool,
+    registry: Option<&NotificationRegistry>,
+    task_id: &str,
+    room_id: &str,
+    event_type: &str,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+    actor_id: Option<&str>,
+) -> Result<(), NousError> {
+    let content = match event_type {
+        "status_changed" => format!(
+            "Task status: {} → {}",
+            old_value.unwrap_or("none"),
+            new_value.unwrap_or("none")
+        ),
+        "assigned" => format!(
+            "Task assigned: {} → {}",
+            old_value.unwrap_or("none"),
+            new_value.unwrap_or("none")
+        ),
+        "priority_changed" => format!(
+            "Task priority: {} → {}",
+            old_value.unwrap_or("none"),
+            new_value.unwrap_or("none")
+        ),
+        "linked" => format!("Task linked: {}", new_value.unwrap_or("")),
+        "created" => format!("Task created: {}", new_value.unwrap_or("")),
+        _ => format!("Task event: {event_type}"),
+    };
+
+    let metadata = serde_json::json!({
+        "message_type": "task_event",
+        "topics": [format!("task:{task_id}")],
+        "task_event": {
+            "task_id": task_id,
+            "event_type": event_type,
+            "old_value": old_value,
+            "new_value": new_value,
+            "actor_id": actor_id,
+        }
+    });
+
+    let sender = actor_id.unwrap_or("system");
+
+    messages::post_message(
+        pool,
+        PostMessageRequest {
+            room_id: room_id.to_string(),
+            sender_id: sender.to_string(),
+            content,
+            reply_to: None,
+            metadata: Some(metadata),
+            message_type: Some(MessageType::TaskEvent),
+        },
+        registry,
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub async fn execute_task_command(
+    pool: &SqlitePool,
+    cmd: TaskCommand,
+    registry: Option<&NotificationRegistry>,
+) -> Result<TaskCommandResult, NousError> {
+    let make_result = |success: bool, message: String, task: Option<Task>| -> TaskCommandResult {
+        TaskCommandResult {
+            command: cmd.command.clone(),
+            task_id: cmd.task_id.clone(),
+            success,
+            message,
+            task,
+        }
+    };
+
+    match cmd.command.as_str() {
+        "close" => {
+            let task = close_task(pool, &cmd.task_id, Some(&cmd.actor_id)).await?;
+            Ok(make_result(true, "Task closed".to_string(), Some(task)))
+        }
+        "assign" => {
+            if cmd.args.is_empty() {
+                return Err(NousError::Validation(
+                    "assign command requires 1 argument: assignee_id".into(),
+                ));
+            }
+            let task = update_task(
+                pool,
+                &cmd.task_id,
+                None,
+                None,
+                Some(&cmd.args[0]),
+                None,
+                None,
+                Some(&cmd.actor_id),
+                registry,
+            )
+            .await?;
+            Ok(make_result(
+                true,
+                format!("Task assigned to {}", cmd.args[0]),
+                Some(task),
+            ))
+        }
+        "status" => {
+            if cmd.args.is_empty() {
+                return Err(NousError::Validation(
+                    "status command requires 1 argument: new_status".into(),
+                ));
+            }
+            let task = update_task(
+                pool,
+                &cmd.task_id,
+                Some(&cmd.args[0]),
+                None,
+                None,
+                None,
+                None,
+                Some(&cmd.actor_id),
+                registry,
+            )
+            .await?;
+            Ok(make_result(
+                true,
+                format!("Task status set to {}", cmd.args[0]),
+                Some(task),
+            ))
+        }
+        "priority" => {
+            if cmd.args.is_empty() {
+                return Err(NousError::Validation(
+                    "priority command requires 1 argument: new_priority".into(),
+                ));
+            }
+            let task = update_task(
+                pool,
+                &cmd.task_id,
+                None,
+                Some(&cmd.args[0]),
+                None,
+                None,
+                None,
+                Some(&cmd.actor_id),
+                registry,
+            )
+            .await?;
+            Ok(make_result(
+                true,
+                format!("Task priority set to {}", cmd.args[0]),
+                Some(task),
+            ))
+        }
+        "link" => {
+            if cmd.args.len() < 2 {
+                return Err(NousError::Validation(
+                    "link command requires 2 arguments: target_id, link_type".into(),
+                ));
+            }
+            link_tasks(
+                pool,
+                &cmd.task_id,
+                &cmd.args[0],
+                &cmd.args[1],
+                Some(&cmd.actor_id),
+            )
+            .await?;
+            Ok(make_result(
+                true,
+                format!("Task linked to {} as {}", cmd.args[0], cmd.args[1]),
+                None,
+            ))
+        }
+        other => Err(NousError::Validation(format!(
+            "unknown task command: '{other}'"
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_task(
     pool: &SqlitePool,
@@ -122,6 +322,7 @@ pub async fn create_task(
     room_id: Option<&str>,
     create_room: bool,
     actor_id: Option<&str>,
+    registry: Option<&NotificationRegistry>,
 ) -> Result<Task, NousError> {
     if title.trim().is_empty() {
         return Err(NousError::Validation("task title cannot be empty".into()));
@@ -169,6 +370,20 @@ pub async fn create_task(
     .bind(actor_id)
     .execute(pool)
     .await?;
+
+    if let Some(ref rid) = effective_room_id {
+        let _ = post_task_event_to_room(
+            pool,
+            registry,
+            &id,
+            rid,
+            "created",
+            None,
+            Some(title),
+            actor_id,
+        )
+        .await;
+    }
 
     let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
         .bind(&id)
@@ -294,6 +509,7 @@ pub async fn update_task(
     description: Option<&str>,
     labels: Option<&[String]>,
     actor_id: Option<&str>,
+    registry: Option<&NotificationRegistry>,
 ) -> Result<Task, NousError> {
     let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
         .bind(id)
@@ -329,6 +545,20 @@ pub async fn update_task(
                     .execute(pool)
                     .await?;
             }
+
+            if let Some(ref rid) = existing.room_id {
+                let _ = post_task_event_to_room(
+                    pool,
+                    registry,
+                    id,
+                    rid,
+                    "status_changed",
+                    Some(&existing.status),
+                    Some(new_status),
+                    actor_id,
+                )
+                .await;
+            }
         }
     }
 
@@ -351,12 +581,44 @@ pub async fn update_task(
                 .bind(id)
                 .execute(pool)
                 .await?;
+
+            if let Some(ref rid) = existing.room_id {
+                let _ = post_task_event_to_room(
+                    pool,
+                    registry,
+                    id,
+                    rid,
+                    "priority_changed",
+                    Some(&existing.priority),
+                    Some(new_priority),
+                    actor_id,
+                )
+                .await;
+            }
         }
     }
 
     if let Some(new_assignee) = assignee_id {
         let old_assignee = existing.assignee_id.as_deref().unwrap_or("");
         if new_assignee != old_assignee {
+            match agents::get_agent_by_id(pool, new_assignee).await {
+                Ok(agent) => {
+                    tracing::info!(
+                        task_id = id,
+                        assignee = new_assignee,
+                        agent_name = %agent.name,
+                        "task assigned to registered agent"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        task_id = id,
+                        assignee = new_assignee,
+                        "task assigned to unregistered agent ID"
+                    );
+                }
+            }
+
             let event_id = Uuid::now_v7().to_string();
             sqlx::query(
                 "INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
@@ -374,6 +636,20 @@ pub async fn update_task(
                 .bind(id)
                 .execute(pool)
                 .await?;
+
+            if let Some(ref rid) = existing.room_id {
+                let _ = post_task_event_to_room(
+                    pool,
+                    registry,
+                    id,
+                    rid,
+                    "assigned",
+                    Some(old_assignee),
+                    Some(new_assignee),
+                    actor_id,
+                )
+                .await;
+            }
         }
     }
 
@@ -407,7 +683,18 @@ pub async fn close_task(
     id: &str,
     actor_id: Option<&str>,
 ) -> Result<Task, NousError> {
-    update_task(pool, id, Some("closed"), None, None, None, None, actor_id).await
+    update_task(
+        pool,
+        id,
+        Some("closed"),
+        None,
+        None,
+        None,
+        None,
+        actor_id,
+        None,
+    )
+    .await
 }
 
 pub async fn link_tasks(
@@ -599,6 +886,7 @@ pub async fn add_note(
             content: content.to_string(),
             reply_to: None,
             metadata: Some(metadata),
+            message_type: None,
         },
         None,
     )
@@ -973,6 +1261,7 @@ pub async fn create_from_template(
         None,
         false,
         None,
+        None,
     )
     .await
 }
@@ -1017,7 +1306,7 @@ pub async fn batch_update_status(
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match update_task(pool, id, Some(status), None, None, None, None, None).await {
+        match update_task(pool, id, Some(status), None, None, None, None, None, None).await {
             Ok(_) => succeeded.push(id.clone()),
             Err(e) => failed.push(BatchError {
                 id: id.clone(),
@@ -1038,7 +1327,19 @@ pub async fn batch_assign(
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match update_task(pool, id, None, None, Some(assignee_id), None, None, None).await {
+        match update_task(
+            pool,
+            id,
+            None,
+            None,
+            Some(assignee_id),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        {
             Ok(_) => succeeded.push(id.clone()),
             Err(e) => failed.push(BatchError {
                 id: id.clone(),
@@ -1048,4 +1349,287 @@ pub async fn batch_assign(
     }
 
     Ok(BatchResult { succeeded, failed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DbPools;
+    use crate::messages::{read_messages, ReadMessagesRequest};
+    use crate::rooms::create_room;
+    use tempfile::TempDir;
+
+    async fn setup() -> (SqlitePool, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let pools = DbPools::connect(tmp.path()).await.unwrap();
+        pools.run_migrations("porter unicode61").await.unwrap();
+        let pool = pools.fts.clone();
+        (pool, tmp)
+    }
+
+    #[tokio::test]
+    async fn test_post_task_event_to_room_status_change() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "task-event-room", None, None)
+            .await
+            .unwrap();
+
+        let task = create_task(
+            &pool,
+            "Bridge test task",
+            None,
+            None,
+            None,
+            None,
+            Some(&room.id),
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        post_task_event_to_room(
+            &pool,
+            None,
+            &task.id,
+            &room.id,
+            "status_changed",
+            Some("open"),
+            Some("in_progress"),
+            Some("actor-1"),
+        )
+        .await
+        .unwrap();
+
+        let msgs = read_messages(
+            &pool,
+            ReadMessagesRequest {
+                room_id: room.id.clone(),
+                since: None,
+                before: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let status_events: Vec<_> = msgs
+            .iter()
+            .filter(|m| {
+                m.message_type == MessageType::TaskEvent && m.content.contains("Task status:")
+            })
+            .collect();
+        assert!(!status_events.is_empty());
+        assert!(status_events[0].content.contains("open"));
+        assert!(status_events[0].content.contains("in_progress"));
+    }
+
+    #[tokio::test]
+    async fn test_task_event_not_posted_when_no_room() {
+        let (pool, _tmp) = setup().await;
+
+        let task = create_task(
+            &pool,
+            "No room task",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(task.room_id.is_none());
+
+        let result = update_task(
+            &pool,
+            &task.id,
+            Some("in_progress"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_task_command_close() {
+        let (pool, _tmp) = setup().await;
+
+        let task = create_task(
+            &pool,
+            "Close cmd",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let result = execute_task_command(
+            &pool,
+            TaskCommand {
+                command: "close".to_string(),
+                task_id: task.id.clone(),
+                args: vec![],
+                actor_id: "actor-1".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.success);
+        assert_eq!(result.command, "close");
+        assert!(result.task.is_some());
+        assert_eq!(result.task.unwrap().status, "closed");
+    }
+
+    #[tokio::test]
+    async fn test_execute_task_command_assign() {
+        let (pool, _tmp) = setup().await;
+
+        let task = create_task(
+            &pool,
+            "Assign cmd",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let result = execute_task_command(
+            &pool,
+            TaskCommand {
+                command: "assign".to_string(),
+                task_id: task.id.clone(),
+                args: vec!["agent-1".to_string()],
+                actor_id: "actor-1".to_string(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.success);
+        assert!(result.task.is_some());
+        assert_eq!(result.task.unwrap().assignee_id.as_deref(), Some("agent-1"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_task_command_invalid() {
+        let (pool, _tmp) = setup().await;
+
+        let task = create_task(
+            &pool,
+            "Invalid cmd",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let result = execute_task_command(
+            &pool,
+            TaskCommand {
+                command: "foobar".to_string(),
+                task_id: task.id.clone(),
+                args: vec![],
+                actor_id: "actor-1".to_string(),
+            },
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(NousError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_update_task_with_room_posts_event() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "update-event-room", None, None)
+            .await
+            .unwrap();
+
+        let task = create_task(
+            &pool,
+            "Room event task",
+            None,
+            None,
+            None,
+            None,
+            Some(&room.id),
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        update_task(
+            &pool,
+            &task.id,
+            Some("in_progress"),
+            None,
+            None,
+            None,
+            None,
+            Some("actor-1"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let msgs = read_messages(
+            &pool,
+            ReadMessagesRequest {
+                room_id: room.id.clone(),
+                since: None,
+                before: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let task_events: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.message_type == MessageType::TaskEvent)
+            .collect();
+
+        assert!(task_events.len() >= 2);
+
+        let status_events: Vec<_> = task_events
+            .iter()
+            .filter(|m| m.content.contains("Task status:"))
+            .collect();
+        assert!(!status_events.is_empty());
+    }
 }

@@ -211,6 +211,7 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
                 room_id.as_deref(),
                 create_room,
                 None,
+                None,
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&task)?);
@@ -253,6 +254,7 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
                 priority.as_deref(),
                 assignee.as_deref(),
                 description.as_deref(),
+                None,
                 None,
                 None,
             )

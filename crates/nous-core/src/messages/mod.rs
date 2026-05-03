@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
@@ -5,6 +8,44 @@ use uuid::Uuid;
 
 use crate::error::NousError;
 use crate::notifications::{Notification, NotificationRegistry};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageType {
+    #[default]
+    User,
+    System,
+    TaskEvent,
+    Command,
+    Handoff,
+}
+
+impl fmt::Display for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::User => write!(f, "user"),
+            Self::System => write!(f, "system"),
+            Self::TaskEvent => write!(f, "task_event"),
+            Self::Command => write!(f, "command"),
+            Self::Handoff => write!(f, "handoff"),
+        }
+    }
+}
+
+impl FromStr for MessageType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "user" => Ok(Self::User),
+            "system" => Ok(Self::System),
+            "task_event" => Ok(Self::TaskEvent),
+            "command" => Ok(Self::Command),
+            "handoff" => Ok(Self::Handoff),
+            other => Err(format!("unknown message type: {other}")),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -14,6 +55,7 @@ pub struct Message {
     pub content: String,
     pub reply_to: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    pub message_type: MessageType,
     pub created_at: String,
 }
 
@@ -29,6 +71,11 @@ impl Message {
             None => None,
         };
 
+        let message_type_str: String = row.try_get("message_type")?;
+        let message_type = message_type_str
+            .parse::<MessageType>()
+            .unwrap_or(MessageType::User);
+
         Ok(Self {
             id: row.try_get("id")?,
             room_id: row.try_get("room_id")?,
@@ -36,6 +83,7 @@ impl Message {
             content: row.try_get("content")?,
             reply_to: row.try_get("reply_to")?,
             metadata,
+            message_type,
             created_at: row.try_get("created_at")?,
         })
     }
@@ -48,6 +96,7 @@ pub struct PostMessageRequest {
     pub content: String,
     pub reply_to: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    pub message_type: Option<MessageType>,
 }
 
 #[derive(Debug)]
@@ -91,9 +140,10 @@ pub async fn post_message(
 
     let id = Uuid::now_v7().to_string();
     let metadata_json = request.metadata.as_ref().map(|m| m.to_string());
+    let msg_type = request.message_type.unwrap_or_default().to_string();
 
     sqlx::query(
-        "INSERT INTO room_messages (id, room_id, sender_id, content, reply_to, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO room_messages (id, room_id, sender_id, content, reply_to, metadata, message_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&request.room_id)
@@ -101,6 +151,7 @@ pub async fn post_message(
     .bind(&request.content)
     .bind(&request.reply_to)
     .bind(&metadata_json)
+    .bind(&msg_type)
     .execute(pool)
     .await?;
 
@@ -118,6 +169,7 @@ pub async fn post_message(
                 room_id: message.room_id.clone(),
                 message_id: message.id.clone(),
                 sender_id: message.sender_id.clone(),
+                priority: crate::notifications::NotificationPriority::Normal,
                 topics,
                 mentions,
             })
@@ -277,6 +329,176 @@ pub async fn list_mentions(
         .map_err(NousError::Sqlite)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadView {
+    pub root: Message,
+    pub replies: Vec<Message>,
+    pub reply_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatCursor {
+    pub room_id: String,
+    pub agent_id: String,
+    pub last_read_message_id: String,
+    pub last_read_at: String,
+    pub unread_count: i64,
+}
+
+#[derive(Debug)]
+pub struct GetThreadRequest {
+    pub room_id: String,
+    pub root_message_id: String,
+}
+
+#[derive(Debug)]
+pub struct MarkReadRequest {
+    pub room_id: String,
+    pub agent_id: String,
+    pub message_id: String,
+}
+
+#[derive(Debug)]
+pub struct UnreadCountRequest {
+    pub room_id: String,
+    pub agent_id: String,
+}
+
+pub async fn get_thread(pool: &SqlitePool, req: GetThreadRequest) -> Result<ThreadView, NousError> {
+    let rows = sqlx::query(
+        "SELECT * FROM room_messages WHERE id = ? OR reply_to = ? ORDER BY created_at ASC",
+    )
+    .bind(&req.root_message_id)
+    .bind(&req.root_message_id)
+    .fetch_all(pool)
+    .await?;
+
+    let messages: Vec<Message> = rows
+        .iter()
+        .map(Message::from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(NousError::Sqlite)?;
+
+    let root = messages
+        .iter()
+        .find(|m| m.id == req.root_message_id)
+        .cloned()
+        .ok_or_else(|| {
+            NousError::NotFound(format!("message '{}' not found", req.root_message_id))
+        })?;
+
+    let replies: Vec<Message> = messages
+        .into_iter()
+        .filter(|m| m.id != req.root_message_id)
+        .collect();
+    let reply_count = replies.len();
+
+    Ok(ThreadView {
+        root,
+        replies,
+        reply_count,
+    })
+}
+
+pub async fn mark_read(pool: &SqlitePool, req: MarkReadRequest) -> Result<ChatCursor, NousError> {
+    let msg_row = sqlx::query("SELECT created_at FROM room_messages WHERE id = ?")
+        .bind(&req.message_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("message '{}' not found", req.message_id)))?;
+
+    let msg_created_at: String = msg_row.try_get("created_at").map_err(NousError::Sqlite)?;
+
+    sqlx::query(
+        "INSERT INTO message_cursors (room_id, agent_id, last_read_message_id, last_read_at) \
+         VALUES (?, ?, ?, ?) \
+         ON CONFLICT (room_id, agent_id) DO UPDATE SET \
+         last_read_message_id = excluded.last_read_message_id, \
+         last_read_at = excluded.last_read_at",
+    )
+    .bind(&req.room_id)
+    .bind(&req.agent_id)
+    .bind(&req.message_id)
+    .bind(&msg_created_at)
+    .execute(pool)
+    .await?;
+
+    let unread: i64 = sqlx::query(
+        "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND created_at > ?",
+    )
+    .bind(&req.room_id)
+    .bind(&msg_created_at)
+    .fetch_one(pool)
+    .await?
+    .try_get("cnt")
+    .map_err(NousError::Sqlite)?;
+
+    Ok(ChatCursor {
+        room_id: req.room_id,
+        agent_id: req.agent_id,
+        last_read_message_id: req.message_id,
+        last_read_at: msg_created_at,
+        unread_count: unread,
+    })
+}
+
+pub async fn unread_count(
+    pool: &SqlitePool,
+    req: UnreadCountRequest,
+) -> Result<ChatCursor, NousError> {
+    let cursor_row = sqlx::query(
+        "SELECT last_read_message_id, last_read_at FROM message_cursors WHERE room_id = ? AND agent_id = ?",
+    )
+    .bind(&req.room_id)
+    .bind(&req.agent_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (last_read_message_id, last_read_at) = match cursor_row {
+        Some(row) => {
+            let mid: String = row
+                .try_get("last_read_message_id")
+                .map_err(NousError::Sqlite)?;
+            let lat: String = row.try_get("last_read_at").map_err(NousError::Sqlite)?;
+            (mid, lat)
+        }
+        None => {
+            let count: i64 =
+                sqlx::query("SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ?")
+                    .bind(&req.room_id)
+                    .fetch_one(pool)
+                    .await?
+                    .try_get("cnt")
+                    .map_err(NousError::Sqlite)?;
+            return Ok(ChatCursor {
+                room_id: req.room_id,
+                agent_id: req.agent_id,
+                last_read_message_id: String::new(),
+                last_read_at: String::new(),
+                unread_count: count,
+            });
+        }
+    };
+
+    let unread: i64 = sqlx::query(
+        "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND created_at > ?",
+    )
+    .bind(&req.room_id)
+    .bind(&last_read_at)
+    .fetch_one(pool)
+    .await?
+    .try_get("cnt")
+    .map_err(NousError::Sqlite)?;
+
+    Ok(ChatCursor {
+        room_id: req.room_id,
+        agent_id: req.agent_id,
+        last_read_message_id,
+        last_read_at,
+        unread_count: unread,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +527,7 @@ mod tests {
                 content: "Hello, world!".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -332,6 +555,7 @@ mod tests {
                     content: format!("Message {i}"),
                     reply_to: None,
                     metadata: None,
+                    message_type: None,
                 },
                 None,
             )
@@ -370,6 +594,7 @@ mod tests {
                 content: "First".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -384,6 +609,7 @@ mod tests {
                 content: "Second".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -398,6 +624,7 @@ mod tests {
                 content: "Third".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -435,6 +662,7 @@ mod tests {
                     content: format!("Message {i}"),
                     reply_to: None,
                     metadata: None,
+                    message_type: None,
                 },
                 None,
             )
@@ -472,6 +700,7 @@ mod tests {
                 content: "The quick brown fox jumps over the lazy dog".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -486,6 +715,7 @@ mod tests {
                 content: "A fast red car drives down the road".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -500,6 +730,7 @@ mod tests {
                 content: "The fox went home after a long day".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -533,6 +764,7 @@ mod tests {
                 content: "Hello".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
@@ -554,11 +786,288 @@ mod tests {
                 content: "   ".into(),
                 reply_to: None,
                 metadata: None,
+                message_type: None,
             },
             None,
         )
         .await;
 
         assert!(matches!(result, Err(NousError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn test_message_type_defaults_to_user() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "type-default-room", None, None)
+            .await
+            .unwrap();
+
+        let msg = post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-1".into(),
+                content: "No explicit type".into(),
+                reply_to: None,
+                metadata: None,
+                message_type: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(msg.message_type, MessageType::User);
+    }
+
+    #[tokio::test]
+    async fn test_post_system_message() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "system-msg-room", None, None)
+            .await
+            .unwrap();
+
+        let msg = post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "system".into(),
+                content: "Room created".into(),
+                reply_to: None,
+                metadata: None,
+                message_type: Some(MessageType::System),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(msg.message_type, MessageType::System);
+
+        let messages = read_messages(
+            &pool,
+            ReadMessagesRequest {
+                room_id: room.id.clone(),
+                since: None,
+                before: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_type, MessageType::System);
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_returns_root_and_replies() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "thread-room", None, None).await.unwrap();
+
+        let root = post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-1".into(),
+                content: "Root message".into(),
+                reply_to: None,
+                metadata: None,
+                message_type: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-2".into(),
+                content: "Reply 1".into(),
+                reply_to: Some(root.id.clone()),
+                metadata: None,
+                message_type: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-3".into(),
+                content: "Reply 2".into(),
+                reply_to: Some(root.id.clone()),
+                metadata: None,
+                message_type: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let thread = get_thread(
+            &pool,
+            GetThreadRequest {
+                room_id: room.id.clone(),
+                root_message_id: root.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(thread.root.id, root.id);
+        assert_eq!(thread.root.content, "Root message");
+        assert_eq!(thread.reply_count, 2);
+        assert_eq!(thread.replies[0].content, "Reply 1");
+        assert_eq!(thread.replies[1].content, "Reply 2");
+    }
+
+    #[tokio::test]
+    async fn test_get_thread_empty_replies() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "thread-empty-room", None, None)
+            .await
+            .unwrap();
+
+        let root = post_message(
+            &pool,
+            PostMessageRequest {
+                room_id: room.id.clone(),
+                sender_id: "agent-1".into(),
+                content: "Standalone message".into(),
+                reply_to: None,
+                metadata: None,
+                message_type: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let thread = get_thread(
+            &pool,
+            GetThreadRequest {
+                room_id: room.id.clone(),
+                root_message_id: root.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(thread.root.id, root.id);
+        assert_eq!(thread.reply_count, 0);
+        assert!(thread.replies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mark_read_advances_cursor() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "cursor-room", None, None).await.unwrap();
+
+        let mut msgs = Vec::new();
+        for i in 1..=5 {
+            let msg = post_message(
+                &pool,
+                PostMessageRequest {
+                    room_id: room.id.clone(),
+                    sender_id: "agent-1".into(),
+                    content: format!("Message {i}"),
+                    reply_to: None,
+                    metadata: None,
+                    message_type: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+            msgs.push(msg);
+        }
+
+        let cursor = mark_read(
+            &pool,
+            MarkReadRequest {
+                room_id: room.id.clone(),
+                agent_id: "reader-agent".into(),
+                message_id: msgs[2].id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(cursor.room_id, room.id);
+        assert_eq!(cursor.agent_id, "reader-agent");
+        assert_eq!(cursor.last_read_message_id, msgs[2].id);
+        assert_eq!(cursor.unread_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_unread_count_after_new_messages() {
+        let (pool, _tmp) = setup().await;
+        let room = create_room(&pool, "unread-room", None, None).await.unwrap();
+
+        let mut msgs = Vec::new();
+        for i in 1..=3 {
+            let msg = post_message(
+                &pool,
+                PostMessageRequest {
+                    room_id: room.id.clone(),
+                    sender_id: "agent-1".into(),
+                    content: format!("Message {i}"),
+                    reply_to: None,
+                    metadata: None,
+                    message_type: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+            msgs.push(msg);
+        }
+
+        mark_read(
+            &pool,
+            MarkReadRequest {
+                room_id: room.id.clone(),
+                agent_id: "reader-agent".into(),
+                message_id: msgs[2].id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        for i in 4..=6 {
+            post_message(
+                &pool,
+                PostMessageRequest {
+                    room_id: room.id.clone(),
+                    sender_id: "agent-1".into(),
+                    content: format!("Message {i}"),
+                    reply_to: None,
+                    metadata: None,
+                    message_type: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let cursor = unread_count(
+            &pool,
+            UnreadCountRequest {
+                room_id: room.id.clone(),
+                agent_id: "reader-agent".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(cursor.unread_count, 3);
+        assert_eq!(cursor.last_read_message_id, msgs[2].id);
     }
 }

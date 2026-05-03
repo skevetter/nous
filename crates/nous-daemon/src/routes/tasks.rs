@@ -69,6 +69,7 @@ pub async fn create(
         body.room_id.as_deref(),
         body.create_room.unwrap_or(false),
         None,
+        None,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(task)))
@@ -112,6 +113,7 @@ pub async fn update(
         body.priority.as_deref(),
         body.assignee_id.as_deref(),
         body.description.as_deref(),
+        None,
         None,
         None,
     )
