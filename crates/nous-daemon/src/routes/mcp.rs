@@ -21,6 +21,8 @@ use nous_core::schedules;
 use nous_core::tasks;
 use nous_core::worktrees;
 
+use nous_core::error::to_json;
+
 use crate::error::AppError;
 use crate::process_manager::SpawnParams;
 use crate::state::AppState;
@@ -1520,7 +1522,7 @@ pub async fn dispatch(
             let purpose = args.get("purpose").and_then(|v| v.as_str());
             let metadata = args.get("metadata").filter(|v| !v.is_null());
             let room = create_room(&state.pool, name, purpose, metadata).await?;
-            Ok(serde_json::to_value(room).unwrap())
+            Ok(to_json(room)?)
         }
         "room_list" => {
             let include_archived = args
@@ -1528,12 +1530,12 @@ pub async fn dispatch(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let rooms = list_rooms(&state.pool, include_archived).await?;
-            Ok(serde_json::to_value(rooms).unwrap())
+            Ok(to_json(rooms)?)
         }
         "room_get" => {
             let id = require_str(args, "id")?;
             let room = get_room(&state.pool, id).await?;
-            Ok(serde_json::to_value(room).unwrap())
+            Ok(to_json(room)?)
         }
         "room_delete" => {
             let id = require_str(args, "id")?;
@@ -1569,7 +1571,7 @@ pub async fn dispatch(
                 Some(&state.registry),
             )
             .await?;
-            Ok(serde_json::to_value(msg).unwrap())
+            Ok(to_json(msg)?)
         }
         "room_read_messages" => {
             let room_id = require_str(args, "room_id")?.to_string();
@@ -1589,7 +1591,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(messages).unwrap())
+            Ok(to_json(messages)?)
         }
         "room_search" => {
             let query = require_str(args, "query")?.to_string();
@@ -1607,7 +1609,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         }
         "room_wait" => {
             let room_id = require_str(args, "room_id")?;
@@ -1632,7 +1634,7 @@ pub async fn dispatch(
             } else {
                 room_wait(&state.registry, room_id, timeout_ms, topics.as_deref()).await?
             };
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "room_subscribe" => {
             let room_id = require_str(args, "room_id")?;
@@ -1681,7 +1683,7 @@ pub async fn dispatch(
                 registry: None,
             })
             .await?;
-            Ok(serde_json::to_value(task).unwrap())
+            Ok(to_json(task)?)
         }
         "task_list" => {
             let status = args.get("status").and_then(|v| v.as_str());
@@ -1703,12 +1705,12 @@ pub async fn dispatch(
                 order_dir: None,
             })
             .await?;
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "task_get" => {
             let id = require_str(args, "id")?;
             let task = tasks::get_task(&state.pool, id).await?;
-            Ok(serde_json::to_value(task).unwrap())
+            Ok(to_json(task)?)
         }
         "task_update" => {
             let id = require_str(args, "id")?;
@@ -1728,12 +1730,12 @@ pub async fn dispatch(
                 registry: None,
             })
             .await?;
-            Ok(serde_json::to_value(task).unwrap())
+            Ok(to_json(task)?)
         }
         "task_close" => {
             let id = require_str(args, "id")?;
             let task = tasks::close_task(&state.pool, id, None).await?;
-            Ok(serde_json::to_value(task).unwrap())
+            Ok(to_json(task)?)
         }
         "task_link" => {
             let source_id = require_str(args, "source_id")?;
@@ -1741,7 +1743,7 @@ pub async fn dispatch(
             let link_type = require_str(args, "link_type")?;
             let link =
                 tasks::link_tasks(&state.pool, source_id, target_id, link_type, None).await?;
-            Ok(serde_json::to_value(link).unwrap())
+            Ok(to_json(link)?)
         }
         "task_unlink" => {
             let source_id = require_str(args, "source_id")?;
@@ -1753,7 +1755,7 @@ pub async fn dispatch(
         "task_list_links" => {
             let id = require_str(args, "id")?;
             let links = tasks::list_links(&state.pool, id).await?;
-            Ok(serde_json::to_value(links).unwrap())
+            Ok(to_json(links)?)
         }
         "task_add_note" => {
             let id = require_str(args, "id")?;
@@ -1789,7 +1791,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(wt).unwrap())
+            Ok(to_json(wt)?)
         }
         "worktree_list" => {
             let status = args
@@ -1818,17 +1820,17 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(wts).unwrap())
+            Ok(to_json(wts)?)
         }
         "worktree_get" => {
             let id = require_str(args, "id")?;
             let wt = worktrees::get(&state.pool, id).await?;
-            Ok(serde_json::to_value(wt).unwrap())
+            Ok(to_json(wt)?)
         }
         "worktree_archive" => {
             let id = require_str(args, "id")?;
             let wt = worktrees::archive(&state.pool, id).await?;
-            Ok(serde_json::to_value(wt).unwrap())
+            Ok(to_json(wt)?)
         }
         "worktree_delete" => {
             let id = require_str(args, "id")?;
@@ -1867,7 +1869,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(agent).unwrap())
+            Ok(to_json(agent)?)
         }
         "agent_deregister" => {
             let id = require_str(args, "id")?;
@@ -1882,7 +1884,7 @@ pub async fn dispatch(
             let name = require_str(args, "name")?;
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let agent = agents::lookup_agent(&state.pool, name, namespace).await?;
-            Ok(serde_json::to_value(agent).unwrap())
+            Ok(to_json(agent)?)
         }
         "agent_list" => {
             let namespace = args
@@ -1905,25 +1907,25 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(list).unwrap())
+            Ok(to_json(list)?)
         }
         "agent_list_children" => {
             let id = require_str(args, "id")?;
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let children = agents::list_children(&state.pool, id, namespace).await?;
-            Ok(serde_json::to_value(children).unwrap())
+            Ok(to_json(children)?)
         }
         "agent_list_ancestors" => {
             let id = require_str(args, "id")?;
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let ancestors = agents::list_ancestors(&state.pool, id, namespace).await?;
-            Ok(serde_json::to_value(ancestors).unwrap())
+            Ok(to_json(ancestors)?)
         }
         "agent_tree" => {
             let root_id = args.get("root_id").and_then(|v| v.as_str());
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let tree = agents::get_tree(&state.pool, root_id, namespace).await?;
-            Ok(serde_json::to_value(tree).unwrap())
+            Ok(to_json(tree)?)
         }
         "agent_heartbeat" => {
             let id = require_str(args, "id")?;
@@ -1940,7 +1942,7 @@ pub async fn dispatch(
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let results = agents::search_agents(&state.pool, query, namespace, limit).await?;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         }
         "agent_stale" => {
             let threshold = args
@@ -1949,18 +1951,18 @@ pub async fn dispatch(
                 .unwrap_or(900);
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
-            Ok(serde_json::to_value(stale).unwrap())
+            Ok(to_json(stale)?)
         }
         "agent_inspect" => {
             let id = require_str(args, "id")?;
             let inspection = agents::inspect_agent(&state.pool, id).await?;
-            Ok(serde_json::to_value(inspection).unwrap())
+            Ok(to_json(inspection)?)
         }
         "agent_versions" => {
             let agent_id = require_str(args, "agent_id")?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let versions = agents::list_versions(&state.pool, agent_id, limit).await?;
-            Ok(serde_json::to_value(versions).unwrap())
+            Ok(to_json(versions)?)
         }
         "agent_record_version" => {
             let agent_id = require_str(args, "agent_id")?.to_string();
@@ -1980,13 +1982,13 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(version).unwrap())
+            Ok(to_json(version)?)
         }
         "agent_rollback" => {
             let agent_id = require_str(args, "agent_id")?;
             let version_id = require_str(args, "version_id")?;
             let version = agents::rollback_agent(&state.pool, agent_id, version_id).await?;
-            Ok(serde_json::to_value(version).unwrap())
+            Ok(to_json(version)?)
         }
         "agent_notify_upgrade" => {
             let id = require_str(args, "id")?;
@@ -1997,7 +1999,7 @@ pub async fn dispatch(
             let namespace = args.get("namespace").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let outdated = agents::list_outdated_agents(&state.pool, namespace, limit).await?;
-            Ok(serde_json::to_value(outdated).unwrap())
+            Ok(to_json(outdated)?)
         }
         "agent_template_create" => {
             let name = require_str(args, "name")?.to_string();
@@ -2020,18 +2022,18 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(template).unwrap())
+            Ok(to_json(template)?)
         }
         "agent_template_list" => {
             let template_type = args.get("type").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let templates = agents::list_templates(&state.pool, template_type, limit).await?;
-            Ok(serde_json::to_value(templates).unwrap())
+            Ok(to_json(templates)?)
         }
         "agent_template_get" => {
             let id = require_str(args, "id")?;
             let template = agents::get_template_by_id(&state.pool, id).await?;
-            Ok(serde_json::to_value(template).unwrap())
+            Ok(to_json(template)?)
         }
         "agent_instantiate" => {
             let template_id = require_str(args, "template_id")?.to_string();
@@ -2059,7 +2061,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(agent).unwrap())
+            Ok(to_json(agent)?)
         }
         "schedule_create" => {
             let clock = schedules::SystemClock;
@@ -2098,19 +2100,19 @@ pub async fn dispatch(
                 clock: &clock,
             })
             .await?;
-            Ok(serde_json::to_value(schedule).unwrap())
+            Ok(to_json(schedule)?)
         }
         "schedule_get" => {
             let id = require_str(args, "id")?;
             let schedule = schedules::get_schedule(&state.pool, id).await?;
-            Ok(serde_json::to_value(schedule).unwrap())
+            Ok(to_json(schedule)?)
         }
         "schedule_list" => {
             let enabled = args.get("enabled").and_then(|v| v.as_bool());
             let action_type = args.get("action_type").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let list = schedules::list_schedules(&state.pool, enabled, action_type, limit).await?;
-            Ok(serde_json::to_value(list).unwrap())
+            Ok(to_json(list)?)
         }
         "schedule_update" => {
             let clock = schedules::SystemClock;
@@ -2159,7 +2161,7 @@ pub async fn dispatch(
                 clock: &clock,
             })
             .await?;
-            Ok(serde_json::to_value(schedule).unwrap())
+            Ok(to_json(schedule)?)
         }
         "schedule_delete" => {
             let id = require_str(args, "id")?;
@@ -2171,7 +2173,7 @@ pub async fn dispatch(
             let status = args.get("status").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let runs = schedules::list_runs(&state.pool, schedule_id, status, limit).await?;
-            Ok(serde_json::to_value(runs).unwrap())
+            Ok(to_json(runs)?)
         }
         "schedule_health" => {
             let health = schedules::schedule_health(&state.pool).await?;
@@ -2219,7 +2221,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(resource).unwrap())
+            Ok(to_json(resource)?)
         }
         "resource_list" => {
             let resource_type = args
@@ -2261,12 +2263,12 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(items).unwrap())
+            Ok(to_json(items)?)
         }
         "resource_get" => {
             let id = require_str(args, "id")?;
             let resource = resources::get_resource_by_id(&state.pool, id).await?;
-            Ok(serde_json::to_value(resource).unwrap())
+            Ok(to_json(resource)?)
         }
         "resource_update" => {
             let id = require_str(args, "id")?.to_string();
@@ -2304,7 +2306,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(resource).unwrap())
+            Ok(to_json(resource)?)
         }
         "resource_search" => {
             let tags: Vec<String> = args
@@ -2342,12 +2344,12 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(items).unwrap())
+            Ok(to_json(items)?)
         }
         "resource_archive" => {
             let id = require_str(args, "id")?;
             let resource = resources::archive_resource(&state.pool, id).await?;
-            Ok(serde_json::to_value(resource).unwrap())
+            Ok(to_json(resource)?)
         }
         "resource_deregister" => {
             let id = require_str(args, "id")?;
@@ -2358,7 +2360,7 @@ pub async fn dispatch(
         "resource_heartbeat" => {
             let id = require_str(args, "id")?;
             let resource = resources::heartbeat_resource(&state.pool, id).await?;
-            Ok(serde_json::to_value(resource).unwrap())
+            Ok(to_json(resource)?)
         }
         "resource_transfer" => {
             let from = require_str(args, "from_agent_id")?;
@@ -2411,7 +2413,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(mem).unwrap())
+            Ok(to_json(mem)?)
         }
         "memory_search" => {
             let query = require_str(args, "query")?.to_string();
@@ -2465,12 +2467,12 @@ pub async fn dispatch(
                 },
             )
             .await;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         }
         "memory_get" => {
             let id = require_str(args, "id")?;
             let mem = memory::get_memory_by_id(&state.pool, id).await?;
-            Ok(serde_json::to_value(mem).unwrap())
+            Ok(to_json(mem)?)
         }
         "memory_update" => {
             let id = require_str(args, "id")?.to_string();
@@ -2511,7 +2513,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(mem).unwrap())
+            Ok(to_json(mem)?)
         }
         "memory_relate" => {
             let source_id = require_str(args, "source_id")?.to_string();
@@ -2527,7 +2529,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(rel).unwrap())
+            Ok(to_json(rel)?)
         }
         "memory_context" => {
             let workspace_id = args
@@ -2553,12 +2555,12 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         }
         "memory_relations" => {
             let id = require_str(args, "id")?;
             let relations = memory::list_relations(&state.pool, id).await?;
-            Ok(serde_json::to_value(relations).unwrap())
+            Ok(to_json(relations)?)
         }
         "task_depends_add" => {
             let task_id = require_str(args, "task_id")?;
@@ -2566,7 +2568,7 @@ pub async fn dispatch(
             let dep_type = args.get("dep_type").and_then(|v| v.as_str());
             let dep =
                 tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
-            Ok(serde_json::to_value(dep).unwrap())
+            Ok(to_json(dep)?)
         }
         "task_depends_remove" => {
             let task_id = require_str(args, "task_id")?;
@@ -2578,7 +2580,7 @@ pub async fn dispatch(
         "task_depends_list" => {
             let task_id = require_str(args, "task_id")?;
             let deps = tasks::list_dependencies(&state.pool, task_id).await?;
-            Ok(serde_json::to_value(deps).unwrap())
+            Ok(to_json(deps)?)
         }
         "task_template_create" => {
             let name = require_str(args, "name")?;
@@ -2609,17 +2611,17 @@ pub async fn dispatch(
                 checklist.as_deref(),
             )
             .await?;
-            Ok(serde_json::to_value(tmpl).unwrap())
+            Ok(to_json(tmpl)?)
         }
         "task_template_list" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let templates = tasks::list_templates(&state.pool, limit).await?;
-            Ok(serde_json::to_value(templates).unwrap())
+            Ok(to_json(templates)?)
         }
         "task_template_get" => {
             let id = require_str(args, "id")?;
             let tmpl = tasks::get_template(&state.pool, id).await?;
-            Ok(serde_json::to_value(tmpl).unwrap())
+            Ok(to_json(tmpl)?)
         }
         "task_template_use" => {
             let template_id = require_str(args, "template_id")?;
@@ -2648,7 +2650,7 @@ pub async fn dispatch(
                 labels.as_deref(),
             )
             .await?;
-            Ok(serde_json::to_value(task).unwrap())
+            Ok(to_json(task)?)
         }
         "task_batch_close" => {
             let task_ids: Vec<String> = args
@@ -2661,7 +2663,7 @@ pub async fn dispatch(
                 })
                 .unwrap_or_default();
             let result = tasks::batch_close(&state.pool, &task_ids).await?;
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "task_batch_update_status" => {
             let task_ids: Vec<String> = args
@@ -2675,7 +2677,7 @@ pub async fn dispatch(
                 .unwrap_or_default();
             let status = require_str(args, "status")?;
             let result = tasks::batch_update_status(&state.pool, &task_ids, status).await?;
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "task_batch_assign" => {
             let task_ids: Vec<String> = args
@@ -2689,7 +2691,7 @@ pub async fn dispatch(
                 .unwrap_or_default();
             let assignee_id = require_str(args, "assignee_id")?;
             let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "memory_store_embedding" => {
             let memory_id = require_str(args, "memory_id")?;
@@ -2758,7 +2760,7 @@ pub async fn dispatch(
                 },
             )
             .await;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         }
         "memory_chunk" => {
             let memory_id = require_str(args, "memory_id")?;
@@ -2813,7 +2815,7 @@ pub async fn dispatch(
         "memory_search_stats" => {
             let since = args.get("since").and_then(|v| v.as_str());
             let stats = memory::analytics::get_search_stats(&state.pool, since).await?;
-            Ok(serde_json::to_value(stats).unwrap())
+            Ok(to_json(stats)?)
         }
         "memory_search_hybrid" => {
             let query = require_str(args, "query")?;
@@ -2870,7 +2872,7 @@ pub async fn dispatch(
                     },
                 )
                 .await;
-                Ok(serde_json::to_value(results).unwrap())
+                Ok(to_json(results)?)
             } else {
                 let fts_results = memory::search_memories(
                     &state.pool,
@@ -2952,12 +2954,12 @@ pub async fn dispatch(
             let agent_id = args.get("agent_id").and_then(|v| v.as_str());
             let project = args.get("project").and_then(|v| v.as_str());
             let session = memory::session_start(&state.pool, agent_id, project).await?;
-            Ok(serde_json::to_value(session).unwrap())
+            Ok(to_json(session)?)
         }
         "memory_session_end" => {
             let session_id = require_str(args, "session_id")?;
             let session = memory::session_end(&state.pool, session_id).await?;
-            Ok(serde_json::to_value(session).unwrap())
+            Ok(to_json(session)?)
         }
         "memory_session_summary" => {
             let session_id = require_str(args, "session_id")?;
@@ -2967,7 +2969,7 @@ pub async fn dispatch(
             let session =
                 memory::session_summary(&state.pool, session_id, summary, agent_id, workspace_id)
                     .await?;
-            Ok(serde_json::to_value(session).unwrap())
+            Ok(to_json(session)?)
         }
         "memory_save_prompt" => {
             let prompt = require_str(args, "prompt")?;
@@ -2976,12 +2978,12 @@ pub async fn dispatch(
             let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
             let mem = memory::save_prompt(&state.pool, session_id, agent_id, workspace_id, prompt)
                 .await?;
-            Ok(serde_json::to_value(mem).unwrap())
+            Ok(to_json(mem)?)
         }
         "memory_current_project" => {
             let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
             match memory::detect_current_project(cwd) {
-                Some(project) => Ok(serde_json::to_value(project).unwrap()),
+                Some(project) => Ok(to_json(project)?),
                 None => {
                     Ok(serde_json::json!({"detected": false, "message": "no project marker found"}))
                 }
@@ -2990,7 +2992,7 @@ pub async fn dispatch(
         "room_unarchive" => {
             let id = require_str(args, "id")?;
             let room = nous_core::rooms::unarchive_room(&state.pool, id).await?;
-            Ok(serde_json::to_value(room).unwrap())
+            Ok(to_json(room)?)
         }
         "room_mentions" => {
             let room_id = require_str(args, "room_id")?;
@@ -2998,12 +3000,12 @@ pub async fn dispatch(
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let messages =
                 nous_core::messages::list_mentions(&state.pool, room_id, agent_id, limit).await?;
-            Ok(serde_json::to_value(messages).unwrap())
+            Ok(to_json(messages)?)
         }
         "room_inspect" => {
             let id = require_str(args, "id")?;
             let stats = nous_core::rooms::inspect_room(&state.pool, id).await?;
-            Ok(serde_json::to_value(stats).unwrap())
+            Ok(to_json(stats)?)
         }
         "agent_bulk_deregister" => {
             let ids: Vec<String> = args
@@ -3037,7 +3039,7 @@ pub async fn dispatch(
             let status_str = require_str(args, "status")?;
             let status: agents::AgentStatus = status_str.parse()?;
             let agent = agents::update_agent_status(&state.pool, id, status).await?;
-            Ok(serde_json::to_value(agent).unwrap())
+            Ok(to_json(agent)?)
         }
         // --- NOUS-026: Agent lifecycle management tools ---
         "agent_spawn" => {
@@ -3091,7 +3093,7 @@ pub async fn dispatch(
                     max_restarts,
                 })
                 .await?;
-            Ok(serde_json::to_value(process).unwrap())
+            Ok(to_json(process)?)
         }
         "agent_stop" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3104,7 +3106,7 @@ pub async fn dispatch(
                 .process_registry
                 .stop(state, agent_id, force, grace_secs)
                 .await?;
-            Ok(serde_json::to_value(process).unwrap())
+            Ok(to_json(process)?)
         }
         "agent_restart" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3114,7 +3116,7 @@ pub async fn dispatch(
                 .process_registry
                 .restart(state, agent_id, command, working_dir)
                 .await?;
-            Ok(serde_json::to_value(process).unwrap())
+            Ok(to_json(process)?)
         }
         "agent_invoke" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3126,12 +3128,12 @@ pub async fn dispatch(
                 .process_registry
                 .invoke(state, agent_id, prompt, timeout_secs, metadata, is_async)
                 .await?;
-            Ok(serde_json::to_value(invocation).unwrap())
+            Ok(to_json(invocation)?)
         }
         "agent_invoke_result" => {
             let invocation_id = require_str(args, "invocation_id")?;
             let invocation = agents::processes::get_invocation(&state.pool, invocation_id).await?;
-            Ok(serde_json::to_value(invocation).unwrap())
+            Ok(to_json(invocation)?)
         }
         "agent_invocations" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3139,7 +3141,7 @@ pub async fn dispatch(
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let invocations =
                 agents::processes::list_invocations(&state.pool, agent_id, status, limit).await?;
-            Ok(serde_json::to_value(invocations).unwrap())
+            Ok(to_json(invocations)?)
         }
         "agent_process_status" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3158,7 +3160,7 @@ pub async fn dispatch(
             let agent_id = require_str(args, "agent_id")?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let processes = agents::processes::list_processes(&state.pool, agent_id, limit).await?;
-            Ok(serde_json::to_value(processes).unwrap())
+            Ok(to_json(processes)?)
         }
         "agent_update" => {
             let id = require_str(args, "id")?;
@@ -3177,7 +3179,7 @@ pub async fn dispatch(
                 metadata,
             )
             .await?;
-            Ok(serde_json::to_value(agent).unwrap())
+            Ok(to_json(agent)?)
         }
         "room_thread_view" => {
             let room_id = require_str(args, "room_id")?.to_string();
@@ -3190,7 +3192,7 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(thread).unwrap())
+            Ok(to_json(thread)?)
         }
         "room_mark_read" => {
             let room_id = require_str(args, "room_id")?.to_string();
@@ -3205,14 +3207,14 @@ pub async fn dispatch(
                 },
             )
             .await?;
-            Ok(serde_json::to_value(cursor).unwrap())
+            Ok(to_json(cursor)?)
         }
         "room_unread_count" => {
             let room_id = require_str(args, "room_id")?.to_string();
             let agent_id = require_str(args, "agent_id")?.to_string();
             let cursor =
                 unread_count(&state.pool, UnreadCountRequest { room_id, agent_id }).await?;
-            Ok(serde_json::to_value(cursor).unwrap())
+            Ok(to_json(cursor)?)
         }
         "agent_presence" => {
             let agent_id = require_str(args, "agent_id")?;
@@ -3245,7 +3247,7 @@ pub async fn dispatch(
                 Some(&state.registry),
             )
             .await?;
-            Ok(serde_json::to_value(msg).unwrap())
+            Ok(to_json(msg)?)
         }
         "task_command" => {
             let command = require_str(args, "command")?.to_string();
@@ -3265,7 +3267,7 @@ pub async fn dispatch(
 
             let result =
                 tasks::execute_task_command(&state.pool, cmd, Some(&state.registry)).await?;
-            Ok(serde_json::to_value(result).unwrap())
+            Ok(to_json(result)?)
         }
         "agent_handoff" => {
             let room_id = require_str(args, "room_id")?.to_string();
@@ -3308,7 +3310,7 @@ pub async fn dispatch(
                 payload,
             )
             .await?;
-            Ok(serde_json::to_value(msg).unwrap())
+            Ok(to_json(msg)?)
         }
         _ => Err(nous_core::error::NousError::Validation(format!(
             "unknown tool: {name}"

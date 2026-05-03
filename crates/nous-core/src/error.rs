@@ -1,4 +1,9 @@
+use serde::Serialize;
 use thiserror::Error;
+
+pub fn to_json<T: Serialize>(value: T) -> Result<serde_json::Value, NousError> {
+    serde_json::to_value(value).map_err(|e| NousError::Internal(e.to_string()))
+}
 
 #[derive(Debug, Error)]
 pub enum NousError {

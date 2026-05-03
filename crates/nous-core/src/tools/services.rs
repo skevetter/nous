@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::db::{DatabaseConnection, VecPool};
+use crate::error::to_json;
 use crate::memory::{self, Embedder};
 use crate::messages::{self, PostMessageRequest, ReadMessagesRequest};
 use crate::notifications::NotificationRegistry;
@@ -70,7 +71,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(mem).unwrap())
+        Ok(to_json(mem)?)
     }
 
     async fn search_memories(
@@ -113,7 +114,7 @@ impl ToolServices for DaemonToolServices {
             },
         )
         .await;
-        Ok(serde_json::to_value(results).unwrap())
+        Ok(to_json(results)?)
     }
 
     async fn search_memories_hybrid(
@@ -158,7 +159,7 @@ impl ToolServices for DaemonToolServices {
                 },
             )
             .await;
-            Ok(serde_json::to_value(results).unwrap())
+            Ok(to_json(results)?)
         } else {
             let fts_results = memory::search_memories(
                 &self.pool,
@@ -209,7 +210,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(results).unwrap())
+        Ok(to_json(results)?)
     }
 
     async fn relate_memories(
@@ -231,7 +232,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(rel).unwrap())
+        Ok(to_json(rel)?)
     }
 
     async fn update_memory(
@@ -259,7 +260,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(mem).unwrap())
+        Ok(to_json(mem)?)
     }
 
     async fn post_to_room(
@@ -286,7 +287,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(msg).unwrap())
+        Ok(to_json(msg)?)
     }
 
     async fn read_room(&self, room: String, limit: Option<u32>) -> Result<Value, ToolError> {
@@ -304,14 +305,14 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(messages).unwrap())
+        Ok(to_json(messages)?)
     }
 
     async fn create_room(&self, name: String, purpose: Option<String>) -> Result<Value, ToolError> {
         let room = rooms::create_room(&self.pool, &name, purpose.as_deref(), None)
             .await
             .map_err(map_err)?;
-        Ok(serde_json::to_value(room).unwrap())
+        Ok(to_json(room)?)
     }
 
     async fn wait_for_message(&self, room: String, timeout_secs: u64) -> Result<Value, ToolError> {
@@ -333,7 +334,7 @@ impl ToolServices for DaemonToolServices {
             .await
             .map_err(map_err)?;
             if let Some(msg) = messages.into_iter().last() {
-                return Ok(serde_json::to_value(msg).unwrap());
+                return Ok(to_json(msg)?);
             }
             if std::time::Instant::now() >= deadline {
                 return Err(ToolError::Timeout(std::time::Duration::from_secs(
@@ -365,7 +366,7 @@ impl ToolServices for DaemonToolServices {
         })
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(task).unwrap())
+        Ok(to_json(task)?)
     }
 
     async fn update_task(
@@ -387,7 +388,7 @@ impl ToolServices for DaemonToolServices {
         })
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(task).unwrap())
+        Ok(to_json(task)?)
     }
 }
 
