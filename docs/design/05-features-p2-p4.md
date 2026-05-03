@@ -455,7 +455,7 @@ CronExpr {
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `enabled` | `true` | Master switch; when `false`, run loop exits immediately |
-| `allow_shell` | `false` | Shell actions are disabled unless explicitly opted in |
+| `allow_shell` | `true` | Shell actions enabled (scheduler's primary purpose is running commands) |
 | `allow_http` | `true` | HTTP actions enabled |
 | `max_concurrent` | `4` | Semaphore capacity — at most 4 schedules run in parallel |
 | `default_timeout_secs` | `300` | Per-run wall-clock timeout; schedule can override |
@@ -533,7 +533,7 @@ The set of dispatchable tools will expand when the MCP server exposes a local ca
 
 **`Shell`** (`action_payload`: `{ "command": "…", "working_dir": "…" }`)
 
-Disabled by default (`allow_shell = false`). When enabled, spawns `sh -c <command>` with `kill_on_drop` and captures stdout + stderr. Non-zero exit codes fail the run. Stderr is appended to stdout with a `--- stderr ---` separator.
+Enabled by default (`allow_shell = true`). Spawns `sh -c <command>` with `kill_on_drop` and captures stdout + stderr. Non-zero exit codes fail the run. Stderr is appended to stdout with a `--- stderr ---` separator. Can be disabled via config if shell execution is not desired.
 
 **`Http`** (`action_payload`: `{ "method": "GET", "url": "…", "headers": {}, "body": "…" }`)
 

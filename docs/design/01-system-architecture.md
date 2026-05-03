@@ -362,7 +362,7 @@ shutdown_timeout_secs = 30
 
 [schedule]
 enabled              = true
-allow_shell          = false            # shell actions disabled by default
+allow_shell          = true             # shell actions enabled by default
 allow_http           = true
 max_concurrent       = 4
 default_timeout_secs = 300
