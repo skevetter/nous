@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod config;
 pub mod db;
+pub mod embed;
 pub mod entities;
 pub mod error;
 pub mod memory;
