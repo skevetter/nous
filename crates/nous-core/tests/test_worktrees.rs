@@ -1,3 +1,5 @@
+mod common;
+
 use std::process::Command;
 
 use nous_core::db::DbPools;
@@ -40,10 +42,8 @@ fn init_git_repo(dir: &std::path::Path) {
 }
 
 async fn setup() -> (DbPools, TempDir, TempDir) {
-    let db_dir = TempDir::new().unwrap();
+    let (pools, db_dir) = common::setup_test_db().await;
     let repo_dir = TempDir::new().unwrap();
-    let pools = DbPools::connect(db_dir.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
     init_git_repo(repo_dir.path());
     (pools, db_dir, repo_dir)
 }

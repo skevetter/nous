@@ -1,9 +1,10 @@
 #![cfg(feature = "sandbox")]
 
+mod common;
+
 use std::sync::Arc;
 
 use nous_core::db::DatabaseConnection;
-use nous_core::db::DbPools;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::process_manager::{ProcessRegistry, SpawnParams};
@@ -15,9 +16,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 async fn setup() -> (AppState, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, tmp) = common::setup_test_db().await;
     let sandbox_mgr = Arc::new(tokio::sync::Mutex::new(SandboxManager::new()));
     let state = AppState {
         pool: pools.fts.clone(),

@@ -1,11 +1,9 @@
-use nous_core::db::DbPools;
-use nous_core::schedules::{self, Clock, CronExpr, MockClock};
-use tempfile::TempDir;
+mod common;
 
-async fn setup() -> (nous_core::db::DatabaseConnection, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+use nous_core::schedules::{self, Clock, CronExpr, MockClock};
+
+async fn setup() -> (nous_core::db::DatabaseConnection, tempfile::TempDir) {
+    let (pools, tmp) = common::setup_test_db().await;
     (pools.fts, tmp)
 }
 

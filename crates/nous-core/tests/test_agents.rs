@@ -1,3 +1,5 @@
+mod common;
+
 use nous_core::agents::processes;
 use nous_core::agents::{
     self, AgentStatus, ArtifactType, CreateTemplateRequest, InstantiateRequest,
@@ -5,13 +7,9 @@ use nous_core::agents::{
     RegisterArtifactRequest,
 };
 use nous_core::db::DbPools;
-use tempfile::TempDir;
 
-async fn setup() -> (DbPools, TempDir) {
-    let db_dir = TempDir::new().unwrap();
-    let pools = DbPools::connect(db_dir.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-    (pools, db_dir)
+async fn setup() -> (DbPools, tempfile::TempDir) {
+    common::setup_test_db().await
 }
 
 #[tokio::test]

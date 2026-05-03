@@ -1,15 +1,13 @@
 // Integration tests for tasks module
 
-use nous_core::db::DbPools;
+mod common;
+
 use nous_core::error::NousError;
 use nous_core::tasks;
-use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_direct_cycle_detection_blocked_by() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task_a = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -39,9 +37,7 @@ async fn test_direct_cycle_detection_blocked_by() {
 
 #[tokio::test]
 async fn test_indirect_cycle_detection_parent() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task_a = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -79,9 +75,7 @@ async fn test_indirect_cycle_detection_parent() {
 
 #[tokio::test]
 async fn test_related_to_allows_bidirectional() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task_a = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -107,9 +101,7 @@ async fn test_related_to_allows_bidirectional() {
 
 #[tokio::test]
 async fn test_fts_trigger_on_insert() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let _task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -157,9 +149,7 @@ async fn test_fts_trigger_on_insert() {
 
 #[tokio::test]
 async fn test_fts_trigger_on_update() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -210,9 +200,7 @@ async fn test_fts_trigger_on_update() {
 
 #[tokio::test]
 async fn test_tasks_au_trigger_updates_timestamp() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -271,9 +259,7 @@ async fn test_tasks_au_trigger_updates_timestamp() {
 
 #[tokio::test]
 async fn test_create_task_minimal() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -304,9 +290,7 @@ async fn test_create_task_minimal() {
 
 #[tokio::test]
 async fn test_create_task_full() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let labels = vec!["bug".to_string(), "urgent".to_string()];
     let task = tasks::create_task(tasks::CreateTaskParams {
@@ -335,9 +319,7 @@ async fn test_create_task_full() {
 
 #[tokio::test]
 async fn test_create_task_empty_title_fails() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let result = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "  ", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -350,9 +332,7 @@ async fn test_create_task_empty_title_fails() {
 
 #[tokio::test]
 async fn test_create_task_with_room_creation() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -379,9 +359,7 @@ async fn test_create_task_with_room_creation() {
 
 #[tokio::test]
 async fn test_list_tasks_filter_by_status() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let t1 = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -442,9 +420,7 @@ async fn test_list_tasks_filter_by_status() {
 
 #[tokio::test]
 async fn test_list_tasks_filter_by_assignee() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -495,9 +471,7 @@ async fn test_list_tasks_filter_by_assignee() {
 
 #[tokio::test]
 async fn test_list_tasks_filter_by_label() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let labels_bug = vec!["bug".to_string()];
     let labels_feat = vec!["feature".to_string()];
@@ -543,9 +517,7 @@ async fn test_list_tasks_filter_by_label() {
 
 #[tokio::test]
 async fn test_list_tasks_pagination() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     for i in 0..5 {
         tasks::create_task(tasks::CreateTaskParams {
@@ -590,9 +562,7 @@ async fn test_list_tasks_pagination() {
 
 #[tokio::test]
 async fn test_update_task_status() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -638,9 +608,7 @@ async fn test_update_task_status() {
 
 #[tokio::test]
 async fn test_update_task_priority() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -683,9 +651,7 @@ async fn test_update_task_priority() {
 
 #[tokio::test]
 async fn test_update_task_assignee() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -728,9 +694,7 @@ async fn test_update_task_assignee() {
 
 #[tokio::test]
 async fn test_close_task() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Close me", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -749,9 +713,7 @@ async fn test_close_task() {
 
 #[tokio::test]
 async fn test_get_task_not_found() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let result = tasks::get_task(&pools.fts, "nonexistent-id").await;
     assert!(matches!(result, Err(NousError::NotFound(_))));
@@ -761,9 +723,7 @@ async fn test_get_task_not_found() {
 
 #[tokio::test]
 async fn test_link_then_unlink() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let t1 = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Task 1", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -798,9 +758,7 @@ async fn test_link_then_unlink() {
 
 #[tokio::test]
 async fn test_unlink_nonexistent_fails() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let t1 = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts, title: "Task 1", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
@@ -821,9 +779,7 @@ async fn test_unlink_nonexistent_fails() {
 
 #[tokio::test]
 async fn test_add_note_auto_creates_room() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -854,9 +810,7 @@ async fn test_add_note_auto_creates_room() {
 
 #[tokio::test]
 async fn test_add_note_with_room() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -884,9 +838,7 @@ async fn test_add_note_with_room() {
 
 #[tokio::test]
 async fn test_task_history() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
@@ -933,9 +885,7 @@ async fn test_task_history() {
 
 #[tokio::test]
 async fn test_search_tasks_empty_query_fails() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     let result = tasks::search_tasks(&pools.fts, "  ", None).await;
     assert!(matches!(result, Err(NousError::Validation(_))));
@@ -945,9 +895,7 @@ async fn test_search_tasks_empty_query_fails() {
 
 #[tokio::test]
 async fn test_search_tasks_finds_by_title() {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, _tmp) = common::setup_test_db().await;
 
     tasks::create_task(tasks::CreateTaskParams {
         db: &pools.fts,
