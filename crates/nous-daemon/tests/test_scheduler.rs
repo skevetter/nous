@@ -1,40 +1,21 @@
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use nous_core::db::DbPools;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
-use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::{
     create_schedule, get_schedule, list_runs, CreateScheduleParams, MockClock,
 };
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tempfile::TempDir;
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-
+    let (mut state, tmp) = common::test_state().await;
     let clock = Arc::new(MockClock::new(ts));
     let shutdown = CancellationToken::new();
-    let state = AppState {
-        pool: pools.fts.clone(),
-        vec_pool: pools.vec.clone(),
-        registry: Arc::new(NotificationRegistry::new()),
-        embedder: Some(Arc::new(MockEmbedder::new())),
-        embedding_config: EmbeddingConfig::default(),
-        vector_store_config: VectorStoreConfig::default(),
-        schedule_notify: Arc::new(Notify::new()),
-        shutdown: shutdown.clone(),
-        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
-        default_model: "test-model".to_string(),
-        #[cfg(feature = "sandbox")]
-        sandbox_manager: None,
-    };
+    state.shutdown = shutdown.clone();
     (state, clock, shutdown, tmp)
 }
 

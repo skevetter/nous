@@ -1,16 +1,14 @@
+mod common;
+
 use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use nous_core::inventory::{
     self, InventoryStatus, InventoryType, ListItemsFilter, RegisterItemRequest, SearchItemsRequest,
     UpdateItemRequest,
 };
-use tempfile::TempDir;
 
-async fn setup() -> (DbPools, TempDir) {
-    let db_dir = TempDir::new().unwrap();
-    let pools = DbPools::connect(db_dir.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-    (pools, db_dir)
+async fn setup() -> (DbPools, tempfile::TempDir) {
+    common::setup_test_db().await
 }
 
 async fn create_test_agent(

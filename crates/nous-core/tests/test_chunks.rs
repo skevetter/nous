@@ -1,15 +1,13 @@
+mod common;
+
 use nous_core::db::{DbPools, EMBEDDING_DIMENSION};
 use nous_core::memory::embed::Embedder;
 use nous_core::memory::{
     self, Chunk, Chunker, Importance, MemoryType, MockEmbedder, SaveMemoryRequest,
 };
-use tempfile::TempDir;
 
-async fn setup() -> (DbPools, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-    (pools, tmp)
+async fn setup() -> (DbPools, tempfile::TempDir) {
+    common::setup_test_db().await
 }
 
 // --- Chunking tests ---

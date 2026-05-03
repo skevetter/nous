@@ -1,61 +1,21 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use nous_core::db::DbPools;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
-use nous_core::notifications::NotificationRegistry;
 use nous_daemon::app;
 use nous_daemon::state::AppState;
 use serde_json::{json, Value};
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 async fn test_state() -> (AppState, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-    let state = AppState {
-        pool: pools.fts.clone(),
-        vec_pool: pools.vec.clone(),
-        registry: Arc::new(NotificationRegistry::new()),
-        embedder: Some(Arc::new(MockEmbedder::new())),
-        embedding_config: EmbeddingConfig::default(),
-        vector_store_config: VectorStoreConfig::default(),
-        schedule_notify: Arc::new(Notify::new()),
-        shutdown: CancellationToken::new(),
-        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
-        default_model: "test-model".to_string(),
-        #[cfg(feature = "sandbox")]
-        sandbox_manager: None,
-    };
-    (state, tmp)
+    common::test_state().await
 }
 
 async fn test_state_no_embedder() -> (AppState, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
-    let state = AppState {
-        pool: pools.fts.clone(),
-        vec_pool: pools.vec.clone(),
-        registry: Arc::new(NotificationRegistry::new()),
-        embedder: None,
-        embedding_config: EmbeddingConfig::default(),
-        vector_store_config: VectorStoreConfig::default(),
-        schedule_notify: Arc::new(Notify::new()),
-        shutdown: CancellationToken::new(),
-        process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
-        llm_client: None,
-        default_model: "test-model".to_string(),
-        #[cfg(feature = "sandbox")]
-        sandbox_manager: None,
-    };
-    (state, tmp)
+    common::test_state_no_embedder().await
 }
 
 async fn json_body(response: axum::http::Response<Body>) -> Value {
@@ -2277,8 +2237,13 @@ async fn memory_search_hybrid_falls_back_to_fts5_when_no_embedder() {
 #[tokio::test]
 async fn sandbox_spawn_creates_entry_in_manager() {
     use nous_core::agents::{self, RegisterAgentRequest};
+    use nous_core::db::DbPools;
+    use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
+    use nous_core::notifications::NotificationRegistry;
     use nous_daemon::sandbox::SandboxManager;
-    use tokio::sync::Mutex;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, Notify};
+    use tokio_util::sync::CancellationToken;
 
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();

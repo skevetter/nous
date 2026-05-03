@@ -1,18 +1,16 @@
-use nous_core::db::DbPools;
+mod common;
+
 use nous_core::memory::{
     self, analytics, Embedder, Importance, MemoryType, MockEmbedder, SaveMemoryRequest,
     SearchMemoryRequest,
 };
-use tempfile::TempDir;
 
 async fn setup() -> (
     nous_core::db::DatabaseConnection,
     nous_core::db::VecPool,
-    TempDir,
+    tempfile::TempDir,
 ) {
-    let tmp = TempDir::new().unwrap();
-    let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations().await.unwrap();
+    let (pools, tmp) = common::setup_test_db().await;
     (pools.fts, pools.vec, tmp)
 }
 
