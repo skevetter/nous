@@ -55,6 +55,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub host: String,
     pub port: u16,
+    pub api_key: Option<String>,
     #[serde(default)]
     pub search: SearchConfig,
     #[serde(default)]
@@ -67,6 +68,7 @@ impl Default for Config {
             data_dir: default_data_dir(),
             host: "127.0.0.1".to_string(),
             port: 8377,
+            api_key: None,
             search: SearchConfig::default(),
             rate_limit: RateLimitConfig::default(),
         }
@@ -74,6 +76,12 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn resolve_api_key(&self) -> Option<String> {
+        std::env::var("NOUS_API_KEY")
+            .ok()
+            .or_else(|| self.api_key.clone())
+    }
+
     pub fn load() -> Result<Self, NousError> {
         let config_path = config_file_path();
         let config = match std::fs::read_to_string(&config_path) {
@@ -228,5 +236,38 @@ mod tests {
         "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.search.tokenizer, "porter unicode61");
+    }
+
+    #[test]
+    fn api_key_from_config_file() {
+        let toml_str = r#"
+            api_key = "my-secret"
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.api_key.as_deref(), Some("my-secret"));
+    }
+
+    #[test]
+    fn api_key_default_is_none() {
+        let cfg = Config::default();
+        assert!(cfg.api_key.is_none());
+    }
+
+    #[test]
+    fn resolve_api_key_prefers_env() {
+        temp_env::with_var("NOUS_API_KEY", Some("env-key"), || {
+            let mut cfg = Config::default();
+            cfg.api_key = Some("file-key".into());
+            assert_eq!(cfg.resolve_api_key().as_deref(), Some("env-key"));
+        });
+    }
+
+    #[test]
+    fn resolve_api_key_falls_back_to_config() {
+        temp_env::with_var("NOUS_API_KEY", None::<&str>, || {
+            let mut cfg = Config::default();
+            cfg.api_key = Some("file-key".into());
+            assert_eq!(cfg.resolve_api_key().as_deref(), Some("file-key"));
+        });
     }
 }

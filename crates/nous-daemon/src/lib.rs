@@ -1,4 +1,5 @@
 pub mod agent_memory;
+pub mod auth;
 pub mod embedding;
 pub mod error;
 pub mod llm_client;
@@ -19,16 +20,43 @@ use nous_core::config::RateLimitConfig;
 use state::AppState;
 
 pub fn app(state: AppState) -> Router {
-    router(state)
+    app_with_options(state, None, None)
 }
 
 pub fn app_with_rate_limit(state: AppState, rate_limit: &RateLimitConfig) -> Router {
-    rate_limit::apply(rate_limit, router(state))
+    app_with_options(state, Some(rate_limit), None)
 }
 
-fn router(state: AppState) -> Router {
+pub fn app_with_api_key(state: AppState, api_key: Option<&str>) -> Router {
+    app_with_options(state, None, api_key)
+}
+
+pub fn app_with_options(
+    state: AppState,
+    rate_limit: Option<&RateLimitConfig>,
+    api_key: Option<&str>,
+) -> Router {
+    let public = Router::new().route("/health", get(routes::health::get));
+
+    let mut protected = protected_routes();
+
+    if let Some(key) = api_key {
+        protected = protected
+            .layer(axum::middleware::from_fn(auth::require_api_key))
+            .layer(axum::Extension(auth::ApiKey(key.into())));
+    }
+
+    let mut router = public.merge(protected).with_state(state);
+
+    if let Some(rl) = rate_limit {
+        router = rate_limit::apply(rl, router);
+    }
+
+    router
+}
+
+fn protected_routes() -> Router<AppState> {
     Router::new()
-        .route("/health", get(routes::health::get))
         .route("/rooms", post(routes::rooms::create))
         .route("/rooms", get(routes::rooms::list))
         .route("/rooms/{id}", get(routes::rooms::get))
@@ -158,7 +186,6 @@ fn router(state: AppState) -> Router {
         .route("/mcp/tools", post(routes::mcp::list_tools))
         .route("/mcp/tools", get(routes::mcp::list_tools))
         .route("/mcp/call", post(routes::mcp::call_tool))
-        .with_state(state)
 }
 
 #[cfg(test)]
@@ -1144,5 +1171,97 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["decayed"].as_i64().unwrap() >= 0);
+    }
+
+    #[tokio::test]
+    async fn auth_health_accessible_without_key() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, Some("secret-key"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_missing_header() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, Some("secret-key"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/rooms")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_invalid_key() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, Some("secret-key"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/rooms")
+                    .header("authorization", "Bearer wrong-key")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_accepts_valid_key() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, Some("secret-key"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/rooms")
+                    .header("authorization", "Bearer secret-key")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_disabled_when_no_key() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/rooms")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
