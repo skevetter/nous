@@ -1,5 +1,7 @@
+#[cfg(feature = "tool-framework")]
 use std::future::Future;
 use std::path::PathBuf;
+#[cfg(feature = "tool-framework")]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,10 +11,15 @@ use serde_json::Value;
 
 use crate::error::NousError;
 
+#[cfg(feature = "tool-framework")]
 pub mod builtin;
+#[cfg(feature = "tool-framework")]
 pub mod custom;
+#[cfg(feature = "tool-framework")]
 pub mod execution;
+#[cfg(feature = "tool-framework")]
 pub mod permissions;
+#[cfg(feature = "tool-framework")]
 pub mod registry;
 pub mod services;
 
@@ -42,6 +49,7 @@ pub enum ToolCategory {
     Custom,
 }
 
+#[cfg(feature = "tool-framework")]
 pub trait AgentTool: Send + Sync + 'static {
     fn metadata(&self) -> &ToolMetadata;
 
@@ -52,6 +60,7 @@ pub trait AgentTool: Send + Sync + 'static {
     ) -> impl Future<Output = Result<ToolOutput, ToolError>> + Send;
 }
 
+#[cfg(feature = "tool-framework")]
 pub trait AgentToolDyn: Send + Sync + 'static {
     fn metadata_dyn(&self) -> &ToolMetadata;
     fn call_dyn<'a>(
@@ -61,6 +70,7 @@ pub trait AgentToolDyn: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
 }
 
+#[cfg(feature = "tool-framework")]
 impl<T: AgentTool> AgentToolDyn for T {
     fn metadata_dyn(&self) -> &ToolMetadata {
         self.metadata()
@@ -300,78 +310,87 @@ impl Default for ExecutionPolicy {
     }
 }
 
-use std::collections::HashSet;
+#[cfg(feature = "tool-framework")]
+mod framework {
+    use std::collections::HashSet;
 
-use crate::agents::definition::AgentDefinition;
-use registry::DynTool;
+    use crate::agents::definition::AgentDefinition;
+    use super::registry::DynTool;
 
-pub async fn resolve_agent_tools(
-    registry: &registry::ToolRegistry,
-    agent_def: &AgentDefinition,
-) -> Vec<DynTool> {
-    let allowed_names: HashSet<String> = if let Some(ref tools_section) = agent_def.tools {
-        if let Some(ref allow) = tools_section.allow {
-            allow.iter().cloned().collect()
+    pub async fn resolve_agent_tools(
+        registry: &super::registry::ToolRegistry,
+        agent_def: &AgentDefinition,
+    ) -> Vec<DynTool> {
+        let allowed_names: HashSet<String> = if let Some(ref tools_section) = agent_def.tools {
+            if let Some(ref allow) = tools_section.allow {
+                allow.iter().cloned().collect()
+            } else {
+                default_tools()
+            }
         } else {
             default_tools()
+        };
+
+        let denied_names: HashSet<String> = agent_def
+            .tools
+            .as_ref()
+            .and_then(|t| t.deny.as_ref())
+            .map(|d| d.iter().cloned().collect())
+            .unwrap_or_default();
+
+        let final_names: HashSet<String> =
+            allowed_names.difference(&denied_names).cloned().collect();
+
+        let mut resolved = Vec::new();
+        for name in &final_names {
+            if let Some(tool) = registry.get(name).await {
+                resolved.push(tool);
+            }
         }
-    } else {
-        default_tools()
-    };
-
-    let denied_names: HashSet<String> = agent_def
-        .tools
-        .as_ref()
-        .and_then(|t| t.deny.as_ref())
-        .map(|d| d.iter().cloned().collect())
-        .unwrap_or_default();
-
-    let final_names: HashSet<String> = allowed_names.difference(&denied_names).cloned().collect();
-
-    let mut resolved = Vec::new();
-    for name in &final_names {
-        if let Some(tool) = registry.get(name).await {
-            resolved.push(tool);
-        }
+        resolved
     }
-    resolved
+
+    pub fn default_tools() -> HashSet<String> {
+        [
+            "fs_read",
+            "fs_write",
+            "fs_edit",
+            "fs_list",
+            "fs_search",
+            "fs_stat",
+            "fs_mkdir",
+            "shell_exec",
+            "shell_exec_background",
+            "shell_read_output",
+            "code_grep",
+            "code_glob",
+            "code_symbols",
+            "memory_save",
+            "memory_search",
+            "memory_search_hybrid",
+            "memory_get_context",
+            "memory_relate",
+            "room_post",
+            "room_read",
+            "room_create",
+            "room_wait",
+            "task_create",
+            "task_update",
+            "http_fetch",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
 }
 
-pub fn default_tools() -> HashSet<String> {
-    [
-        "fs_read",
-        "fs_write",
-        "fs_edit",
-        "fs_list",
-        "fs_search",
-        "fs_stat",
-        "fs_mkdir",
-        "shell_exec",
-        "shell_exec_background",
-        "shell_read_output",
-        "code_grep",
-        "code_glob",
-        "code_symbols",
-        "memory_save",
-        "memory_search",
-        "memory_search_hybrid",
-        "memory_get_context",
-        "memory_relate",
-        "room_post",
-        "room_read",
-        "room_create",
-        "room_wait",
-        "task_create",
-        "task_update",
-        "http_fetch",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
+#[cfg(feature = "tool-framework")]
+pub use framework::{default_tools, resolve_agent_tools};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tool-framework"))]
 mod resolve_tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::agents::definition::{AgentDefinition, AgentSection, ToolsSection};
     use crate::tools::builtin::register_builtin_tools;

@@ -3,6 +3,10 @@ name = "nous-core"
 version = "0.10.0"
 edition.workspace = true
 
+[features]
+default = []
+tool-framework = []
+
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }
