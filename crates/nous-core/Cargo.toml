@@ -19,6 +19,9 @@ tokenizers = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
 rig-core = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"

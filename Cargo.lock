@@ -3818,8 +3818,11 @@ version = "0.10.0"
 dependencies = [
  "chrono",
  "dirs",
+ "glob",
  "ort",
  "proptest",
+ "regex",
+ "reqwest 0.12.28",
  "rig-core",
  "rusqlite",
  "serde",
