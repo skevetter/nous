@@ -99,12 +99,17 @@ async fn test_task_lifecycle_room_projection() {
         status_events.len()
     );
 
-    assert!(status_events.iter().any(|m| m.content.contains("in_progress")));
+    assert!(status_events
+        .iter()
+        .any(|m| m.content.contains("in_progress")));
     assert!(status_events.iter().any(|m| m.content.contains("closed")));
 
     for evt in &task_events {
         assert_eq!(evt.room_id, room.id);
-        let meta = evt.metadata.as_ref().expect("task_event should have metadata");
+        let meta = evt
+            .metadata
+            .as_ref()
+            .expect("task_event should have metadata");
         assert_eq!(meta["task_event"]["task_id"], task.id);
     }
 
@@ -154,24 +159,14 @@ async fn test_agent_handoff_e2e() {
         task_id: Some("TASK-HANDOFF-001".into()),
         branch: Some("feat/handoff-test".into()),
         scope: Some("integration test module".into()),
-        acceptance_criteria: vec![
-            "All 4 tests pass".into(),
-            "No regressions".into(),
-        ],
+        acceptance_criteria: vec!["All 4 tests pass".into(), "No regressions".into()],
         context: serde_json::json!({"priority": "high", "sprint": "ws-b"}),
         deadline: Some("2026-05-04".into()),
     };
 
-    let msg = post_handoff(
-        pool,
-        None,
-        &room.id,
-        &_manager.id,
-        &_engineer.id,
-        payload,
-    )
-    .await
-    .unwrap();
+    let msg = post_handoff(pool, None, &room.id, &_manager.id, &_engineer.id, payload)
+        .await
+        .unwrap();
 
     assert_eq!(msg.message_type, MessageType::Handoff);
     assert_eq!(msg.room_id, room.id);
@@ -345,7 +340,10 @@ async fn test_task_command_from_chat() {
     );
 
     for evt in &task_events {
-        let meta = evt.metadata.as_ref().expect("task_event should have metadata");
+        let meta = evt
+            .metadata
+            .as_ref()
+            .expect("task_event should have metadata");
         assert_eq!(meta["task_event"]["task_id"], task.id);
     }
 

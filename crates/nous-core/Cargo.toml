@@ -23,6 +23,9 @@ reqwest = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
 async-trait = { workspace = true }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+nous-migration = { path = "../nous-migration" }
 
 [dev-dependencies]
 proptest = "1"

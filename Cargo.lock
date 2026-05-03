@@ -3819,12 +3819,15 @@ dependencies = [
  "chrono",
  "dirs",
  "glob",
+ "nous-migration",
  "ort",
  "proptest",
  "regex",
  "reqwest 0.12.28",
  "rig-core",
  "rusqlite",
+ "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "sqlite-vec",
@@ -3868,6 +3871,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "nous-migration"
+version = "0.1.0"
+dependencies = [
+ "sea-orm-migration",
 ]
 
 [[package]]

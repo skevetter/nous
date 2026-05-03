@@ -17,6 +17,9 @@ pub enum NousError {
     #[error("sqlite error: {0}")]
     Sqlite(#[from] sqlx::Error),
 
+    #[error("sea-orm error: {0}")]
+    SeaOrm(#[from] sea_orm::DbErr),
+
     #[error("cyclic link detected: {0}")]
     CyclicLink(String),
 
