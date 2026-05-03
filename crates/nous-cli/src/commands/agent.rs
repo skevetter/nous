@@ -442,8 +442,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     .ok_or("cannot determine config directory")?
                     .join("nous")
                     .join("skills");
-                let resolved =
-                    agents::definition::resolve_skills(&skills.refs, &skills_dir)?;
+                let resolved = agents::definition::resolve_skills(&skills.refs, &skills_dir)?;
 
                 let mut hasher = Sha256::new();
                 for s in &resolved {
@@ -503,8 +502,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let resolved_id = if looks_like_uuid(&name_or_id) {
                 name_or_id
             } else {
-                let agent =
-                    agents::lookup_agent(pool, &name_or_id, namespace.as_deref()).await?;
+                let agent = agents::lookup_agent(pool, &name_or_id, namespace.as_deref()).await?;
                 agent.id
             };
             let result = agents::deregister_agent(pool, &resolved_id, cascade).await?;
@@ -790,7 +788,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     Some(&restart),
                 )
                 .await?;
-                agents::processes::update_agent(pool, &id, Some("sandbox"), None, None, None, None).await?;
+                agents::processes::update_agent(pool, &id, Some("sandbox"), None, None, None, None)
+                    .await?;
                 println!("{}", serde_json::to_string_pretty(&process)?);
             } else {
                 let agent = agents::get_agent_by_id(pool, &id).await?;

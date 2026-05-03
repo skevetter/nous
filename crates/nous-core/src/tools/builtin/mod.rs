@@ -16,7 +16,7 @@ pub use filesystem::{
 pub use http::{HttpFetchTool, HttpRequestTool};
 pub use memory::{
     MemoryGetContextTool, MemoryRelateTool, MemorySaveTool, MemorySearchHybridTool,
-    MemorySearchTool,
+    MemorySearchTool, MemoryUpdateTool,
 };
 pub use shell::{ShellExecBackgroundTool, ShellExecTool, ShellKillTool, ShellReadOutputTool};
 
@@ -43,12 +43,13 @@ pub async fn register_builtin_tools(registry: &ToolRegistry) {
     registry.register(HttpRequestTool::new()).await;
     registry.register(HttpFetchTool::new()).await;
 
-    // Memory (5)
+    // Memory (6)
     registry.register(MemorySaveTool::new()).await;
     registry.register(MemorySearchTool::new()).await;
     registry.register(MemorySearchHybridTool::new()).await;
     registry.register(MemoryGetContextTool::new()).await;
     registry.register(MemoryRelateTool::new()).await;
+    registry.register(MemoryUpdateTool::new()).await;
 
     // Agent comms (6)
     registry.register(RoomPostTool::new()).await;
@@ -72,7 +73,7 @@ mod tests {
     async fn register_builtin_tools_registers_28() {
         let registry = ToolRegistry::new();
         register_builtin_tools(&registry).await;
-        assert_eq!(registry.count().await, 28);
+        assert_eq!(registry.count().await, 29);
     }
 
     #[tokio::test]
@@ -105,7 +106,7 @@ mod tests {
         assert_eq!(http.len(), 2, "expected 2 http tools");
 
         let memory = registry.list_by_category(ToolCategory::Memory).await;
-        assert_eq!(memory.len(), 5, "expected 5 memory tools");
+        assert_eq!(memory.len(), 6, "expected 6 memory tools");
 
         let comms = registry.list_by_category(ToolCategory::AgentComms).await;
         assert_eq!(comms.len(), 6, "expected 6 agent comms tools");

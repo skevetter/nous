@@ -307,6 +307,7 @@ mod resolve_tests {
             process: None,
             skills: None,
             tools: None,
+            memory: None,
             metadata: None,
         }
     }
@@ -355,7 +356,10 @@ mod resolve_tests {
         let def = minimal_agent_def("engineer");
         let tools = resolve_agent_tools(&registry, &def, "engineer").await;
 
-        let names: HashSet<String> = tools.iter().map(|t| t.metadata_dyn().name.clone()).collect();
+        let names: HashSet<String> = tools
+            .iter()
+            .map(|t| t.metadata_dyn().name.clone())
+            .collect();
         assert!(names.contains("fs_read"));
         assert!(names.contains("shell_exec"));
         assert!(names.contains("code_grep"));
@@ -369,7 +373,10 @@ mod resolve_tests {
         let def = minimal_agent_def("manager");
         let tools = resolve_agent_tools(&registry, &def, "manager").await;
 
-        let names: HashSet<String> = tools.iter().map(|t| t.metadata_dyn().name.clone()).collect();
+        let names: HashSet<String> = tools
+            .iter()
+            .map(|t| t.metadata_dyn().name.clone())
+            .collect();
         assert!(names.contains("memory_save"));
         assert!(names.contains("room_post"));
         assert!(names.contains("task_create"));
@@ -392,7 +399,10 @@ mod resolve_tests {
         });
 
         let tools = resolve_agent_tools(&registry, &def, "engineer").await;
-        let names: HashSet<String> = tools.iter().map(|t| t.metadata_dyn().name.clone()).collect();
+        let names: HashSet<String> = tools
+            .iter()
+            .map(|t| t.metadata_dyn().name.clone())
+            .collect();
         assert_eq!(names.len(), 2);
         assert!(names.contains("fs_read"));
         assert!(names.contains("fs_write"));
@@ -417,7 +427,10 @@ mod resolve_tests {
         });
 
         let tools = resolve_agent_tools(&registry, &def, "engineer").await;
-        let names: HashSet<String> = tools.iter().map(|t| t.metadata_dyn().name.clone()).collect();
+        let names: HashSet<String> = tools
+            .iter()
+            .map(|t| t.metadata_dyn().name.clone())
+            .collect();
         assert_eq!(names.len(), 2);
         assert!(names.contains("fs_read"));
         assert!(names.contains("fs_write"));
