@@ -1,6 +1,7 @@
 use nous_core::agents::coordination::{post_handoff, HandoffPayload};
 use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
+use sea_orm::ConnectionTrait;
 use nous_core::messages::{read_messages, MessageType, ReadMessagesRequest};
 use nous_core::notifications::list_subscriptions;
 use nous_core::rooms;
@@ -11,6 +12,11 @@ async fn setup() -> (DbPools, TempDir) {
     let db_dir = TempDir::new().unwrap();
     let pools = DbPools::connect(db_dir.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
+    for agent_id in ["actor-lifecycle", "chat-actor"] {
+        pools.fts.execute_unprepared(
+            &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+        ).await.unwrap();
+    }
     (pools, db_dir)
 }
 

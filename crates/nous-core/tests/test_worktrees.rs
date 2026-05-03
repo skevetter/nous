@@ -5,6 +5,7 @@ use std::process::Command;
 use nous_core::db::DbPools;
 use nous_core::error::NousError;
 use nous_core::worktrees::{self, CreateWorktreeRequest, ListWorktreesFilter, WorktreeStatus};
+use sea_orm::ConnectionTrait;
 use tempfile::TempDir;
 
 fn init_git_repo(dir: &std::path::Path) {
@@ -43,6 +44,11 @@ fn init_git_repo(dir: &std::path::Path) {
 
 async fn setup() -> (DbPools, TempDir, TempDir) {
     let (pools, db_dir) = common::setup_test_db().await;
+    for agent_id in ["agent-1", "alpha", "beta", "agent-lifecycle"] {
+        pools.fts.execute_unprepared(
+            &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+        ).await.unwrap();
+    }
     let repo_dir = TempDir::new().unwrap();
     init_git_repo(repo_dir.path());
     (pools, db_dir, repo_dir)

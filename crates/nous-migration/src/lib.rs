@@ -31,6 +31,7 @@ mod m028_resources_data_migration;
 mod m029_chat_task_integration;
 mod m030_remove_agent_type;
 mod m031_schedule_timestamps_iso;
+mod m032_add_agent_fk_constraints;
 
 pub struct Migrator;
 
@@ -69,6 +70,7 @@ impl MigratorTrait for Migrator {
             Box::new(m029_chat_task_integration::Migration),
             Box::new(m030_remove_agent_type::Migration),
             Box::new(m031_schedule_timestamps_iso::Migration),
+            Box::new(m032_add_agent_fk_constraints::Migration),
         ]
     }
 }

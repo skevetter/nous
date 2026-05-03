@@ -4,6 +4,7 @@ use nous_core::memory::{
     self, analytics, Embedder, Importance, MemoryType, MockEmbedder, SaveMemoryRequest,
     SearchMemoryRequest,
 };
+use sea_orm::ConnectionTrait;
 
 async fn setup() -> (
     nous_core::db::DatabaseConnection,
@@ -11,6 +12,11 @@ async fn setup() -> (
     tempfile::TempDir,
 ) {
     let (pools, tmp) = common::setup_test_db().await;
+    for agent_id in ["agent-1", "agent-2"] {
+        pools.fts.execute_unprepared(
+            &format!("INSERT OR IGNORE INTO agents (id, name, namespace, status) VALUES ('{agent_id}', '{agent_id}', 'default', 'active')")
+        ).await.unwrap();
+    }
     (pools.fts, pools.vec, tmp)
 }
 
