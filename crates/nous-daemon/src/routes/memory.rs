@@ -159,17 +159,18 @@ pub async fn context(
     State(state): State<AppState>,
     Query(params): Query<ContextQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit_val = params.limit.unwrap_or(20);
     let results = nous_core::memory::get_context(
         &state.pool,
         &nous_core::memory::ContextRequest {
             workspace_id: params.workspace_id,
             agent_id: params.agent_id,
             topic_key: params.topic_key,
-            limit: params.limit,
+            limit: Some(limit_val + 1),
         },
     )
     .await?;
-    Ok(ApiResponse::ok(results))
+    Ok(crate::response::paginated(results, limit_val, 0))
 }
 
 pub async fn relate(
@@ -194,7 +195,14 @@ pub async fn list_relations(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let relations = nous_core::memory::list_relations(&state.pool, &id).await?;
-    Ok(ApiResponse::ok(relations))
+    let total = relations.len();
+    Ok(crate::response::ListEnvelope {
+        data: relations,
+        total,
+        limit: total as u32,
+        offset: 0,
+        has_more: false,
+    })
 }
 
 #[derive(Deserialize)]

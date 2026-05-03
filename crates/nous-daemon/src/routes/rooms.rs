@@ -45,7 +45,14 @@ pub async fn list(
     Query(params): Query<ListRoomsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let rooms = nous_core::rooms::list_rooms(&state.pool, params.include_archived).await?;
-    Ok(ApiResponse::ok(rooms))
+    let total = rooms.len();
+    Ok(crate::response::ListEnvelope {
+        data: rooms,
+        total,
+        limit: total as u32,
+        offset: 0,
+        has_more: false,
+    })
 }
 
 pub async fn get(

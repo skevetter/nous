@@ -52,6 +52,8 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListWorktreesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
     let status = params
         .status
         .as_deref()
@@ -64,12 +66,12 @@ pub async fn list(
             agent_id: params.agent_id,
             task_id: params.task_id,
             repo_root: None,
-            limit: params.limit,
-            offset: params.offset,
+            limit: Some(limit + 1),
+            offset: Some(offset),
         },
     )
     .await?;
-    Ok(ApiResponse::ok(wts))
+    Ok(crate::response::paginated(wts, limit, offset))
 }
 
 pub async fn get(

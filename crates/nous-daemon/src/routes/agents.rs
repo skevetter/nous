@@ -98,6 +98,8 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
     let status = params
         .status
         .as_deref()
@@ -109,13 +111,13 @@ pub async fn list(
         &nous_core::agents::ListAgentsFilter {
             namespace: params.namespace,
             status,
-            limit: params.limit,
-            offset: params.offset,
+            limit: Some(limit + 1),
+            offset: Some(offset),
         },
     )
     .await?;
 
-    Ok(ApiResponse::ok(agents))
+    Ok(crate::response::paginated(agents, limit, offset))
 }
 
 pub async fn deregister(
@@ -222,9 +224,10 @@ pub async fn list_versions(
     Path(id): Path<String>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit;
-    let versions = nous_core::agents::list_versions(&state.pool, &id, limit).await?;
-    Ok(ApiResponse::ok(versions))
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
+    let versions = nous_core::agents::list_versions(&state.pool, &id, Some(limit + 1)).await?;
+    Ok(crate::response::paginated(versions, limit, offset))
 }
 
 pub async fn record_version(
@@ -270,13 +273,15 @@ pub async fn list_outdated(
     State(state): State<AppState>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
     let agents = nous_core::agents::list_outdated_agents(
         &state.pool,
         params.namespace.as_deref(),
-        params.limit,
+        Some(limit + 1),
     )
     .await?;
-    Ok(ApiResponse::ok(agents))
+    Ok(crate::response::paginated(agents, limit, offset))
 }
 
 // --- Template routes ---
@@ -327,13 +332,15 @@ pub async fn list_templates(
     State(state): State<AppState>,
     Query(params): Query<ListTemplatesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset: u32 = 0;
     let templates = nous_core::agents::list_templates(
         &state.pool,
         params.template_type.as_deref(),
-        params.limit,
+        Some(limit + 1),
     )
     .await?;
-    Ok(ApiResponse::ok(templates))
+    Ok(crate::response::paginated(templates, limit, offset))
 }
 
 pub async fn get_template(

@@ -27,6 +27,36 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     }
 }
 
+#[derive(Serialize)]
+pub struct ListEnvelope<T: Serialize> {
+    pub data: Vec<T>,
+    pub total: usize,
+    pub limit: u32,
+    pub offset: u32,
+    pub has_more: bool,
+}
+
+impl<T: Serialize> IntoResponse for ListEnvelope<T> {
+    fn into_response(self) -> Response {
+        (StatusCode::OK, Json(self)).into_response()
+    }
+}
+
+pub fn paginated<T: Serialize>(mut items: Vec<T>, limit: u32, offset: u32) -> ListEnvelope<T> {
+    let has_more = items.len() > limit as usize;
+    if has_more {
+        items.truncate(limit as usize);
+    }
+    let total = items.len();
+    ListEnvelope {
+        data: items,
+        total,
+        limit,
+        offset,
+        has_more,
+    }
+}
+
 pub fn no_content() -> StatusCode {
     StatusCode::NO_CONTENT
 }

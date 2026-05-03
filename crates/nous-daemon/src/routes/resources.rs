@@ -112,6 +112,9 @@ pub async fn list(
         .map(|s| s.parse::<nous_core::resources::OwnershipPolicy>())
         .transpose()?;
 
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
+
     let resources = nous_core::resources::list_resources(
         &state.pool,
         &nous_core::resources::ListResourcesFilter {
@@ -121,12 +124,12 @@ pub async fn list(
             namespace: params.namespace,
             orphaned: params.orphaned,
             ownership_policy,
-            limit: params.limit,
-            offset: params.offset,
+            limit: Some(limit + 1),
+            offset: Some(offset),
         },
     )
     .await?;
-    Ok(ApiResponse::ok(resources))
+    Ok(crate::response::paginated(resources, limit, offset))
 }
 
 pub async fn get(

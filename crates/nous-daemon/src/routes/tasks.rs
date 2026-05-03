@@ -79,18 +79,20 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListTasksQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
     let tasks = nous_core::tasks::list_tasks(nous_core::tasks::ListTasksParams {
         db: &state.pool,
         status: params.status.as_deref(),
         assignee_id: params.assignee_id.as_deref(),
         label: params.label.as_deref(),
-        limit: params.limit,
-        offset: params.offset,
+        limit: Some(limit + 1),
+        offset: Some(offset),
         order_by: None,
         order_dir: None,
     })
     .await?;
-    Ok(ApiResponse::ok(tasks))
+    Ok(crate::response::paginated(tasks, limit, offset))
 }
 
 pub async fn get(
