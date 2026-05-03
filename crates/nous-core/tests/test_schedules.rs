@@ -14,21 +14,21 @@ async fn create_schedule_basic() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let schedule = schedules::create_schedule(
-        &pool,
-        "test-schedule",
-        "*/5 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        r#"{"tool":"memory_stats","args":{}}"#,
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "test-schedule",
+        cron_expr: "*/5 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: r#"{"tool":"memory_stats","args":{}}"#,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -46,21 +46,21 @@ async fn create_schedule_with_trigger_at() {
     let clock = MockClock::new(1_700_000_000);
     let trigger = 1_700_001_000;
 
-    let schedule = schedules::create_schedule(
-        &pool,
-        "oneshot",
-        "@once",
-        Some(trigger),
-        None,
-        "http",
-        r#"{"method":"GET","url":"http://example.com"}"#,
-        None,
-        None,
-        None,
-        None,
-        Some(1),
-        &clock,
-    )
+    let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "oneshot",
+        cron_expr: "@once",
+        trigger_at: Some(trigger),
+        timezone: None,
+        action_type: "http",
+        action_payload: r#"{"method":"GET","url":"http://example.com"}"#,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: Some(1),
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -74,21 +74,21 @@ async fn create_schedule_invalid_cron() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let result = schedules::create_schedule(
-        &pool,
-        "bad-cron",
-        "invalid expression",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let result = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "bad-cron",
+        cron_expr: "invalid expression",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await;
 
     assert!(result.is_err());
@@ -99,21 +99,21 @@ async fn create_schedule_empty_name() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let result = schedules::create_schedule(
-        &pool,
-        "",
-        "* * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let result = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await;
 
     assert!(result.is_err());
@@ -124,21 +124,21 @@ async fn get_schedule() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let created = schedules::create_schedule(
-        &pool,
-        "get-test",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let created = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "get-test",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -160,21 +160,21 @@ async fn list_schedules_all() {
     let clock = MockClock::new(1_700_000_000);
 
     for i in 0..3 {
-        schedules::create_schedule(
-            &pool,
-            &format!("sched-{i}"),
-            "0 * * * *",
-            None,
-            None,
-            "mcp_tool",
-            "{}",
-            None,
-            None,
-            None,
-            None,
-            None,
-            &clock,
-        )
+        schedules::create_schedule(schedules::CreateScheduleParams {
+            db: &pool,
+            name: &format!("sched-{i}"),
+            cron_expr: "0 * * * *",
+            trigger_at: None,
+            timezone: None,
+            action_type: "mcp_tool",
+            action_payload: "{}",
+            desired_outcome: None,
+            max_retries: None,
+            timeout_secs: None,
+            max_output_bytes: None,
+            max_runs: None,
+            clock: &clock,
+        })
         .await
         .unwrap();
     }
@@ -190,39 +190,39 @@ async fn list_schedules_filter_enabled() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "enabled-one",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "enabled-one",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
-    schedules::update_schedule(
-        &pool,
-        &s.id,
-        None,
-        None,
-        None,
-        Some(false),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    schedules::update_schedule(schedules::UpdateScheduleParams {
+        db: &pool,
+        id: &s.id,
+        name: None,
+        cron_expr: None,
+        trigger_at: None,
+        enabled: Some(false),
+        action_type: None,
+        action_payload: None,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -242,39 +242,39 @@ async fn update_schedule_fields() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "update-me",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "update-me",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
-    let updated = schedules::update_schedule(
-        &pool,
-        &s.id,
-        Some("new-name"),
-        Some("*/10 * * * *"),
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(5),
-        None,
-        None,
-        &clock,
-    )
+    let updated = schedules::update_schedule(schedules::UpdateScheduleParams {
+        db: &pool,
+        id: &s.id,
+        name: Some("new-name"),
+        cron_expr: Some("*/10 * * * *"),
+        trigger_at: None,
+        enabled: None,
+        action_type: None,
+        action_payload: None,
+        desired_outcome: None,
+        max_retries: Some(5),
+        timeout_secs: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -288,40 +288,40 @@ async fn update_schedule_disable_clears_next_run() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "disable-me",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "disable-me",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
     assert!(s.next_run_at.is_some());
 
-    let updated = schedules::update_schedule(
-        &pool,
-        &s.id,
-        None,
-        None,
-        None,
-        Some(false),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let updated = schedules::update_schedule(schedules::UpdateScheduleParams {
+        db: &pool,
+        id: &s.id,
+        name: None,
+        cron_expr: None,
+        trigger_at: None,
+        enabled: Some(false),
+        action_type: None,
+        action_payload: None,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -334,21 +334,21 @@ async fn delete_schedule_success() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "delete-me",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "delete-me",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -370,35 +370,35 @@ async fn record_run_and_list() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "run-test",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "run-test",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
-    let run = schedules::record_run(
-        &pool,
-        &s.id,
-        1_700_000_100,
-        1_700_000_102,
-        "completed",
-        Some(0),
-        Some("ok"),
-        None,
-        1,
-    )
+    let run = schedules::record_run(schedules::RecordRunParams {
+        db: &pool,
+        schedule_id: &s.id,
+        started_at: 1_700_000_100,
+        finished_at: 1_700_000_102,
+        status: "completed",
+        exit_code: Some(0),
+        output: Some("ok"),
+        error: None,
+        attempt: 1,
+    })
     .await
     .unwrap();
 
@@ -418,36 +418,36 @@ async fn record_run_updates_last_run_at() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "last-run-test",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "last-run-test",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
     assert!(s.last_run_at.is_none());
 
-    schedules::record_run(
-        &pool,
-        &s.id,
-        1_700_000_100,
-        1_700_000_105,
-        "completed",
-        None,
-        None,
-        None,
-        1,
-    )
+    schedules::record_run(schedules::RecordRunParams {
+        db: &pool,
+        schedule_id: &s.id,
+        started_at: 1_700_000_100,
+        finished_at: 1_700_000_105,
+        status: "completed",
+        exit_code: None,
+        output: None,
+        error: None,
+        attempt: 1,
+    })
     .await
     .unwrap();
 
@@ -460,36 +460,36 @@ async fn record_run_purges_old_runs() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "purge-test",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        Some(3),
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "purge-test",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: Some(3),
+        clock: &clock,
+    })
     .await
     .unwrap();
 
     for i in 0..5 {
-        schedules::record_run(
-            &pool,
-            &s.id,
-            1_700_000_000 + i * 100,
-            1_700_000_000 + i * 100 + 10,
-            "completed",
-            None,
-            None,
-            None,
-            1,
-        )
+        schedules::record_run(schedules::RecordRunParams {
+            db: &pool,
+            schedule_id: &s.id,
+            started_at: 1_700_000_000 + i * 100,
+            finished_at: 1_700_000_000 + i * 100 + 10,
+            status: "completed",
+            exit_code: None,
+            output: None,
+            error: None,
+            attempt: 1,
+        })
         .await
         .unwrap();
     }
@@ -505,30 +505,50 @@ async fn list_runs_filter_by_status() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "status-filter",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "status-filter",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
-    schedules::record_run(&pool, &s.id, 100, 110, "completed", None, None, None, 1)
-        .await
-        .unwrap();
-    schedules::record_run(&pool, &s.id, 200, 210, "failed", None, None, Some("err"), 1)
-        .await
-        .unwrap();
+    schedules::record_run(schedules::RecordRunParams {
+        db: &pool,
+        schedule_id: &s.id,
+        started_at: 100,
+        finished_at: 110,
+        status: "completed",
+        exit_code: None,
+        output: None,
+        error: None,
+        attempt: 1,
+    })
+    .await
+    .unwrap();
+    schedules::record_run(schedules::RecordRunParams {
+        db: &pool,
+        schedule_id: &s.id,
+        started_at: 200,
+        finished_at: 210,
+        status: "failed",
+        exit_code: None,
+        output: None,
+        error: Some("err"),
+        attempt: 1,
+    })
+    .await
+    .unwrap();
 
     let completed = schedules::list_runs(&pool, &s.id, Some("completed"), None)
         .await
@@ -546,21 +566,21 @@ async fn schedule_health_returns_counts() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    schedules::create_schedule(
-        &pool,
-        "health-1",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "health-1",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -574,21 +594,21 @@ async fn trigger_at_expired_gives_no_next_run() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let schedule = schedules::create_schedule(
-        &pool,
-        "expired-trigger",
-        "@once",
-        Some(1_699_999_000), // in the past
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        Some(1),
-        &clock,
-    )
+    let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "expired-trigger",
+        cron_expr: "@once",
+        trigger_at: Some(1_699_999_000), // in the past
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: Some(1),
+        clock: &clock,
+    })
     .await
     .unwrap();
 
@@ -613,27 +633,37 @@ async fn delete_schedule_cascades_runs() {
     let (pool, _tmp) = setup().await;
     let clock = MockClock::new(1_700_000_000);
 
-    let s = schedules::create_schedule(
-        &pool,
-        "cascade-test",
-        "0 * * * *",
-        None,
-        None,
-        "mcp_tool",
-        "{}",
-        None,
-        None,
-        None,
-        None,
-        None,
-        &clock,
-    )
+    let s = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: &pool,
+        name: "cascade-test",
+        cron_expr: "0 * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "mcp_tool",
+        action_payload: "{}",
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &clock,
+    })
     .await
     .unwrap();
 
-    schedules::record_run(&pool, &s.id, 100, 110, "completed", None, None, None, 1)
-        .await
-        .unwrap();
+    schedules::record_run(schedules::RecordRunParams {
+        db: &pool,
+        schedule_id: &s.id,
+        started_at: 100,
+        finished_at: 110,
+        status: "completed",
+        exit_code: None,
+        output: None,
+        error: None,
+        attempt: 1,
+    })
+    .await
+    .unwrap();
 
     schedules::delete_schedule(&pool, &s.id).await.unwrap();
 

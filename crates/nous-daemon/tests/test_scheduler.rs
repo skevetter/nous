@@ -4,7 +4,9 @@ use std::time::Duration;
 use nous_core::db::DbPools;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
-use nous_core::schedules::{create_schedule, get_schedule, list_runs, MockClock};
+use nous_core::schedules::{
+    create_schedule, get_schedule, list_runs, CreateScheduleParams, MockClock,
+};
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use tempfile::TempDir;
@@ -63,21 +65,21 @@ const BASE_TS: i64 = 1_767_225_600;
 async fn test_schedule_fires_at_correct_time() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
-    let schedule = create_schedule(
-        &state.pool,
-        "recurring-fire",
-        "* * * * *",
-        None,
-        None,
-        "shell",
-        r#"{"command": "echo fired"}"#,
-        None,
-        Some(0),
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "recurring-fire",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo fired"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
@@ -102,21 +104,21 @@ async fn test_once_schedule_fires_and_disables() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
     let trigger_at = BASE_TS + 60;
-    let schedule = create_schedule(
-        &state.pool,
-        "once-fire",
-        "@once",
-        Some(trigger_at),
-        None,
-        "shell",
-        r#"{"command": "echo once"}"#,
-        None,
-        Some(0),
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "once-fire",
+        cron_expr: "@once",
+        trigger_at: Some(trigger_at),
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo once"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
@@ -149,39 +151,39 @@ async fn test_once_schedule_fires_and_disables() {
 async fn test_disabled_schedule_does_not_fire() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
-    let schedule = create_schedule(
-        &state.pool,
-        "disabled-sched",
-        "* * * * *",
-        None,
-        None,
-        "shell",
-        r#"{"command": "echo should-not-run"}"#,
-        None,
-        Some(0),
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "disabled-sched",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo should-not-run"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
-    nous_core::schedules::update_schedule(
-        &state.pool,
-        &schedule.id,
-        None,
-        None,
-        None,
-        Some(false),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    nous_core::schedules::update_schedule(nous_core::schedules::UpdateScheduleParams {
+        db: &state.pool,
+        id: &schedule.id,
+        name: None,
+        cron_expr: None,
+        trigger_at: None,
+        enabled: Some(false),
+        action_type: None,
+        action_payload: None,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
@@ -203,21 +205,21 @@ async fn test_disabled_schedule_does_not_fire() {
 async fn test_failed_action_recorded() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
-    let schedule = create_schedule(
-        &state.pool,
-        "failing-shell",
-        "* * * * *",
-        None,
-        None,
-        "shell",
-        r#"{"command": "exit 1"}"#,
-        None,
-        Some(0),
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "failing-shell",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "exit 1"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
@@ -247,21 +249,21 @@ async fn test_failed_action_recorded() {
 async fn test_shell_timeout() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
-    let schedule = create_schedule(
-        &state.pool,
-        "timeout-shell",
-        "* * * * *",
-        None,
-        None,
-        "shell",
-        r#"{"command": "sleep 60"}"#,
-        None,
-        Some(0),
-        Some(1),
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "timeout-shell",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "sleep 60"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: Some(1),
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 
@@ -291,21 +293,21 @@ async fn test_shell_timeout() {
 async fn test_desired_outcome_mismatch() {
     let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
 
-    let schedule = create_schedule(
-        &state.pool,
-        "outcome-mismatch",
-        "* * * * *",
-        None,
-        None,
-        "shell",
-        r#"{"command": "echo hello"}"#,
-        Some("goodbye"),
-        Some(0),
-        None,
-        None,
-        None,
-        &*clock,
-    )
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "outcome-mismatch",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo hello"}"#,
+        desired_outcome: Some("goodbye"),
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
     .await
     .unwrap();
 

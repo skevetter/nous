@@ -6,7 +6,7 @@ use nous_core::db::DatabaseConnection;
 use nous_core::db::DbPools;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
-use nous_daemon::process_manager::ProcessRegistry;
+use nous_daemon::process_manager::{ProcessRegistry, SpawnParams};
 use nous_daemon::sandbox::SandboxManager;
 use nous_daemon::state::AppState;
 use sea_orm::{ConnectionTrait, Statement};
@@ -97,9 +97,17 @@ async fn test_sandbox_spawn_and_stop() {
 
     let process = state
         .process_registry
-        .spawn(
-            &state, agent_id, "", "sandbox", None, None, None, "never", 3,
-        )
+        .spawn(SpawnParams {
+            state: &state,
+            agent_id,
+            command: "",
+            process_type: "sandbox",
+            working_dir: None,
+            env: None,
+            timeout_secs: None,
+            restart_policy: "never",
+            max_restarts: 3,
+        })
         .await
         .unwrap();
 
@@ -243,17 +251,17 @@ async fn test_sandbox_spawn_does_not_affect_shell() {
 
     let process = state
         .process_registry
-        .spawn(
-            &state,
+        .spawn(SpawnParams {
+            state: &state,
             agent_id,
-            "echo hello",
-            "shell",
-            None,
-            None,
-            Some(5),
-            "never",
-            3,
-        )
+            command: "echo hello",
+            process_type: "shell",
+            working_dir: None,
+            env: None,
+            timeout_secs: Some(5),
+            restart_policy: "never",
+            max_restarts: 3,
+        })
         .await
         .unwrap();
 

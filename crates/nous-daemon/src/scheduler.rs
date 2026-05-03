@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use nous_core::error::NousError;
 use nous_core::schedules::{
-    advance_next_run_at, list_due_schedules, mark_stale_runs_failed, record_run, update_schedule,
-    Clock, Schedule,
+    advance_next_run_at, list_due_schedules, mark_stale_runs_failed, record_run,
+    update_schedule, Clock, RecordRunParams, Schedule, UpdateScheduleParams,
 };
 
 use crate::routes::mcp;
@@ -203,17 +203,17 @@ async fn execute_schedule(
     }
 
     let finished_at = clock.now_utc();
-    if let Err(e) = record_run(
-        &state.pool,
-        &schedule.id,
+    if let Err(e) = record_run(RecordRunParams {
+        db: &state.pool,
+        schedule_id: &schedule.id,
         started_at,
         finished_at,
-        &last_result.status,
-        last_result.exit_code,
-        last_result.output.as_deref(),
-        last_result.error.as_deref(),
-        1,
-    )
+        status: &last_result.status,
+        exit_code: last_result.exit_code,
+        output: last_result.output.as_deref(),
+        error: last_result.error.as_deref(),
+        attempt: 1,
+    })
     .await
     {
         tracing::error!("failed to record run for {}: {e}", schedule.id);
@@ -221,21 +221,21 @@ async fn execute_schedule(
 
     match advance_next_run_at(&state.pool, &schedule.id, &**clock).await {
         Ok(None) => {
-            if let Err(e) = update_schedule(
-                &state.pool,
-                &schedule.id,
-                None,
-                None,
-                None,
-                Some(false),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &**clock,
-            )
+            if let Err(e) = update_schedule(UpdateScheduleParams {
+                db: &state.pool,
+                id: &schedule.id,
+                name: None,
+                cron_expr: None,
+                trigger_at: None,
+                enabled: Some(false),
+                action_type: None,
+                action_payload: None,
+                desired_outcome: None,
+                max_retries: None,
+                timeout_secs: None,
+                max_runs: None,
+                clock: &**clock,
+            })
             .await
             {
                 tracing::error!("failed to disable @once schedule {}: {e}", schedule.id);

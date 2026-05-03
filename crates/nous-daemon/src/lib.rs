@@ -536,18 +536,18 @@ mod tests {
     async fn test_list_tasks_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        nous_core::tasks::create_task(
-            &state.pool,
-            "Listed task",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Listed task",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -574,18 +574,18 @@ mod tests {
     async fn test_get_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(
-            &state.pool,
-            "Get me",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Get me",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -629,18 +629,18 @@ mod tests {
     async fn test_update_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(
-            &state.pool,
-            "Update me",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Update me",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -673,18 +673,18 @@ mod tests {
     async fn test_close_task_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(
-            &state.pool,
-            "Close me",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Close me",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -712,32 +712,32 @@ mod tests {
     async fn test_link_tasks_returns_201() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(
-            &state.pool,
-            "Source",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t1 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Source",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
-        let t2 = nous_core::tasks::create_task(
-            &state.pool,
-            "Target",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t2 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Target",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -769,32 +769,32 @@ mod tests {
     async fn test_link_cycle_returns_409() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(
-            &state.pool,
-            "A",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t1 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "A",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
-        let t2 = nous_core::tasks::create_task(
-            &state.pool,
-            "B",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t2 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "B",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -830,32 +830,32 @@ mod tests {
     async fn test_unlink_tasks_returns_204() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(
-            &state.pool,
-            "S",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t1 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "S",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
-        let t2 = nous_core::tasks::create_task(
-            &state.pool,
-            "T",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t2 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "T",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -891,32 +891,32 @@ mod tests {
     async fn test_list_links_returns_200() {
         let (state, _tmp) = test_state().await;
 
-        let t1 = nous_core::tasks::create_task(
-            &state.pool,
-            "L1",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t1 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "L1",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
-        let t2 = nous_core::tasks::create_task(
-            &state.pool,
-            "L2",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let t2 = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "L2",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -946,18 +946,18 @@ mod tests {
     async fn test_add_note_returns_201() {
         let (state, _tmp) = test_state().await;
 
-        let task = nous_core::tasks::create_task(
-            &state.pool,
-            "Note task",
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-            None,
-            None,
-        )
+        let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "Note task",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: true,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -1024,18 +1024,18 @@ mod tests {
     async fn test_mcp_task_list_returns_success() {
         let (state, _tmp) = test_state().await;
 
-        nous_core::tasks::create_task(
-            &state.pool,
-            "MCP listed",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+            db: &state.pool,
+            title: "MCP listed",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 

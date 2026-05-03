@@ -23,6 +23,7 @@ use nous_core::tasks;
 use nous_core::worktrees;
 
 use crate::error::AppError;
+use crate::process_manager::SpawnParams;
 use crate::state::AppState;
 
 #[derive(Serialize, Clone)]
@@ -1819,18 +1820,18 @@ pub async fn dispatch(
                 .get("create_room")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let task = tasks::create_task(
-                &state.pool,
+            let task = tasks::create_task(tasks::CreateTaskParams {
+                db: &state.pool,
                 title,
                 description,
                 priority,
                 assignee_id,
-                labels.as_deref(),
+                labels: labels.as_deref(),
                 room_id,
-                create_room_flag,
-                None,
-                None,
-            )
+                create_room: create_room_flag,
+                actor_id: None,
+                registry: None,
+            })
             .await?;
             Ok(serde_json::to_value(task).unwrap())
         }
@@ -1843,16 +1844,16 @@ pub async fn dispatch(
                 .get("offset")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            let result = tasks::list_tasks(
-                &state.pool,
+            let result = tasks::list_tasks(tasks::ListTasksParams {
+                db: &state.pool,
                 status,
                 assignee_id,
                 label,
                 limit,
                 offset,
-                None,
-                None,
-            )
+                order_by: None,
+                order_dir: None,
+            })
             .await?;
             Ok(serde_json::to_value(result).unwrap())
         }
@@ -1867,17 +1868,17 @@ pub async fn dispatch(
             let priority = args.get("priority").and_then(|v| v.as_str());
             let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
             let description = args.get("description").and_then(|v| v.as_str());
-            let task = tasks::update_task(
-                &state.pool,
+            let task = tasks::update_task(tasks::UpdateTaskParams {
+                db: &state.pool,
                 id,
                 status,
                 priority,
                 assignee_id,
                 description,
-                None,
-                None,
-                None,
-            )
+                labels: None,
+                actor_id: None,
+                registry: None,
+            })
             .await?;
             Ok(serde_json::to_value(task).unwrap())
         }
@@ -2298,8 +2299,8 @@ pub async fn dispatch(
                 .get("max_runs")
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32);
-            let schedule = schedules::create_schedule(
-                &state.pool,
+            let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+                db: &state.pool,
                 name,
                 cron_expr,
                 trigger_at,
@@ -2309,10 +2310,10 @@ pub async fn dispatch(
                 desired_outcome,
                 max_retries,
                 timeout_secs,
-                None,
+                max_output_bytes: None,
                 max_runs,
-                &clock,
-            )
+                clock: &clock,
+            })
             .await?;
             Ok(serde_json::to_value(schedule).unwrap())
         }
@@ -2359,8 +2360,8 @@ pub async fn dispatch(
                 .get("max_runs")
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32);
-            let schedule = schedules::update_schedule(
-                &state.pool,
+            let schedule = schedules::update_schedule(schedules::UpdateScheduleParams {
+                db: &state.pool,
                 id,
                 name,
                 cron_expr,
@@ -2370,10 +2371,10 @@ pub async fn dispatch(
                 action_payload,
                 desired_outcome,
                 max_retries,
-                timeout_secs.map(Some),
+                timeout_secs: timeout_secs.map(Some),
                 max_runs,
-                &clock,
-            )
+                clock: &clock,
+            })
             .await?;
             Ok(serde_json::to_value(schedule).unwrap())
         }
@@ -3221,16 +3222,16 @@ pub async fn dispatch(
             let start = std::time::Instant::now();
 
             if let Some(embedding) = query_embedding {
-                let results = memory::search_hybrid_filtered(
-                    &state.pool,
-                    &state.vec_pool,
+                let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+                    fts_db: &state.pool,
+                    vec_pool: &state.vec_pool,
                     query,
-                    &embedding,
+                    query_embedding: &embedding,
                     limit,
-                    workspace_id.as_deref(),
-                    agent_id.as_deref(),
+                    workspace_id: workspace_id.as_deref(),
+                    agent_id: agent_id.as_deref(),
                     memory_type,
-                )
+                })
                 .await?;
                 let latency_ms = start.elapsed().as_millis() as i64;
                 let _ = memory::analytics::record_search_event(
@@ -3461,17 +3462,17 @@ pub async fn dispatch(
                 .unwrap_or(3);
             let process = state
                 .process_registry
-                .spawn(
+                .spawn(SpawnParams {
                     state,
                     agent_id,
-                    &command,
+                    command: &command,
                     process_type,
                     working_dir,
                     env,
                     timeout_secs,
                     restart_policy,
                     max_restarts,
-                )
+                })
                 .await?;
             Ok(serde_json::to_value(process).unwrap())
         }

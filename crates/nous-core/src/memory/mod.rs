@@ -1161,30 +1161,43 @@ pub async fn search_hybrid(
     query_embedding: &[f32],
     limit: usize,
 ) -> Result<Vec<SimilarMemory>, NousError> {
-    search_hybrid_filtered(
+    search_hybrid_filtered(SearchHybridFilteredParams {
         fts_db,
         vec_pool,
         query,
         query_embedding,
         limit,
-        None,
-        None,
-        None,
-    )
+        workspace_id: None,
+        agent_id: None,
+        memory_type: None,
+    })
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct SearchHybridFilteredParams<'a> {
+    pub fts_db: &'a DatabaseConnection,
+    pub vec_pool: &'a VecPool,
+    pub query: &'a str,
+    pub query_embedding: &'a [f32],
+    pub limit: usize,
+    pub workspace_id: Option<&'a str>,
+    pub agent_id: Option<&'a str>,
+    pub memory_type: Option<MemoryType>,
+}
+
 pub async fn search_hybrid_filtered(
-    fts_db: &DatabaseConnection,
-    vec_pool: &VecPool,
-    query: &str,
-    query_embedding: &[f32],
-    limit: usize,
-    workspace_id: Option<&str>,
-    agent_id: Option<&str>,
-    memory_type: Option<MemoryType>,
+    params: SearchHybridFilteredParams<'_>,
 ) -> Result<Vec<SimilarMemory>, NousError> {
+    let SearchHybridFilteredParams {
+        fts_db,
+        vec_pool,
+        query,
+        query_embedding,
+        limit,
+        workspace_id,
+        agent_id,
+        memory_type,
+    } = params;
     let fts_limit = (limit * 2).min(100) as u32;
     let vec_limit = (limit * 2).min(100) as u32;
 

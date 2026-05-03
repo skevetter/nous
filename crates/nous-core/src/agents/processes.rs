@@ -109,18 +109,30 @@ impl Invocation {
 
 // --- Process CRUD ---
 
-#[allow(clippy::too_many_arguments)]
-pub async fn create_process(
-    db: &DatabaseConnection,
-    agent_id: &str,
-    process_type: &str,
-    command: &str,
-    working_dir: Option<&str>,
-    env_json: Option<&str>,
-    timeout_secs: Option<i64>,
-    restart_policy: Option<&str>,
-    max_restarts: Option<i32>,
-) -> Result<Process, NousError> {
+pub struct CreateProcessParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub agent_id: &'a str,
+    pub process_type: &'a str,
+    pub command: &'a str,
+    pub working_dir: Option<&'a str>,
+    pub env_json: Option<&'a str>,
+    pub timeout_secs: Option<i64>,
+    pub restart_policy: Option<&'a str>,
+    pub max_restarts: Option<i32>,
+}
+
+pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, NousError> {
+    let CreateProcessParams {
+        db,
+        agent_id,
+        process_type,
+        command,
+        working_dir,
+        env_json,
+        timeout_secs,
+        restart_policy,
+        max_restarts,
+    } = params;
     // Verify agent exists
     super::get_agent_by_id(db, agent_id).await?;
 
@@ -161,19 +173,34 @@ pub async fn create_process(
     get_process_by_id(db, &id).await
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct CreateSandboxProcessParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub agent_id: &'a str,
+    pub sandbox_image: &'a str,
+    pub sandbox_cpus: Option<u32>,
+    pub sandbox_memory_mib: Option<u32>,
+    pub sandbox_network_policy: Option<&'a str>,
+    pub sandbox_volumes_json: Option<&'a str>,
+    pub sandbox_name: Option<&'a str>,
+    pub timeout_secs: Option<i64>,
+    pub restart_policy: Option<&'a str>,
+}
+
 pub async fn create_sandbox_process(
-    db: &DatabaseConnection,
-    agent_id: &str,
-    sandbox_image: &str,
-    sandbox_cpus: Option<u32>,
-    sandbox_memory_mib: Option<u32>,
-    sandbox_network_policy: Option<&str>,
-    sandbox_volumes_json: Option<&str>,
-    sandbox_name: Option<&str>,
-    timeout_secs: Option<i64>,
-    restart_policy: Option<&str>,
+    params: CreateSandboxProcessParams<'_>,
 ) -> Result<Process, NousError> {
+    let CreateSandboxProcessParams {
+        db,
+        agent_id,
+        sandbox_image,
+        sandbox_cpus,
+        sandbox_memory_mib,
+        sandbox_network_policy,
+        sandbox_volumes_json,
+        sandbox_name,
+        timeout_secs,
+        restart_policy,
+    } = params;
     super::get_agent_by_id(db, agent_id).await?;
 
     let id = Uuid::now_v7().to_string();

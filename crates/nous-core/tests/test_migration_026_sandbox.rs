@@ -1,6 +1,6 @@
 // Integration test for migration 026: sandbox support
 
-use nous_core::agents::processes::{create_process, get_process_by_id};
+use nous_core::agents::processes::{create_process, get_process_by_id, CreateProcessParams};
 use nous_core::agents::{self, AgentType, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use sea_orm::{ConnectionTrait, Statement, TryGetable};
@@ -62,17 +62,17 @@ async fn migration_026_runs_on_existing_db_with_data() {
     .unwrap();
 
     // Create an old-style process (shell type, no sandbox fields)
-    let old_process = create_process(
-        &pools.fts,
-        &agent.id,
-        "shell",
-        "echo existing",
-        Some("/tmp"),
-        None,
-        None,
-        None,
-        None,
-    )
+    let old_process = create_process(CreateProcessParams {
+        db: &pools.fts,
+        agent_id: &agent.id,
+        process_type: "shell",
+        command: "echo existing",
+        working_dir: Some("/tmp"),
+        env_json: None,
+        timeout_secs: None,
+        restart_policy: None,
+        max_restarts: None,
+    })
     .await
     .unwrap();
 
@@ -200,17 +200,17 @@ async fn existing_process_types_still_work() {
     .unwrap();
 
     // Test shell process
-    let shell_process = create_process(
-        &pools.fts,
-        &agent.id,
-        "shell",
-        "echo hello",
-        Some("/tmp"),
-        Some(r#"{"PATH":"/usr/bin"}"#),
-        Some(30),
-        Some("never"),
-        Some(0),
-    )
+    let shell_process = create_process(CreateProcessParams {
+        db: &pools.fts,
+        agent_id: &agent.id,
+        process_type: "shell",
+        command: "echo hello",
+        working_dir: Some("/tmp"),
+        env_json: Some(r#"{"PATH":"/usr/bin"}"#),
+        timeout_secs: Some(30),
+        restart_policy: Some("never"),
+        max_restarts: Some(0),
+    })
     .await
     .unwrap();
 
@@ -231,17 +231,17 @@ async fn existing_process_types_still_work() {
         .unwrap();
 
     // Test claude process
-    let claude_process = create_process(
-        &pools.fts,
-        &agent.id,
-        "claude",
-        "claude-code --model opus",
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    let claude_process = create_process(CreateProcessParams {
+        db: &pools.fts,
+        agent_id: &agent.id,
+        process_type: "claude",
+        command: "claude-code --model opus",
+        working_dir: None,
+        env_json: None,
+        timeout_secs: None,
+        restart_policy: None,
+        max_restarts: None,
+    })
     .await
     .unwrap();
 
@@ -261,17 +261,17 @@ async fn existing_process_types_still_work() {
         .unwrap();
 
     // Test http process
-    let http_process = create_process(
-        &pools.fts,
-        &agent.id,
-        "http",
-        "http://localhost:8080",
-        None,
-        None,
-        Some(60),
-        Some("on-failure"),
-        Some(3),
-    )
+    let http_process = create_process(CreateProcessParams {
+        db: &pools.fts,
+        agent_id: &agent.id,
+        process_type: "http",
+        command: "http://localhost:8080",
+        working_dir: None,
+        env_json: None,
+        timeout_secs: Some(60),
+        restart_policy: Some("on-failure"),
+        max_restarts: Some(3),
+    })
     .await
     .unwrap();
 
@@ -352,7 +352,7 @@ async fn sandbox_config_serde_roundtrip() {
 
 #[tokio::test]
 async fn create_sandbox_process_sets_correct_fields() {
-    use nous_core::agents::processes::create_sandbox_process;
+    use nous_core::agents::processes::{create_sandbox_process, CreateSandboxProcessParams};
 
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
@@ -373,18 +373,18 @@ async fn create_sandbox_process_sets_correct_fields() {
     .await
     .unwrap();
 
-    let process = create_sandbox_process(
-        &pools.fts,
-        &agent.id,
-        "python:3.12",
-        Some(4),
-        Some(1024),
-        Some("public-only"),
-        Some(r#"[{"guest_path":"/app","host_path":"/host/app","readonly":true}]"#),
-        Some("my-sandbox"),
-        Some(3600),
-        Some("on-failure"),
-    )
+    let process = create_sandbox_process(CreateSandboxProcessParams {
+        db: &pools.fts,
+        agent_id: &agent.id,
+        sandbox_image: "python:3.12",
+        sandbox_cpus: Some(4),
+        sandbox_memory_mib: Some(1024),
+        sandbox_network_policy: Some("public-only"),
+        sandbox_volumes_json: Some(r#"[{"guest_path":"/app","host_path":"/host/app","readonly":true}]"#),
+        sandbox_name: Some("my-sandbox"),
+        timeout_secs: Some(3600),
+        restart_policy: Some("on-failure"),
+    })
     .await
     .unwrap();
 

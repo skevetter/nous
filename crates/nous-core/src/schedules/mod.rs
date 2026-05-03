@@ -87,22 +87,38 @@ impl ScheduleRun {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn create_schedule(
-    db: &DatabaseConnection,
-    name: &str,
-    cron_expr: &str,
-    trigger_at: Option<i64>,
-    timezone: Option<&str>,
-    action_type: &str,
-    action_payload: &str,
-    desired_outcome: Option<&str>,
-    max_retries: Option<i32>,
-    timeout_secs: Option<i32>,
-    max_output_bytes: Option<i32>,
-    max_runs: Option<i32>,
-    clock: &dyn Clock,
-) -> Result<Schedule, NousError> {
+pub struct CreateScheduleParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub name: &'a str,
+    pub cron_expr: &'a str,
+    pub trigger_at: Option<i64>,
+    pub timezone: Option<&'a str>,
+    pub action_type: &'a str,
+    pub action_payload: &'a str,
+    pub desired_outcome: Option<&'a str>,
+    pub max_retries: Option<i32>,
+    pub timeout_secs: Option<i32>,
+    pub max_output_bytes: Option<i32>,
+    pub max_runs: Option<i32>,
+    pub clock: &'a dyn Clock,
+}
+
+pub async fn create_schedule(params: CreateScheduleParams<'_>) -> Result<Schedule, NousError> {
+    let CreateScheduleParams {
+        db,
+        name,
+        cron_expr,
+        trigger_at,
+        timezone,
+        action_type,
+        action_payload,
+        desired_outcome,
+        max_retries,
+        timeout_secs,
+        max_output_bytes,
+        max_runs,
+        clock,
+    } = params;
     if name.trim().is_empty() {
         return Err(NousError::Validation(
             "schedule name cannot be empty".into(),
@@ -208,22 +224,38 @@ pub async fn list_schedules(
     Ok(schedules)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn update_schedule(
-    db: &DatabaseConnection,
-    id: &str,
-    name: Option<&str>,
-    cron_expr: Option<&str>,
-    trigger_at: Option<Option<i64>>,
-    enabled: Option<bool>,
-    action_type: Option<&str>,
-    action_payload: Option<&str>,
-    desired_outcome: Option<Option<&str>>,
-    max_retries: Option<i32>,
-    timeout_secs: Option<Option<i32>>,
-    max_runs: Option<i32>,
-    clock: &dyn Clock,
-) -> Result<Schedule, NousError> {
+pub struct UpdateScheduleParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub id: &'a str,
+    pub name: Option<&'a str>,
+    pub cron_expr: Option<&'a str>,
+    pub trigger_at: Option<Option<i64>>,
+    pub enabled: Option<bool>,
+    pub action_type: Option<&'a str>,
+    pub action_payload: Option<&'a str>,
+    pub desired_outcome: Option<Option<&'a str>>,
+    pub max_retries: Option<i32>,
+    pub timeout_secs: Option<Option<i32>>,
+    pub max_runs: Option<i32>,
+    pub clock: &'a dyn Clock,
+}
+
+pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedule, NousError> {
+    let UpdateScheduleParams {
+        db,
+        id,
+        name,
+        cron_expr,
+        trigger_at,
+        enabled,
+        action_type,
+        action_payload,
+        desired_outcome,
+        max_retries,
+        timeout_secs,
+        max_runs,
+        clock,
+    } = params;
     let existing = get_schedule(db, id).await?;
 
     if let Some(expr) = cron_expr {
@@ -374,18 +406,30 @@ pub async fn list_runs(
     Ok(runs)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn record_run(
-    db: &DatabaseConnection,
-    schedule_id: &str,
-    started_at: i64,
-    finished_at: i64,
-    status: &str,
-    exit_code: Option<i32>,
-    output: Option<&str>,
-    error: Option<&str>,
-    attempt: i32,
-) -> Result<ScheduleRun, NousError> {
+pub struct RecordRunParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub schedule_id: &'a str,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub status: &'a str,
+    pub exit_code: Option<i32>,
+    pub output: Option<&'a str>,
+    pub error: Option<&'a str>,
+    pub attempt: i32,
+}
+
+pub async fn record_run(params: RecordRunParams<'_>) -> Result<ScheduleRun, NousError> {
+    let RecordRunParams {
+        db,
+        schedule_id,
+        started_at,
+        finished_at,
+        status,
+        exit_code,
+        output,
+        error,
+        attempt,
+    } = params;
     let id = Uuid::now_v7().to_string();
     let duration_ms = (finished_at - started_at) * 1000;
 

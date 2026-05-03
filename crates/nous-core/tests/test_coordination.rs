@@ -23,46 +23,46 @@ async fn test_task_lifecycle_room_projection() {
         .await
         .unwrap();
 
-    let task = tasks::create_task(
-        pool,
-        "Lifecycle test task",
-        None,
-        None,
-        None,
-        None,
-        Some(&room.id),
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: pool,
+        title: "Lifecycle test task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: Some(&room.id),
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
-    tasks::update_task(
-        pool,
-        &task.id,
-        Some("in_progress"),
-        None,
-        None,
-        None,
-        None,
-        Some("actor-lifecycle"),
-        None,
-    )
+    tasks::update_task(tasks::UpdateTaskParams {
+        db: pool,
+        id: &task.id,
+        status: Some("in_progress"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: Some("actor-lifecycle"),
+        registry: None,
+    })
     .await
     .unwrap();
 
-    tasks::update_task(
-        pool,
-        &task.id,
-        Some("closed"),
-        None,
-        None,
-        None,
-        None,
-        Some("actor-lifecycle"),
-        None,
-    )
+    tasks::update_task(tasks::UpdateTaskParams {
+        db: pool,
+        id: &task.id,
+        status: Some("closed"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: Some("actor-lifecycle"),
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -273,18 +273,18 @@ async fn test_task_command_from_chat() {
         .await
         .unwrap();
 
-    let task = tasks::create_task(
-        pool,
-        "Command test task",
-        Some("A task to test chat-driven commands"),
-        None,
-        None,
-        None,
-        Some(&room.id),
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: pool,
+        title: "Command test task",
+        description: Some("A task to test chat-driven commands"),
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: Some(&room.id),
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 

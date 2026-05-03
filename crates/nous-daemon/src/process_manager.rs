@@ -37,6 +37,31 @@ impl Default for ProcessRegistry {
     }
 }
 
+pub struct SpawnParams<'a> {
+    pub state: &'a AppState,
+    pub agent_id: &'a str,
+    pub command: &'a str,
+    pub process_type: &'a str,
+    pub working_dir: Option<&'a str>,
+    pub env: Option<serde_json::Value>,
+    pub timeout_secs: Option<i64>,
+    pub restart_policy: &'a str,
+    pub max_restarts: i32,
+}
+
+pub struct MonitorProcessParams {
+    pub state: AppState,
+    pub process_id: String,
+    pub agent_id: String,
+    pub cancel: CancellationToken,
+    pub timeout_secs: Option<i64>,
+    pub restart_policy: String,
+    pub max_restarts: i32,
+    pub command: String,
+    pub working_dir: Option<String>,
+    pub env: Option<serde_json::Value>,
+}
+
 impl ProcessRegistry {
     pub fn new() -> Self {
         Self {
@@ -44,19 +69,18 @@ impl ProcessRegistry {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn spawn(
-        &self,
-        state: &AppState,
-        agent_id: &str,
-        command: &str,
-        process_type: &str,
-        working_dir: Option<&str>,
-        env: Option<serde_json::Value>,
-        timeout_secs: Option<i64>,
-        restart_policy: &str,
-        max_restarts: i32,
-    ) -> Result<Process, NousError> {
+    pub async fn spawn(&self, params: SpawnParams<'_>) -> Result<Process, NousError> {
+        let SpawnParams {
+            state,
+            agent_id,
+            command,
+            process_type,
+            working_dir,
+            env,
+            timeout_secs,
+            restart_policy,
+            max_restarts,
+        } = params;
         // Check if already running
         {
             let handles = self.handles.lock().await;
@@ -79,17 +103,17 @@ impl ProcessRegistry {
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
 
         // Create DB record
-        let process = processes::create_process(
-            &state.pool,
+        let process = processes::create_process(processes::CreateProcessParams {
+            db: &state.pool,
             agent_id,
             process_type,
             command,
             working_dir,
-            env_json.as_deref(),
+            env_json: env_json.as_deref(),
             timeout_secs,
-            Some(restart_policy),
-            Some(max_restarts),
-        )
+            restart_policy: Some(restart_policy),
+            max_restarts: Some(max_restarts),
+        })
         .await?;
 
         // Update to starting
@@ -163,18 +187,18 @@ impl ProcessRegistry {
         // Spawn the monitor task
         let state_clone = state.clone();
         tokio::spawn(async move {
-            Self::monitor_process(
-                state_clone,
+            Self::monitor_process(MonitorProcessParams {
+                state: state_clone,
                 process_id,
-                agent_id_owned,
+                agent_id: agent_id_owned,
                 cancel,
-                timeout,
-                restart_p,
-                max_r,
-                command_owned,
-                working_dir_owned,
-                env_owned,
-            )
+                timeout_secs: timeout,
+                restart_policy: restart_p,
+                max_restarts: max_r,
+                command: command_owned,
+                working_dir: working_dir_owned,
+                env: env_owned,
+            })
             .await;
         });
 
@@ -201,18 +225,18 @@ impl ProcessRegistry {
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
 
-        let process = processes::create_sandbox_process(
-            &state.pool,
+        let process = processes::create_sandbox_process(processes::CreateSandboxProcessParams {
+            db: &state.pool,
             agent_id,
-            &config.image,
-            config.cpus,
-            config.memory_mib,
-            config.network_policy.as_deref(),
-            volumes_json.as_deref(),
-            None,
+            sandbox_image: &config.image,
+            sandbox_cpus: config.cpus,
+            sandbox_memory_mib: config.memory_mib,
+            sandbox_network_policy: config.network_policy.as_deref(),
+            sandbox_volumes_json: volumes_json.as_deref(),
+            sandbox_name: None,
             timeout_secs,
-            Some(restart_policy),
-        )
+            restart_policy: Some(restart_policy),
+        })
         .await?;
 
         let sandbox_name = {
@@ -390,19 +414,19 @@ impl ProcessRegistry {
             .remove(&agent_id);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn monitor_process(
-        state: AppState,
-        process_id: String,
-        agent_id: String,
-        cancel: CancellationToken,
-        timeout_secs: Option<i64>,
-        restart_policy: String,
-        max_restarts: i32,
-        _command: String,
-        _working_dir: Option<String>,
-        _env: Option<serde_json::Value>,
-    ) {
+    async fn monitor_process(params: MonitorProcessParams) {
+        let MonitorProcessParams {
+            state,
+            process_id,
+            agent_id,
+            cancel,
+            timeout_secs,
+            restart_policy,
+            max_restarts,
+            command: _command,
+            working_dir: _working_dir,
+            env: _env,
+        } = params;
         // Wait for process exit or cancellation
         let timeout_duration = timeout_secs.map(|s| Duration::from_secs(s as u64));
 
@@ -656,17 +680,17 @@ impl ProcessRegistry {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
 
-        self.spawn(
+        self.spawn(SpawnParams {
             state,
             agent_id,
-            cmd,
-            &old_process_type,
-            wd,
+            command: cmd,
+            process_type: &old_process_type,
+            working_dir: wd,
             env,
-            old_timeout,
-            &old_policy,
-            old_max_restarts,
-        )
+            timeout_secs: old_timeout,
+            restart_policy: &old_policy,
+            max_restarts: old_max_restarts,
+        })
         .await
     }
 
