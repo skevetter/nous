@@ -74,10 +74,17 @@ async fn main() {
         });
     }
 
+    let registry = Arc::new(NotificationRegistry::new());
+    let tool_services = AppState::build_tool_services(
+        pools.fts.clone(),
+        pools.vec.clone(),
+        embedder.clone(),
+        registry.clone(),
+    );
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
-        registry: Arc::new(NotificationRegistry::new()),
+        registry,
         embedder,
         embedding_config,
         vector_store_config,
@@ -86,6 +93,7 @@ async fn main() {
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
         default_model,
+        tool_services,
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
     };

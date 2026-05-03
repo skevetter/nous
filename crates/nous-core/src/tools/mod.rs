@@ -14,6 +14,7 @@ pub mod custom;
 pub mod execution;
 pub mod permissions;
 pub mod registry;
+pub mod services;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolMetadata {
