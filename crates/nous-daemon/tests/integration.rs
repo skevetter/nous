@@ -756,7 +756,7 @@ async fn e2e_worktree_lifecycle() {
     let response = app(state.clone())
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method("PATCH")
                 .uri(format!("/worktrees/{wt_id}/archive"))
                 .body(Body::empty())
                 .unwrap(),
@@ -1221,7 +1221,7 @@ async fn e2e_agent_heartbeat() {
     let response = app(state.clone())
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method("PATCH")
                 .uri(format!("/agents/{}/heartbeat", agent.id))
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -2400,7 +2400,7 @@ async fn e2e_resource_register_list_get_archive_deregister() {
     let response = app(state.clone())
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method("PATCH")
                 .uri(format!("/resources/{res_id}/archive"))
                 .body(Body::empty())
                 .unwrap(),
@@ -2486,7 +2486,7 @@ async fn e2e_resource_search_and_heartbeat() {
     let response = app(state)
         .oneshot(
             Request::builder()
-                .method("POST")
+                .method("PATCH")
                 .uri(format!("/resources/{res_id}/heartbeat"))
                 .body(Body::empty())
                 .unwrap(),
