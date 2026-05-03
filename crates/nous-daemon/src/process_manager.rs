@@ -373,14 +373,16 @@ impl ProcessRegistry {
 
                     match status {
                         Some(ref s) if s != "running" => {
-                            let _ = processes::update_process_status(
+                            if let Err(e) = processes::update_process_status(
                                 &state.pool,
                                 &process_id,
                                 "crashed",
                                 None,
                                 Some(&format!("sandbox status: {s}")),
                                 None,
-                            ).await;
+                            ).await {
+                                tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to crashed");
+                            }
                             state.process_registry.handles.lock().await.remove(&agent_id);
                             return;
                         }
@@ -393,25 +395,29 @@ impl ProcessRegistry {
                                     metrics.memory_used_mib,
                                     metrics.disk_used_mib,
                                 );
-                                let _ = processes::update_process_status(
+                                if let Err(e) = processes::update_process_status(
                                     &state.pool,
                                     &process_id,
                                     "running",
                                     None,
                                     Some(&summary),
                                     None,
-                                ).await;
+                                ).await {
+                                    tracing::warn!(process_id = %process_id, error = %e, "failed to update sandbox metrics");
+                                }
                             }
                         }
                         None => {
-                            let _ = processes::update_process_status(
+                            if let Err(e) = processes::update_process_status(
                                 &state.pool,
                                 &process_id,
                                 "crashed",
                                 None,
                                 Some("sandbox no longer tracked by manager"),
                                 None,
-                            ).await;
+                            ).await {
+                                tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to crashed");
+                            }
                             state.process_registry.handles.lock().await.remove(&agent_id);
                             return;
                         }
@@ -455,10 +461,12 @@ impl ProcessRegistry {
                         Ok(exit_result) => Some(exit_result),
                         Err(_) => {
                             // Timeout
-                            let _ = processes::update_process_status(
+                            if let Err(e) = processes::update_process_status(
                                 &state.pool, &process_id, "failed", None,
                                 Some("process timed out"), None,
-                            ).await;
+                            ).await {
+                                tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to failed on timeout");
+                            }
                             // Kill the child from handles
                             if let Some(mut handle) = state.process_registry.handles.lock().await.remove(&agent_id) {
                                 if let Some(mut child) = handle.child.take() {
@@ -483,7 +491,7 @@ impl ProcessRegistry {
             } else {
                 "crashed"
             };
-            let _ = processes::update_process_status(
+            if let Err(e) = processes::update_process_status(
                 &state.pool,
                 &process_id,
                 status,
@@ -491,7 +499,10 @@ impl ProcessRegistry {
                 output.as_deref(),
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::warn!(process_id = %process_id, error = %e, "failed to update process exit status");
+            }
 
             // Check restart policy
             if status == "crashed" {
@@ -504,8 +515,11 @@ impl ProcessRegistry {
                 if should_restart {
                     if let Ok(proc) = processes::get_process_by_id(&state.pool, &process_id).await {
                         if proc.restart_count < max_restarts {
-                            let _ =
-                                processes::increment_restart_count(&state.pool, &process_id).await;
+                            if let Err(e) =
+                                processes::increment_restart_count(&state.pool, &process_id).await
+                            {
+                                tracing::warn!(process_id = %process_id, error = %e, "failed to increment restart count");
+                            }
                             tracing::info!(
                                 agent_id = %agent_id,
                                 restart_count = proc.restart_count + 1,
@@ -562,7 +576,7 @@ impl ProcessRegistry {
         let is_sandbox = handle.child.is_none();
 
         // Update status to stopping
-        let _ = processes::update_process_status(
+        if let Err(e) = processes::update_process_status(
             &state.pool,
             &process_id,
             "stopping",
@@ -570,7 +584,10 @@ impl ProcessRegistry {
             None,
             None,
         )
-        .await;
+        .await
+        {
+            tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to stopping");
+        }
 
         // Cancel the monitor task
         handle.cancel.cancel();
@@ -733,7 +750,7 @@ impl ProcessRegistry {
         let agent = match nous_core::agents::get_agent_by_id(&state.pool, agent_id).await {
             Ok(a) => a,
             Err(e) => {
-                let _ = processes::update_invocation(
+                if let Err(db_err) = processes::update_invocation(
                     &state.pool,
                     &invocation.id,
                     "failed",
@@ -741,7 +758,10 @@ impl ProcessRegistry {
                     Some(&e.to_string()),
                     None,
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(invocation_id = %invocation.id, error = %db_err, "failed to mark invocation as failed");
+                }
                 return Err(e);
             }
         };
@@ -768,7 +788,7 @@ impl ProcessRegistry {
         };
 
         if let Err(ref e) = result {
-            let _ = processes::update_invocation(
+            if let Err(db_err) = processes::update_invocation(
                 &state.pool,
                 &invocation.id,
                 "failed",
@@ -776,7 +796,10 @@ impl ProcessRegistry {
                 Some(&e.to_string()),
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::warn!(invocation_id = %invocation.id, error = %db_err, "failed to mark invocation as failed");
+            }
         }
         result
     }
@@ -1178,7 +1201,7 @@ impl ProcessRegistry {
                     recovered += 1;
                 }
                 Ok(false) | Err(_) => {
-                    let _ = processes::update_process_status(
+                    if let Err(e) = processes::update_process_status(
                         pool,
                         &proc.id,
                         "crashed",
@@ -1186,7 +1209,10 @@ impl ProcessRegistry {
                         Some("sandbox unreachable on daemon restart"),
                         None,
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::warn!(process_id = %proc.id, error = %e, "failed to mark process as crashed during recovery");
+                    }
                     tracing::warn!(
                         agent_id = %proc.agent_id,
                         sandbox_name = sandbox_name,
