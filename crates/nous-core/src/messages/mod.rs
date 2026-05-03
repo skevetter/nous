@@ -169,6 +169,7 @@ pub async fn post_message(
                 room_id: message.room_id.clone(),
                 message_id: message.id.clone(),
                 sender_id: message.sender_id.clone(),
+                priority: crate::notifications::NotificationPriority::Normal,
                 topics,
                 mentions,
             })
