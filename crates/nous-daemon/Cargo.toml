@@ -13,7 +13,7 @@ regex = "1"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 aws-config = { version = "1.8", features = ["behavior-version-latest", "sso"] }
 rig-bedrock = "0.4.5"
-rig-core = "0.36"
+rig-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -26,9 +26,12 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 microsandbox = { workspace = true, optional = true }
+rig-qdrant = { version = "0.2.5", optional = true }
 
 [features]
+default = []
 sandbox = ["microsandbox"]
+qdrant = ["dep:rig-qdrant"]
 
 [dev-dependencies]
 http-body-util = "0.1"

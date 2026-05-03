@@ -1,7 +1,35 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, Once};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::NousError;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum EmbeddingProvider {
+    #[default]
+    Local,
+    Bedrock,
+    OpenAi,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingConfig {
+    pub provider: EmbeddingProvider,
+    pub model: String,
+    pub dimensions: usize,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            provider: EmbeddingProvider::Local,
+            model: "all-MiniLM-L6-v2".to_string(),
+            dimensions: 384,
+        }
+    }
+}
 
 pub trait Embedder: Send + Sync {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, NousError>;
@@ -234,9 +262,110 @@ impl Embedder for MockEmbedder {
     }
 }
 
+pub struct RigEmbedderAdapter<M: rig::embeddings::EmbeddingModel> {
+    model: M,
+    rt: tokio::runtime::Handle,
+}
+
+impl<M: rig::embeddings::EmbeddingModel> RigEmbedderAdapter<M> {
+    pub fn new(model: M, rt: tokio::runtime::Handle) -> Self {
+        Self { model, rt }
+    }
+}
+
+impl<M: rig::embeddings::EmbeddingModel> Embedder for RigEmbedderAdapter<M> {
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, NousError> {
+        let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let embeddings = self
+            .rt
+            .block_on(self.model.embed_texts(owned))
+            .map_err(|e| NousError::Internal(format!("embedding failed: {e}")))?;
+        Ok(embeddings
+            .into_iter()
+            .map(|e| e.vec.into_iter().map(|v| v as f32).collect())
+            .collect())
+    }
+
+    fn dimension(&self) -> usize {
+        self.model.ndims()
+    }
+}
+
+pub trait AsyncEmbedder: Send + Sync {
+    fn embed_async(
+        &self,
+        texts: &[&str],
+    ) -> impl std::future::Future<Output = Result<Vec<Vec<f32>>, NousError>> + Send;
+    fn dimension(&self) -> usize;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockRigModel {
+        dims: usize,
+    }
+
+    impl rig::embeddings::EmbeddingModel for MockRigModel {
+        const MAX_DOCUMENTS: usize = 100;
+        type Client = ();
+
+        fn make(_client: &Self::Client, _model: impl Into<String>, _dims: Option<usize>) -> Self {
+            MockRigModel { dims: 3 }
+        }
+
+        fn ndims(&self) -> usize {
+            self.dims
+        }
+
+        fn embed_texts(
+            &self,
+            texts: impl IntoIterator<Item = String> + Send,
+        ) -> impl std::future::Future<
+            Output = Result<
+                Vec<rig::embeddings::Embedding>,
+                rig::embeddings::EmbeddingError,
+            >,
+        > + Send {
+            let vecs: Vec<rig::embeddings::Embedding> = texts
+                .into_iter()
+                .map(|doc| rig::embeddings::Embedding {
+                    document: doc,
+                    vec: vec![1.0_f64, 2.5_f64, -3.0_f64],
+                })
+                .collect();
+            async move { Ok(vecs) }
+        }
+    }
+
+    #[test]
+    fn embedding_config_default() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.provider, EmbeddingProvider::Local);
+        assert_eq!(config.model, "all-MiniLM-L6-v2");
+        assert_eq!(config.dimensions, 384);
+    }
+
+    #[test]
+    fn rig_embedder_adapter_f64_to_f32() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let model = MockRigModel { dims: 3 };
+        let adapter = RigEmbedderAdapter::new(model, rt.handle().clone());
+
+        let results = adapter.embed(&["hello", "world"]).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], vec![1.0_f32, 2.5_f32, -3.0_f32]);
+        assert_eq!(results[1], vec![1.0_f32, 2.5_f32, -3.0_f32]);
+    }
+
+    #[test]
+    fn rig_embedder_adapter_dimension() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let model = MockRigModel { dims: 768 };
+        let adapter = RigEmbedderAdapter::new(model, rt.handle().clone());
+        assert_eq!(adapter.dimension(), 768);
+    }
 
     #[test]
     fn mock_embedder_produces_correct_dimension() {

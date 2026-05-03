@@ -18,6 +18,7 @@ ort = { workspace = true }
 tokenizers = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+rig-core = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"

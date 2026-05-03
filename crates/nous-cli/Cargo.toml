@@ -21,7 +21,7 @@ libc = "0.2"
 nous-core = { path = "../nous-core" }
 nous-daemon = { path = "../nous-daemon" }
 reqwest = { workspace = true }
-rig-core = "0.36"
+rig-core = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

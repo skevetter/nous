@@ -1,3 +1,4 @@
+pub mod embedding;
 pub mod error;
 pub mod llm_client;
 pub mod process_manager;
@@ -6,6 +7,7 @@ pub mod routes;
 pub mod sandbox;
 pub mod scheduler;
 pub mod state;
+pub mod vector_store;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -152,7 +154,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use nous_core::db::DbPools;
-    use nous_core::memory::MockEmbedder;
+    use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
     use nous_core::notifications::NotificationRegistry;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -169,6 +171,8 @@ mod tests {
             vec_pool: pools.vec.clone(),
             registry: Arc::new(NotificationRegistry::new()),
             embedder: Some(Arc::new(MockEmbedder::new())),
+            embedding_config: EmbeddingConfig::default(),
+            vector_store_config: VectorStoreConfig::default(),
             schedule_notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
             process_registry: Arc::new(process_manager::ProcessRegistry::new()),
