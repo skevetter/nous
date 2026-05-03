@@ -54,8 +54,8 @@ async fn sync_claude_invoke_no_llm_client_returns_config_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "expected Config error about LLM client, got: {err}"
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
+        "expected Unavailable error about LLM client, got: {err}"
     );
 }
 
@@ -74,8 +74,8 @@ async fn async_claude_invoke_no_llm_client_returns_config_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "expected Config error about LLM client, got: {err}"
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
+        "expected Unavailable error about LLM client, got: {err}"
     );
 }
 
@@ -219,11 +219,11 @@ async fn async_shell_invoke_returns_running_then_completes() {
     );
 }
 
-// --- Real Bedrock test (behind #[ignore]) ---
-
 #[tokio::test]
-#[ignore]
 async fn real_bedrock_claude_invoke() {
+    if std::env::var("AWS_ACCESS_KEY_ID").is_err() {
+        return;
+    }
     use nous_daemon::llm_client::LlmClient;
     use rig::client::ProviderClient;
 
