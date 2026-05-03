@@ -2,7 +2,6 @@ pub mod agent;
 pub mod artifact;
 pub mod chat;
 pub mod doctor;
-pub mod inventory;
 pub mod mcp_server;
 pub mod memory;
 pub mod model;

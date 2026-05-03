@@ -5,7 +5,6 @@ mod commands;
 use commands::agent::AgentCommands;
 use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
-use commands::inventory::InventoryCommands;
 use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
 use commands::resource::ResourceCommands;
@@ -42,11 +41,6 @@ enum Commands {
     Chat {
         #[command(subcommand)]
         command: ChatCommands,
-    },
-    /// Inventory management (P5 artifact registry)
-    Inventory {
-        #[command(subcommand)]
-        command: InventoryCommands,
     },
     /// Unified resource management (replaces artifact + inventory)
     Resource {
@@ -158,9 +152,6 @@ async fn main() {
         }
         Commands::Chat { command } => {
             commands::chat::run(command, port).await;
-        }
-        Commands::Inventory { command } => {
-            commands::inventory::run(command, port).await;
         }
         Commands::Resource { command } => {
             commands::resource::run(command, port).await;
