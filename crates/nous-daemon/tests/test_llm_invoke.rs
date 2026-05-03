@@ -229,10 +229,8 @@ async fn async_shell_invoke_returns_running_then_completes() {
 }
 
 #[tokio::test]
+#[ignore = "requires AWS_ACCESS_KEY_ID credentials"]
 async fn real_bedrock_claude_invoke() {
-    if std::env::var("AWS_ACCESS_KEY_ID").is_err() {
-        return;
-    }
     use nous_daemon::llm_client::LlmClient;
     use rig::client::ProviderClient;
 

@@ -82,10 +82,8 @@ impl Drop for DaemonGuard {
 }
 
 #[test]
+#[ignore = "requires NOUS_TEST_DAEMON env var and real daemon binary"]
 fn test_full_daemon_lifecycle() {
-    if std::env::var("NOUS_TEST_DAEMON").is_err() {
-        return;
-    }
     cleanup_daemon(&pid_file_path());
     let _guard = DaemonGuard;
 
@@ -173,10 +171,8 @@ fn test_full_daemon_lifecycle() {
 }
 
 #[test]
+#[ignore = "requires NOUS_TEST_DAEMON env var and real daemon binary"]
 fn test_stop_when_not_running() {
-    if std::env::var("NOUS_TEST_DAEMON").is_err() {
-        return;
-    }
     cleanup_daemon(&pid_file_path());
 
     let output = Command::new(nous_bin())
@@ -192,10 +188,8 @@ fn test_stop_when_not_running() {
 }
 
 #[test]
+#[ignore = "requires NOUS_TEST_DAEMON env var and real daemon binary"]
 fn test_reload_when_not_running() {
-    if std::env::var("NOUS_TEST_DAEMON").is_err() {
-        return;
-    }
     cleanup_daemon(&pid_file_path());
 
     let output = Command::new(nous_bin())
@@ -216,10 +210,8 @@ fn test_reload_when_not_running() {
 }
 
 #[test]
+#[ignore = "requires NOUS_TEST_DAEMON env var and real daemon binary"]
 fn test_start_alias() {
-    if std::env::var("NOUS_TEST_DAEMON").is_err() {
-        return;
-    }
     cleanup_daemon(&pid_file_path());
     let _guard = DaemonGuard;
 
