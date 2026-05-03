@@ -33,6 +33,7 @@ pub fn build_default_context(
         session_id: None,
         timeout: Duration::from_secs(30),
         permissions,
+        services: None,
     }
 }
 
