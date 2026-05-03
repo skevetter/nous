@@ -1,4 +1,5 @@
 pub use crate::embed::{
-    Embedder, EmbeddingConfig, EmbeddingProvider, MockEmbedder, OnnxEmbeddingModel,
-    RigEmbedderAdapter,
+    Embedder, EmbeddingConfig, EmbeddingProvider, OnnxEmbeddingModel, RigEmbedderAdapter,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use crate::embed::MockEmbedder;

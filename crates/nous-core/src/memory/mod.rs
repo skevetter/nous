@@ -19,10 +19,9 @@ use crate::entities::{
 use crate::error::NousError;
 
 pub use chunk::{Chunk, Chunker};
-pub use embed::{
-    Embedder, EmbeddingConfig, EmbeddingProvider, MockEmbedder, OnnxEmbeddingModel,
-    RigEmbedderAdapter,
-};
+pub use embed::{Embedder, EmbeddingConfig, EmbeddingProvider, OnnxEmbeddingModel, RigEmbedderAdapter};
+#[cfg(any(test, feature = "test-utils"))]
+pub use embed::MockEmbedder;
 pub use rerank::rerank_rrf;
 pub use vector_store::{QdrantConfig, VectorStoreBackend, VectorStoreConfig};
 
