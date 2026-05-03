@@ -49,7 +49,7 @@ impl std::str::FromStr for WorktreeStatus {
             "archived" => Ok(Self::Archived),
             "deleted" => Ok(Self::Deleted),
             other => Err(NousError::Validation(format!(
-                "invalid worktree status: '{other}'"
+                "invalid worktree status: '{other}'. Valid values: active, stale, archived, deleted"
             ))),
         }
     }

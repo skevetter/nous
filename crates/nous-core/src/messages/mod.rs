@@ -44,7 +44,7 @@ impl FromStr for MessageType {
             "task_event" => Ok(Self::TaskEvent),
             "command" => Ok(Self::Command),
             "handoff" => Ok(Self::Handoff),
-            other => Err(format!("unknown message type: {other}")),
+            other => Err(format!("unknown message type: '{other}'. Valid values: user, system, task_event, command, handoff")),
         }
     }
 }

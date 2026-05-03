@@ -70,7 +70,7 @@ impl std::str::FromStr for MemoryType {
             "fact" => Ok(Self::Fact),
             "observation" => Ok(Self::Observation),
             other => Err(NousError::Validation(format!(
-                "invalid memory type: '{other}'"
+                "invalid memory type: '{other}'. Valid values: decision, convention, bugfix, architecture, fact, observation"
             ))),
         }
     }
@@ -109,7 +109,7 @@ impl std::str::FromStr for Importance {
             "moderate" => Ok(Self::Moderate),
             "high" => Ok(Self::High),
             other => Err(NousError::Validation(format!(
-                "invalid importance: '{other}'"
+                "invalid importance: '{other}'. Valid values: low, moderate, high"
             ))),
         }
     }
@@ -157,7 +157,7 @@ impl std::str::FromStr for RelationType {
             "scoped" => Ok(Self::Scoped),
             "not_conflict" => Ok(Self::NotConflict),
             other => Err(NousError::Validation(format!(
-                "invalid relation type: '{other}'"
+                "invalid relation type: '{other}'. Valid values: supersedes, conflicts_with, related, compatible, scoped, not_conflict"
             ))),
         }
     }

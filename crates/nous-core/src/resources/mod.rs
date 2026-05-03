@@ -62,7 +62,7 @@ impl std::str::FromStr for ResourceType {
             "docker-image" => Ok(Self::DockerImage),
             "binary" => Ok(Self::Binary),
             other => Err(NousError::Validation(format!(
-                "invalid resource type: '{other}'"
+                "invalid resource type: '{other}'. Valid values: worktree, room, schedule, branch, file, docker-image, binary"
             ))),
         }
     }
@@ -101,7 +101,7 @@ impl std::str::FromStr for ResourceStatus {
             "archived" => Ok(Self::Archived),
             "deleted" => Ok(Self::Deleted),
             other => Err(NousError::Validation(format!(
-                "invalid resource status: '{other}'"
+                "invalid resource status: '{other}'. Valid values: active, archived, deleted"
             ))),
         }
     }
@@ -140,7 +140,7 @@ impl std::str::FromStr for OwnershipPolicy {
             "orphan" => Ok(Self::Orphan),
             "transfer-to-parent" => Ok(Self::TransferToParent),
             other => Err(NousError::Validation(format!(
-                "invalid ownership policy: '{other}'"
+                "invalid ownership policy: '{other}'. Valid values: cascade-delete, orphan, transfer-to-parent"
             ))),
         }
     }

@@ -50,7 +50,7 @@ impl std::str::FromStr for InventoryType {
             "docker-image" => Ok(Self::DockerImage),
             "binary" => Ok(Self::Binary),
             other => Err(NousError::Validation(format!(
-                "invalid inventory type: '{other}'"
+                "invalid inventory type: '{other}'. Valid values: worktree, room, schedule, branch, file, docker-image, binary"
             ))),
         }
     }
@@ -89,7 +89,7 @@ impl std::str::FromStr for InventoryStatus {
             "archived" => Ok(Self::Archived),
             "deleted" => Ok(Self::Deleted),
             other => Err(NousError::Validation(format!(
-                "invalid inventory status: '{other}'"
+                "invalid inventory status: '{other}'. Valid values: active, archived, deleted"
             ))),
         }
     }
