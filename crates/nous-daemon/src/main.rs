@@ -105,10 +105,20 @@ async fn main() {
         shutdown.clone(),
     );
 
+    let api_key = config.resolve_api_key();
+    if api_key.is_some() {
+        tracing::info!("API key authentication enabled");
+    } else {
+        tracing::warn!("no API key configured — all endpoints are publicly accessible");
+    }
+
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, nous_daemon::app_with_rate_limit(state, &config.rate_limit))
+    axum::serve(
+        listener,
+        nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref()),
+    )
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
         .unwrap();

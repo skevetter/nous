@@ -31,5 +31,6 @@ nous-migration = { path = "../nous-migration" }
 proptest = "1"
 rusqlite = { workspace = true }
 sea-orm = { workspace = true }
+temp-env = "0.3"
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros"] }
