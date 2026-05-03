@@ -136,6 +136,28 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
         config.port = p;
     }
     config.ensure_dirs()?;
+
+    if let MemoryCommands::Decay {
+        high_days,
+        moderate_days,
+    } = cmd
+    {
+        let url = format!("http://127.0.0.1:{}/memories/decay", config.port);
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .json(&serde_json::json!({
+                "high_days": high_days,
+                "moderate_days": moderate_days,
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+        let body: serde_json::Value = resp.json().await?;
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
     let pools = DbPools::connect(&config.data_dir).await?;
     pools.run_migrations(&config.search.tokenizer).await?;
     let pool = &pools.fts;
@@ -290,13 +312,7 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
             .await?;
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        MemoryCommands::Decay {
-            high_days,
-            moderate_days,
-        } => {
-            let affected = memory::run_importance_decay(pool, high_days, moderate_days).await?;
-            println!("{{\"decayed\": {affected}}}");
-        }
+        MemoryCommands::Decay { .. } => unreachable!(),
     }
 
     pools.close().await;
