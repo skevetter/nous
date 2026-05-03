@@ -54,21 +54,21 @@ pub async fn create(
     Json(body): Json<CreateScheduleBody>,
 ) -> Result<impl IntoResponse, AppError> {
     let clock = nous_core::schedules::SystemClock;
-    let schedule = nous_core::schedules::create_schedule(
-        &state.pool,
-        &body.name,
-        &body.cron_expr,
-        body.trigger_at,
-        body.timezone.as_deref(),
-        &body.action_type,
-        &body.action_payload,
-        body.desired_outcome.as_deref(),
-        body.max_retries,
-        body.timeout_secs,
-        body.max_output_bytes,
-        body.max_runs,
-        &clock,
-    )
+    let schedule = nous_core::schedules::create_schedule(nous_core::schedules::CreateScheduleParams {
+        db: &state.pool,
+        name: &body.name,
+        cron_expr: &body.cron_expr,
+        trigger_at: body.trigger_at,
+        timezone: body.timezone.as_deref(),
+        action_type: &body.action_type,
+        action_payload: &body.action_payload,
+        desired_outcome: body.desired_outcome.as_deref(),
+        max_retries: body.max_retries,
+        timeout_secs: body.timeout_secs,
+        max_output_bytes: body.max_output_bytes,
+        max_runs: body.max_runs,
+        clock: &clock,
+    })
     .await?;
     state.schedule_notify.notify_one();
     Ok((StatusCode::CREATED, Json(schedule)))
@@ -105,21 +105,21 @@ pub async fn update(
     let desired_outcome_opt = body.desired_outcome.as_deref().map(Some);
     let timeout_opt = body.timeout_secs.map(Some);
 
-    let schedule = nous_core::schedules::update_schedule(
-        &state.pool,
-        &id,
-        body.name.as_deref(),
-        body.cron_expr.as_deref(),
-        body.trigger_at,
-        body.enabled,
-        body.action_type.as_deref(),
-        body.action_payload.as_deref(),
-        desired_outcome_opt,
-        body.max_retries,
-        timeout_opt,
-        body.max_runs,
-        &clock,
-    )
+    let schedule = nous_core::schedules::update_schedule(nous_core::schedules::UpdateScheduleParams {
+        db: &state.pool,
+        id: &id,
+        name: body.name.as_deref(),
+        cron_expr: body.cron_expr.as_deref(),
+        trigger_at: body.trigger_at,
+        enabled: body.enabled,
+        action_type: body.action_type.as_deref(),
+        action_payload: body.action_payload.as_deref(),
+        desired_outcome: desired_outcome_opt,
+        max_retries: body.max_retries,
+        timeout_secs: timeout_opt,
+        max_runs: body.max_runs,
+        clock: &clock,
+    })
     .await?;
     state.schedule_notify.notify_one();
     Ok(Json(schedule))

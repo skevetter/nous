@@ -11,39 +11,46 @@ use rig::vector_store::request::Filter;
 use rig::vector_store::{VectorSearchRequest, VectorStoreError, VectorStoreIndex};
 use serde::Deserialize;
 
+pub struct NousMemoryIndexParams {
+    pub fts_pool: DatabaseConnection,
+    pub vec_pool: VecPool,
+    pub embedder: Arc<dyn Embedder>,
+    pub workspace_id: String,
+    pub agent_id: Option<String>,
+    pub scope: MemoryScope,
+    pub retrieval: RetrievalStrategy,
+    pub memory_types: Vec<MemoryType>,
+}
+
 pub struct NousMemoryIndex {
     fts_pool: DatabaseConnection,
     vec_pool: VecPool,
     embedder: Arc<dyn Embedder>,
     workspace_id: String,
     agent_id: Option<String>,
-    #[allow(dead_code)]
-    session_id: Option<String>,
     scope: MemoryScope,
     retrieval: RetrievalStrategy,
     memory_types: Vec<MemoryType>,
 }
 
 impl NousMemoryIndex {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        fts_pool: DatabaseConnection,
-        vec_pool: VecPool,
-        embedder: Arc<dyn Embedder>,
-        workspace_id: String,
-        agent_id: Option<String>,
-        session_id: Option<String>,
-        scope: MemoryScope,
-        retrieval: RetrievalStrategy,
-        memory_types: Vec<MemoryType>,
-    ) -> Self {
+    pub fn new(params: NousMemoryIndexParams) -> Self {
+        let NousMemoryIndexParams {
+            fts_pool,
+            vec_pool,
+            embedder,
+            workspace_id,
+            agent_id,
+            scope,
+            retrieval,
+            memory_types,
+        } = params;
         Self {
             fts_pool,
             vec_pool,
             embedder,
             workspace_id,
             agent_id,
-            session_id,
             scope,
             retrieval,
             memory_types,
@@ -88,16 +95,16 @@ impl NousMemoryIndex {
                     NousError::Internal("embedder returned no vectors".to_string())
                 })?;
 
-                memory::search_hybrid_filtered(
-                    &self.fts_pool,
-                    &self.vec_pool,
+                memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+                    fts_db: &self.fts_pool,
+                    vec_pool: &self.vec_pool,
                     query,
-                    &embedding,
+                    query_embedding: &embedding,
                     limit,
-                    ws,
-                    agent,
-                    mt,
-                )
+                    workspace_id: ws,
+                    agent_id: agent,
+                    memory_type: mt,
+                })
                 .await
             }
             RetrievalStrategy::Fts => {
@@ -367,17 +374,16 @@ mod tests {
         scope: MemoryScope,
         retrieval: RetrievalStrategy,
     ) -> NousMemoryIndex {
-        NousMemoryIndex::new(
+        NousMemoryIndex::new(NousMemoryIndexParams {
             fts_pool,
             vec_pool,
-            Arc::new(MockEmbedder::new()),
-            "test-workspace".to_string(),
-            Some("test-agent".to_string()),
-            Some("test-session".to_string()),
+            embedder: Arc::new(MockEmbedder::new()),
+            workspace_id: "test-workspace".to_string(),
+            agent_id: Some("test-agent".to_string()),
             scope,
             retrieval,
-            vec![MemoryType::Decision, MemoryType::Convention],
-        )
+            memory_types: vec![MemoryType::Decision, MemoryType::Convention],
+        })
     }
 
     #[test]
@@ -390,21 +396,19 @@ mod tests {
             let tmp = tempfile::TempDir::new().unwrap();
             let pools = nous_core::db::DbPools::connect(tmp.path()).await.unwrap();
 
-            let index = NousMemoryIndex::new(
-                pools.fts.clone(),
-                pools.vec.clone(),
-                Arc::new(MockEmbedder::new()),
-                "ws-1".to_string(),
-                Some("agent-1".to_string()),
-                Some("session-1".to_string()),
-                MemoryScope::Agent,
-                RetrievalStrategy::Hybrid,
-                vec![MemoryType::Decision],
-            );
+            let index = NousMemoryIndex::new(NousMemoryIndexParams {
+                fts_pool: pools.fts.clone(),
+                vec_pool: pools.vec.clone(),
+                embedder: Arc::new(MockEmbedder::new()),
+                workspace_id: "ws-1".to_string(),
+                agent_id: Some("agent-1".to_string()),
+                scope: MemoryScope::Agent,
+                retrieval: RetrievalStrategy::Hybrid,
+                memory_types: vec![MemoryType::Decision],
+            });
 
             assert_eq!(index.workspace_id, "ws-1");
             assert_eq!(index.agent_id.as_deref(), Some("agent-1"));
-            assert_eq!(index.session_id.as_deref(), Some("session-1"));
             assert_eq!(index.scope, MemoryScope::Agent);
             assert_eq!(index.retrieval, RetrievalStrategy::Hybrid);
             assert_eq!(index.memory_types, vec![MemoryType::Decision]);

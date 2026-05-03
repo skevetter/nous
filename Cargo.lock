@@ -3816,6 +3816,7 @@ dependencies = [
 name = "nous-core"
 version = "0.10.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "glob",

@@ -126,21 +126,21 @@ async fn execute(
             desired_outcome,
             trigger_at,
         } => {
-            let schedule = schedules::create_schedule(
-                pool,
-                &name,
-                &cron,
+            let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+                db: pool,
+                name: &name,
+                cron_expr: &cron,
                 trigger_at,
-                tz.as_deref(),
-                &action,
-                &payload,
-                desired_outcome.as_deref(),
+                timezone: tz.as_deref(),
+                action_type: &action,
+                action_payload: &payload,
+                desired_outcome: desired_outcome.as_deref(),
                 max_retries,
-                timeout,
-                None,
+                timeout_secs: timeout,
+                max_output_bytes: None,
                 max_runs,
-                &clock,
-            )
+                clock: &clock,
+            })
             .await?;
             println!("{}", serde_json::to_string_pretty(&schedule)?);
         }
@@ -182,21 +182,21 @@ async fn execute(
             } else {
                 desired_outcome.as_deref().map(Some)
             };
-            let schedule = schedules::update_schedule(
-                pool,
-                &id,
-                name.as_deref(),
-                cron.as_deref(),
-                trigger_at_opt,
+            let schedule = schedules::update_schedule(schedules::UpdateScheduleParams {
+                db: pool,
+                id: &id,
+                name: name.as_deref(),
+                cron_expr: cron.as_deref(),
+                trigger_at: trigger_at_opt,
                 enabled,
-                action.as_deref(),
-                payload.as_deref(),
-                desired_outcome_opt,
+                action_type: action.as_deref(),
+                action_payload: payload.as_deref(),
+                desired_outcome: desired_outcome_opt,
                 max_retries,
-                timeout_opt,
-                None,
-                &clock,
-            )
+                timeout_secs: timeout_opt,
+                max_runs: None,
+                clock: &clock,
+            })
             .await?;
             println!("{}", serde_json::to_string_pretty(&schedule)?);
         }

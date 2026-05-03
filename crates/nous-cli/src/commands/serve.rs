@@ -63,6 +63,7 @@ pub async fn run(
     }
 }
 
+// Daemon process intentionally outlives parent
 #[allow(clippy::zombie_processes)]
 fn daemonize(
     model: Option<String>,

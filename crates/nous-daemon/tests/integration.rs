@@ -690,18 +690,18 @@ async fn e2e_worktree_lifecycle() {
     let repo_root = repo_dir.path().to_str().unwrap();
 
     // Create a real task so FK constraint is satisfied
-    let task = nous_core::tasks::create_task(
-        &state.pool,
-        "WT test task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+        db: &state.pool,
+        title: "WT test task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -2327,17 +2327,17 @@ async fn sandbox_spawn_creates_entry_in_manager() {
     // Spawn sandbox process
     let result = state
         .process_registry
-        .spawn(
-            &state,
-            &agent.id,
-            "sandbox:ubuntu:24.04",
-            "sandbox",
-            None,
-            None,
-            Some(3600),
-            "never",
-            0,
-        )
+        .spawn(nous_daemon::process_manager::SpawnParams {
+            state: &state,
+            agent_id: &agent.id,
+            command: "sandbox:ubuntu:24.04",
+            process_type: "sandbox",
+            working_dir: None,
+            env: None,
+            timeout_secs: Some(3600),
+            restart_policy: "never",
+            max_restarts: 0,
+        })
         .await;
 
     assert!(

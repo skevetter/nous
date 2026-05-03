@@ -105,7 +105,16 @@ async fn hybrid_search_auto_embed_with_mock() {
         .unwrap();
 
     let results =
-        memory::search_hybrid_filtered(&pool, &vec_pool, query, &query_emb, 10, None, None, None)
+        memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+            fts_db: &pool,
+            vec_pool: &vec_pool,
+            query,
+            query_embedding: &query_emb,
+            limit: 10,
+            workspace_id: None,
+            agent_id: None,
+            memory_type: None,
+        })
             .await
             .unwrap();
 
@@ -147,16 +156,16 @@ async fn hybrid_search_with_explicit_embedding() {
         .into_iter()
         .next()
         .unwrap();
-    let results = memory::search_hybrid_filtered(
-        &pool,
-        &vec_pool,
-        "database connection",
-        &explicit_embedding,
-        10,
-        None,
-        None,
-        None,
-    )
+    let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+        fts_db: &pool,
+        vec_pool: &vec_pool,
+        query: "database connection",
+        query_embedding: &explicit_embedding,
+        limit: 10,
+        workspace_id: None,
+        agent_id: None,
+        memory_type: None,
+    })
     .await
     .unwrap();
 
@@ -281,16 +290,16 @@ async fn filter_by_workspace_id() {
         .next()
         .unwrap();
 
-    let results = memory::search_hybrid_filtered(
-        &pool,
-        &vec_pool,
-        "async",
-        &query_emb,
-        10,
-        Some("ws-1"),
-        None,
-        None,
-    )
+    let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+        fts_db: &pool,
+        vec_pool: &vec_pool,
+        query: "async",
+        query_embedding: &query_emb,
+        limit: 10,
+        workspace_id: Some("ws-1"),
+        agent_id: None,
+        memory_type: None,
+    })
     .await
     .unwrap();
 
@@ -334,16 +343,16 @@ async fn filter_by_agent_id() {
         .next()
         .unwrap();
 
-    let results = memory::search_hybrid_filtered(
-        &pool,
-        &vec_pool,
-        "errors",
-        &query_emb,
-        10,
-        None,
-        Some("agent-1"),
-        None,
-    )
+    let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+        fts_db: &pool,
+        vec_pool: &vec_pool,
+        query: "errors",
+        query_embedding: &query_emb,
+        limit: 10,
+        workspace_id: None,
+        agent_id: Some("agent-1"),
+        memory_type: None,
+    })
     .await
     .unwrap();
 
@@ -388,16 +397,16 @@ async fn filter_by_memory_type() {
         .next()
         .unwrap();
 
-    let results = memory::search_hybrid_filtered(
-        &pool,
-        &vec_pool,
-        "patterns",
-        &query_emb,
-        10,
-        None,
-        None,
-        Some(MemoryType::Convention),
-    )
+    let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+        fts_db: &pool,
+        vec_pool: &vec_pool,
+        query: "patterns",
+        query_embedding: &query_emb,
+        limit: 10,
+        workspace_id: None,
+        agent_id: None,
+        memory_type: Some(MemoryType::Convention),
+    })
     .await
     .unwrap();
 

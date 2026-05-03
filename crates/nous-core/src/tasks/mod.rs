@@ -132,17 +132,28 @@ pub struct TaskCommandResult {
     pub task: Option<Task>,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn post_task_event_to_room(
-    db: &DatabaseConnection,
-    registry: Option<&NotificationRegistry>,
-    task_id: &str,
-    room_id: &str,
-    event_type: &str,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-    actor_id: Option<&str>,
-) -> Result<(), NousError> {
+pub struct PostTaskEventParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub registry: Option<&'a NotificationRegistry>,
+    pub task_id: &'a str,
+    pub room_id: &'a str,
+    pub event_type: &'a str,
+    pub old_value: Option<&'a str>,
+    pub new_value: Option<&'a str>,
+    pub actor_id: Option<&'a str>,
+}
+
+pub async fn post_task_event_to_room(params: PostTaskEventParams<'_>) -> Result<(), NousError> {
+    let PostTaskEventParams {
+        db,
+        registry,
+        task_id,
+        room_id,
+        event_type,
+        old_value,
+        new_value,
+        actor_id,
+    } = params;
     let content = match event_type {
         "status_changed" => format!(
             "Task status: {} → {}",
@@ -221,17 +232,17 @@ pub async fn execute_task_command(
                     "assign command requires 1 argument: assignee_id".into(),
                 ));
             }
-            let task = update_task(
+            let task = update_task(UpdateTaskParams {
                 db,
-                &cmd.task_id,
-                None,
-                None,
-                Some(&cmd.args[0]),
-                None,
-                None,
-                Some(&cmd.actor_id),
+                id: &cmd.task_id,
+                status: None,
+                priority: None,
+                assignee_id: Some(&cmd.args[0]),
+                description: None,
+                labels: None,
+                actor_id: Some(&cmd.actor_id),
                 registry,
-            )
+            })
             .await?;
             Ok(make_result(
                 true,
@@ -245,17 +256,17 @@ pub async fn execute_task_command(
                     "status command requires 1 argument: new_status".into(),
                 ));
             }
-            let task = update_task(
+            let task = update_task(UpdateTaskParams {
                 db,
-                &cmd.task_id,
-                Some(&cmd.args[0]),
-                None,
-                None,
-                None,
-                None,
-                Some(&cmd.actor_id),
+                id: &cmd.task_id,
+                status: Some(&cmd.args[0]),
+                priority: None,
+                assignee_id: None,
+                description: None,
+                labels: None,
+                actor_id: Some(&cmd.actor_id),
                 registry,
-            )
+            })
             .await?;
             Ok(make_result(
                 true,
@@ -269,17 +280,17 @@ pub async fn execute_task_command(
                     "priority command requires 1 argument: new_priority".into(),
                 ));
             }
-            let task = update_task(
+            let task = update_task(UpdateTaskParams {
                 db,
-                &cmd.task_id,
-                None,
-                Some(&cmd.args[0]),
-                None,
-                None,
-                None,
-                Some(&cmd.actor_id),
+                id: &cmd.task_id,
+                status: None,
+                priority: Some(&cmd.args[0]),
+                assignee_id: None,
+                description: None,
+                labels: None,
+                actor_id: Some(&cmd.actor_id),
                 registry,
-            )
+            })
             .await?;
             Ok(make_result(
                 true,
@@ -313,19 +324,32 @@ pub async fn execute_task_command(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn create_task(
-    db: &DatabaseConnection,
-    title: &str,
-    description: Option<&str>,
-    priority: Option<&str>,
-    assignee_id: Option<&str>,
-    labels: Option<&[String]>,
-    room_id: Option<&str>,
-    create_room: bool,
-    actor_id: Option<&str>,
-    registry: Option<&NotificationRegistry>,
-) -> Result<Task, NousError> {
+pub struct CreateTaskParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub title: &'a str,
+    pub description: Option<&'a str>,
+    pub priority: Option<&'a str>,
+    pub assignee_id: Option<&'a str>,
+    pub labels: Option<&'a [String]>,
+    pub room_id: Option<&'a str>,
+    pub create_room: bool,
+    pub actor_id: Option<&'a str>,
+    pub registry: Option<&'a NotificationRegistry>,
+}
+
+pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError> {
+    let CreateTaskParams {
+        db,
+        title,
+        description,
+        priority,
+        assignee_id,
+        labels,
+        room_id,
+        create_room,
+        actor_id,
+        registry,
+    } = params;
     if title.trim().is_empty() {
         return Err(NousError::Validation("task title cannot be empty".into()));
     }
@@ -378,16 +402,16 @@ pub async fn create_task(
     event_entity::Entity::insert(event_model).exec(db).await?;
 
     if let Some(ref rid) = effective_room_id {
-        let _ = post_task_event_to_room(
+        let _ = post_task_event_to_room(PostTaskEventParams {
             db,
             registry,
-            &id,
-            rid,
-            "created",
-            None,
-            Some(title),
+            task_id: &id,
+            room_id: rid,
+            event_type: "created",
+            old_value: None,
+            new_value: Some(title),
             actor_id,
-        )
+        })
         .await;
     }
 
@@ -399,17 +423,28 @@ pub async fn create_task(
     Ok(Task::from_model(model))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn list_tasks(
-    db: &DatabaseConnection,
-    status: Option<&str>,
-    assignee_id: Option<&str>,
-    label: Option<&str>,
-    limit: Option<u32>,
-    offset: Option<u32>,
-    order_by: Option<&str>,
-    order_dir: Option<&str>,
-) -> Result<Vec<Task>, NousError> {
+pub struct ListTasksParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub status: Option<&'a str>,
+    pub assignee_id: Option<&'a str>,
+    pub label: Option<&'a str>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub order_by: Option<&'a str>,
+    pub order_dir: Option<&'a str>,
+}
+
+pub async fn list_tasks(params: ListTasksParams<'_>) -> Result<Vec<Task>, NousError> {
+    let ListTasksParams {
+        db,
+        status,
+        assignee_id,
+        label,
+        limit,
+        offset,
+        order_by,
+        order_dir,
+    } = params;
     let limit = limit.unwrap_or(50).min(200);
     let offset = offset.unwrap_or(0);
     let order_dir = order_dir.unwrap_or("DESC");
@@ -507,18 +542,30 @@ pub async fn get_task(db: &DatabaseConnection, id: &str) -> Result<Task, NousErr
     Ok(task)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn update_task(
-    db: &DatabaseConnection,
-    id: &str,
-    status: Option<&str>,
-    priority: Option<&str>,
-    assignee_id: Option<&str>,
-    description: Option<&str>,
-    labels: Option<&[String]>,
-    actor_id: Option<&str>,
-    registry: Option<&NotificationRegistry>,
-) -> Result<Task, NousError> {
+pub struct UpdateTaskParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub id: &'a str,
+    pub status: Option<&'a str>,
+    pub priority: Option<&'a str>,
+    pub assignee_id: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub labels: Option<&'a [String]>,
+    pub actor_id: Option<&'a str>,
+    pub registry: Option<&'a NotificationRegistry>,
+}
+
+pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError> {
+    let UpdateTaskParams {
+        db,
+        id,
+        status,
+        priority,
+        assignee_id,
+        description,
+        labels,
+        actor_id,
+        registry,
+    } = params;
     let existing_model = task_entity::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -556,16 +603,16 @@ pub async fn update_task(
             }
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(
+                let _ = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
-                    id,
-                    rid,
-                    "status_changed",
-                    Some(&existing.status),
-                    Some(new_status),
+                    task_id: id,
+                    room_id: rid,
+                    event_type: "status_changed",
+                    old_value: Some(&existing.status),
+                    new_value: Some(new_status),
                     actor_id,
-                )
+                })
                 .await;
             }
         }
@@ -592,16 +639,16 @@ pub async fn update_task(
             .await?;
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(
+                let _ = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
-                    id,
-                    rid,
-                    "priority_changed",
-                    Some(&existing.priority),
-                    Some(new_priority),
+                    task_id: id,
+                    room_id: rid,
+                    event_type: "priority_changed",
+                    old_value: Some(&existing.priority),
+                    new_value: Some(new_priority),
                     actor_id,
-                )
+                })
                 .await;
             }
         }
@@ -647,16 +694,16 @@ pub async fn update_task(
             .await?;
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(
+                let _ = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
-                    id,
-                    rid,
-                    "assigned",
-                    Some(old_assignee),
-                    Some(new_assignee),
+                    task_id: id,
+                    room_id: rid,
+                    event_type: "assigned",
+                    old_value: Some(old_assignee),
+                    new_value: Some(new_assignee),
                     actor_id,
-                )
+                })
                 .await;
             }
         }
@@ -694,17 +741,17 @@ pub async fn close_task(
     id: &str,
     actor_id: Option<&str>,
 ) -> Result<Task, NousError> {
-    update_task(
+    update_task(UpdateTaskParams {
         db,
         id,
-        Some("closed"),
-        None,
-        None,
-        None,
-        None,
+        status: Some("closed"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
         actor_id,
-        None,
-    )
+        registry: None,
+    })
     .await
 }
 
@@ -1296,18 +1343,18 @@ pub async fn create_from_template(
         None
     };
 
-    create_task(
+    create_task(CreateTaskParams {
         db,
-        &title,
-        description.as_deref(),
-        Some(&template.default_priority),
-        overrides_assignee,
-        Some(&labels),
-        None,
-        false,
-        None,
-        None,
-    )
+        title: &title,
+        description: description.as_deref(),
+        priority: Some(&template.default_priority),
+        assignee_id: overrides_assignee,
+        labels: Some(&labels),
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
 }
 
@@ -1354,7 +1401,7 @@ pub async fn batch_update_status(
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match update_task(db, id, Some(status), None, None, None, None, None, None).await {
+        match update_task(UpdateTaskParams { db, id, status: Some(status), priority: None, assignee_id: None, description: None, labels: None, actor_id: None, registry: None }).await {
             Ok(_) => succeeded.push(id.clone()),
             Err(e) => failed.push(BatchError {
                 id: id.clone(),
@@ -1375,17 +1422,17 @@ pub async fn batch_assign(
     let mut failed = Vec::new();
 
     for id in task_ids {
-        match update_task(
+        match update_task(UpdateTaskParams {
             db,
             id,
-            None,
-            None,
-            Some(assignee_id),
-            None,
-            None,
-            None,
-            None,
-        )
+            status: None,
+            priority: None,
+            assignee_id: Some(assignee_id),
+            description: None,
+            labels: None,
+            actor_id: None,
+            registry: None,
+        })
         .await
         {
             Ok(_) => succeeded.push(id.clone()),
@@ -1422,31 +1469,31 @@ mod tests {
             .await
             .unwrap();
 
-        let task = create_task(
-            &db,
-            "Bridge test task",
-            None,
-            None,
-            None,
-            None,
-            Some(&room.id),
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "Bridge test task",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: Some(&room.id),
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
-        post_task_event_to_room(
-            &db,
-            None,
-            &task.id,
-            &room.id,
-            "status_changed",
-            Some("open"),
-            Some("in_progress"),
-            Some("actor-1"),
-        )
+        post_task_event_to_room(PostTaskEventParams {
+            db: &db,
+            registry: None,
+            task_id: &task.id,
+            room_id: &room.id,
+            event_type: "status_changed",
+            old_value: Some("open"),
+            new_value: Some("in_progress"),
+            actor_id: Some("actor-1"),
+        })
         .await
         .unwrap();
 
@@ -1477,34 +1524,34 @@ mod tests {
     async fn test_task_event_not_posted_when_no_room() {
         let (db, _tmp) = setup().await;
 
-        let task = create_task(
-            &db,
-            "No room task",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "No room task",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
         assert!(task.room_id.is_none());
 
-        let result = update_task(
-            &db,
-            &task.id,
-            Some("in_progress"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        let result = update_task(UpdateTaskParams {
+            db: &db,
+            id: &task.id,
+            status: Some("in_progress"),
+            priority: None,
+            assignee_id: None,
+            description: None,
+            labels: None,
+            actor_id: None,
+            registry: None,
+        })
         .await;
 
         assert!(result.is_ok());
@@ -1514,18 +1561,18 @@ mod tests {
     async fn test_execute_task_command_close() {
         let (db, _tmp) = setup().await;
 
-        let task = create_task(
-            &db,
-            "Close cmd",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "Close cmd",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -1552,18 +1599,18 @@ mod tests {
     async fn test_execute_task_command_assign() {
         let (db, _tmp) = setup().await;
 
-        let task = create_task(
-            &db,
-            "Assign cmd",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "Assign cmd",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -1589,18 +1636,18 @@ mod tests {
     async fn test_execute_task_command_invalid() {
         let (db, _tmp) = setup().await;
 
-        let task = create_task(
-            &db,
-            "Invalid cmd",
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "Invalid cmd",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
@@ -1626,32 +1673,32 @@ mod tests {
             .await
             .unwrap();
 
-        let task = create_task(
-            &db,
-            "Room event task",
-            None,
-            None,
-            None,
-            None,
-            Some(&room.id),
-            false,
-            None,
-            None,
-        )
+        let task = create_task(CreateTaskParams {
+            db: &db,
+            title: "Room event task",
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: Some(&room.id),
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
 
-        update_task(
-            &db,
-            &task.id,
-            Some("in_progress"),
-            None,
-            None,
-            None,
-            None,
-            Some("actor-1"),
-            None,
-        )
+        update_task(UpdateTaskParams {
+            db: &db,
+            id: &task.id,
+            status: Some("in_progress"),
+            priority: None,
+            assignee_id: None,
+            description: None,
+            labels: None,
+            actor_id: Some("actor-1"),
+            registry: None,
+        })
         .await
         .unwrap();
 

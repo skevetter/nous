@@ -11,14 +11,14 @@ async fn test_direct_cycle_detection_blocked_by() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
-    )
+    let task_a = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
-    )
+    let task_b = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task B", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
 
@@ -43,19 +43,19 @@ async fn test_indirect_cycle_detection_parent() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
-    )
+    let task_a = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
-    )
+    let task_b = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task B", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let task_c = tasks::create_task(
-        &pools.fts, "Task C", None, None, None, None, None, false, None, None,
-    )
+    let task_c = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task C", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
 
@@ -83,14 +83,14 @@ async fn test_related_to_allows_bidirectional() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task_a = tasks::create_task(
-        &pools.fts, "Task A", None, None, None, None, None, false, None, None,
-    )
+    let task_a = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task A", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let task_b = tasks::create_task(
-        &pools.fts, "Task B", None, None, None, None, None, false, None, None,
-    )
+    let task_b = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task B", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
 
@@ -111,18 +111,18 @@ async fn test_fts_trigger_on_insert() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let _task = tasks::create_task(
-        &pools.fts,
-        "Find authentication bug",
-        Some("The OAuth2 flow is failing intermittently"),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let _task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Find authentication bug",
+        description: Some("The OAuth2 flow is failing intermittently"),
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -161,33 +161,33 @@ async fn test_fts_trigger_on_update() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Original title",
-        Some("Original description"),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Original title",
+        description: Some("Original description"),
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
     // Update the task description (status, priority, assignee_id, description, labels, actor_id)
-    tasks::update_task(
-        &pools.fts,
-        &task.id,
-        None,                                         // status
-        None,                                         // priority
-        None,                                         // assignee_id
-        Some("Updated description with unique word"), // description
-        None,                                         // labels
-        None,                                         // actor_id
-        None,
-    )
+    tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: None,
+        priority: None,
+        assignee_id: None,
+        description: Some("Updated description with unique word"),
+        labels: None,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -214,18 +214,18 @@ async fn test_tasks_au_trigger_updates_timestamp() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Test task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Test task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -236,17 +236,17 @@ async fn test_tasks_au_trigger_updates_timestamp() {
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     // Update the task (status, priority, assignee_id, description, labels, actor_id)
-    tasks::update_task(
-        &pools.fts,
-        &task.id,
-        Some("in_progress"), // status
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: Some("in_progress"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -275,18 +275,18 @@ async fn test_create_task_minimal() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Minimal task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Minimal task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -309,18 +309,18 @@ async fn test_create_task_full() {
     pools.run_migrations().await.unwrap();
 
     let labels = vec!["bug".to_string(), "urgent".to_string()];
-    let task = tasks::create_task(
-        &pools.fts,
-        "Full task",
-        Some("A detailed description"),
-        Some("high"),
-        Some("agent-42"),
-        Some(&labels),
-        None,
-        false,
-        Some("creator-1"),
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Full task",
+        description: Some("A detailed description"),
+        priority: Some("high"),
+        assignee_id: Some("agent-42"),
+        labels: Some(&labels),
+        room_id: None,
+        create_room: false,
+        actor_id: Some("creator-1"),
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -339,9 +339,9 @@ async fn test_create_task_empty_title_fails() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let result = tasks::create_task(
-        &pools.fts, "  ", None, None, None, None, None, false, None, None,
-    )
+    let result = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "  ", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await;
     assert!(matches!(result, Err(NousError::Validation(_))));
 
@@ -354,18 +354,18 @@ async fn test_create_task_with_room_creation() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Task with room",
-        None,
-        None,
-        None,
-        None,
-        None,
-        true,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Task with room",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: true,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
@@ -383,53 +383,55 @@ async fn test_list_tasks_filter_by_status() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let t1 = tasks::create_task(
-        &pools.fts,
-        "Open task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let t1 = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Open task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    tasks::create_task(
-        &pools.fts,
-        "Another open",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Another open",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
     tasks::close_task(&pools.fts, &t1.id, None).await.unwrap();
 
     let open_tasks =
-        tasks::list_tasks(&pools.fts, Some("open"), None, None, None, None, None, None)
+        tasks::list_tasks(tasks::ListTasksParams {
+            db: &pools.fts, status: Some("open"), assignee_id: None, label: None, limit: None, offset: None, order_by: None, order_dir: None,
+        })
             .await
             .unwrap();
     assert_eq!(open_tasks.len(), 1);
     assert_eq!(open_tasks[0].title, "Another open");
 
-    let closed_tasks = tasks::list_tasks(
-        &pools.fts,
-        Some("closed"),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    let closed_tasks = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts,
+        status: Some("closed"),
+        assignee_id: None,
+        label: None,
+        limit: None,
+        offset: None,
+        order_by: None,
+        order_dir: None,
+    })
     .await
     .unwrap();
     assert_eq!(closed_tasks.len(), 1);
@@ -444,45 +446,45 @@ async fn test_list_tasks_filter_by_assignee() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    tasks::create_task(
-        &pools.fts,
-        "Alice task",
-        None,
-        None,
-        Some("alice"),
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Alice task",
+        description: None,
+        priority: None,
+        assignee_id: Some("alice"),
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    tasks::create_task(
-        &pools.fts,
-        "Bob task",
-        None,
-        None,
-        Some("bob"),
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Bob task",
+        description: None,
+        priority: None,
+        assignee_id: Some("bob"),
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
-    let alice_tasks = tasks::list_tasks(
-        &pools.fts,
-        None,
-        Some("alice"),
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    let alice_tasks = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts,
+        status: None,
+        assignee_id: Some("alice"),
+        label: None,
+        limit: None,
+        offset: None,
+        order_by: None,
+        order_dir: None,
+    })
     .await
     .unwrap();
     assert_eq!(alice_tasks.len(), 1);
@@ -499,36 +501,38 @@ async fn test_list_tasks_filter_by_label() {
 
     let labels_bug = vec!["bug".to_string()];
     let labels_feat = vec!["feature".to_string()];
-    tasks::create_task(
-        &pools.fts,
-        "Bug task",
-        None,
-        None,
-        None,
-        Some(&labels_bug),
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Bug task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: Some(&labels_bug),
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    tasks::create_task(
-        &pools.fts,
-        "Feature task",
-        None,
-        None,
-        None,
-        Some(&labels_feat),
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Feature task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: Some(&labels_feat),
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 
-    let bug_tasks = tasks::list_tasks(&pools.fts, None, None, Some("bug"), None, None, None, None)
+    let bug_tasks = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts, status: None, assignee_id: None, label: Some("bug"), limit: None, offset: None, order_by: None, order_dir: None,
+    })
         .await
         .unwrap();
     assert_eq!(bug_tasks.len(), 1);
@@ -544,33 +548,39 @@ async fn test_list_tasks_pagination() {
     pools.run_migrations().await.unwrap();
 
     for i in 0..5 {
-        tasks::create_task(
-            &pools.fts,
-            &format!("Task {i}"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        tasks::create_task(tasks::CreateTaskParams {
+            db: &pools.fts,
+            title: &format!("Task {i}"),
+            description: None,
+            priority: None,
+            assignee_id: None,
+            labels: None,
+            room_id: None,
+            create_room: false,
+            actor_id: None,
+            registry: None,
+        })
         .await
         .unwrap();
     }
 
-    let page1 = tasks::list_tasks(&pools.fts, None, None, None, Some(2), Some(0), None, None)
+    let page1 = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts, status: None, assignee_id: None, label: None, limit: Some(2), offset: Some(0), order_by: None, order_dir: None,
+    })
         .await
         .unwrap();
     assert_eq!(page1.len(), 2);
 
-    let page2 = tasks::list_tasks(&pools.fts, None, None, None, Some(2), Some(2), None, None)
+    let page2 = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts, status: None, assignee_id: None, label: None, limit: Some(2), offset: Some(2), order_by: None, order_dir: None,
+    })
         .await
         .unwrap();
     assert_eq!(page2.len(), 2);
 
-    let page3 = tasks::list_tasks(&pools.fts, None, None, None, Some(2), Some(4), None, None)
+    let page3 = tasks::list_tasks(tasks::ListTasksParams {
+        db: &pools.fts, status: None, assignee_id: None, label: None, limit: Some(2), offset: Some(4), order_by: None, order_dir: None,
+    })
         .await
         .unwrap();
     assert_eq!(page3.len(), 1);
@@ -584,31 +594,31 @@ async fn test_update_task_status() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Status test",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Status test",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    let updated = tasks::update_task(
-        &pools.fts,
-        &task.id,
-        Some("in_progress"),
-        None,
-        None,
-        None,
-        None,
-        Some("actor-1"),
-        None,
-    )
+    let updated = tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: Some("in_progress"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: Some("actor-1"),
+        registry: None,
+    })
     .await
     .unwrap();
     assert_eq!(updated.status, "in_progress");
@@ -632,31 +642,31 @@ async fn test_update_task_priority() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Priority test",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Priority test",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    let updated = tasks::update_task(
-        &pools.fts,
-        &task.id,
-        None,
-        Some("critical"),
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    let updated = tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: None,
+        priority: Some("critical"),
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
     assert_eq!(updated.priority, "critical");
@@ -677,31 +687,31 @@ async fn test_update_task_assignee() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Assignee test",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Assignee test",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    let updated = tasks::update_task(
-        &pools.fts,
-        &task.id,
-        None,
-        None,
-        Some("new-agent"),
-        None,
-        None,
-        None,
-        None,
-    )
+    let updated = tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: None,
+        priority: None,
+        assignee_id: Some("new-agent"),
+        description: None,
+        labels: None,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
     assert_eq!(updated.assignee_id.as_deref(), Some("new-agent"));
@@ -722,9 +732,9 @@ async fn test_close_task() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts, "Close me", None, None, None, None, None, false, None, None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Close me", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
     let closed = tasks::close_task(&pools.fts, &task.id, Some("closer"))
@@ -755,14 +765,14 @@ async fn test_link_then_unlink() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let t1 = tasks::create_task(
-        &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
-    )
+    let t1 = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task 1", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let t2 = tasks::create_task(
-        &pools.fts, "Task 2", None, None, None, None, None, false, None, None,
-    )
+    let t2 = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task 2", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
 
@@ -792,14 +802,14 @@ async fn test_unlink_nonexistent_fails() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let t1 = tasks::create_task(
-        &pools.fts, "Task 1", None, None, None, None, None, false, None, None,
-    )
+    let t1 = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task 1", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
-    let t2 = tasks::create_task(
-        &pools.fts, "Task 2", None, None, None, None, None, false, None, None,
-    )
+    let t2 = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts, title: "Task 2", description: None, priority: None, assignee_id: None, labels: None, room_id: None, create_room: false, actor_id: None, registry: None,
+    })
     .await
     .unwrap();
 
@@ -815,18 +825,18 @@ async fn test_add_note_auto_creates_room() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "No room task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "No room task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
     assert!(task.room_id.is_none());
@@ -848,18 +858,18 @@ async fn test_add_note_with_room() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "Room task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        true,
-        None,
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Room task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: true,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
     let note = tasks::add_note(&pools.fts, &task.id, "agent-1", "This is a note")
@@ -878,31 +888,31 @@ async fn test_task_history() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    let task = tasks::create_task(
-        &pools.fts,
-        "History task",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        Some("actor"),
-        None,
-    )
+    let task = tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "History task",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: Some("actor"),
+        registry: None,
+    })
     .await
     .unwrap();
-    tasks::update_task(
-        &pools.fts,
-        &task.id,
-        Some("in_progress"),
-        None,
-        None,
-        None,
-        None,
-        Some("actor"),
-        None,
-    )
+    tasks::update_task(tasks::UpdateTaskParams {
+        db: &pools.fts,
+        id: &task.id,
+        status: Some("in_progress"),
+        priority: None,
+        assignee_id: None,
+        description: None,
+        labels: None,
+        actor_id: Some("actor"),
+        registry: None,
+    })
     .await
     .unwrap();
     tasks::close_task(&pools.fts, &task.id, Some("actor"))
@@ -939,32 +949,32 @@ async fn test_search_tasks_finds_by_title() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
     pools.run_migrations().await.unwrap();
 
-    tasks::create_task(
-        &pools.fts,
-        "Optimize database queries",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Optimize database queries",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
-    tasks::create_task(
-        &pools.fts,
-        "Fix login page",
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-    )
+    tasks::create_task(tasks::CreateTaskParams {
+        db: &pools.fts,
+        title: "Fix login page",
+        description: None,
+        priority: None,
+        assignee_id: None,
+        labels: None,
+        room_id: None,
+        create_room: false,
+        actor_id: None,
+        registry: None,
+    })
     .await
     .unwrap();
 

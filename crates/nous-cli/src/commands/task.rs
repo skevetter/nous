@@ -201,18 +201,18 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
             } else {
                 Some(labels.as_slice())
             };
-            let task = tasks::create_task(
-                pool,
-                &title,
-                description.as_deref(),
-                Some(priority.as_str()),
-                assignee.as_deref(),
-                label_refs,
-                room_id.as_deref(),
+            let task = tasks::create_task(tasks::CreateTaskParams {
+                db: pool,
+                title: &title,
+                description: description.as_deref(),
+                priority: Some(priority.as_str()),
+                assignee_id: assignee.as_deref(),
+                labels: label_refs,
+                room_id: room_id.as_deref(),
                 create_room,
-                None,
-                None,
-            )
+                actor_id: None,
+                registry: None,
+            })
             .await?;
             println!("{}", serde_json::to_string_pretty(&task)?);
         }
@@ -223,16 +223,16 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
             limit,
             offset,
         } => {
-            let tasks = tasks::list_tasks(
-                pool,
-                status.as_deref(),
-                assignee.as_deref(),
-                label.as_deref(),
-                Some(limit),
-                Some(offset),
-                None,
-                None,
-            )
+            let tasks = tasks::list_tasks(tasks::ListTasksParams {
+                db: pool,
+                status: status.as_deref(),
+                assignee_id: assignee.as_deref(),
+                label: label.as_deref(),
+                limit: Some(limit),
+                offset: Some(offset),
+                order_by: None,
+                order_dir: None,
+            })
             .await?;
             println!("{}", serde_json::to_string_pretty(&tasks)?);
         }
@@ -247,17 +247,17 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
             assignee,
             description,
         } => {
-            let task = tasks::update_task(
-                pool,
-                &id,
-                status.as_deref(),
-                priority.as_deref(),
-                assignee.as_deref(),
-                description.as_deref(),
-                None,
-                None,
-                None,
-            )
+            let task = tasks::update_task(tasks::UpdateTaskParams {
+                db: pool,
+                id: &id,
+                status: status.as_deref(),
+                priority: priority.as_deref(),
+                assignee_id: assignee.as_deref(),
+                description: description.as_deref(),
+                labels: None,
+                actor_id: None,
+                registry: None,
+            })
             .await?;
             println!("{}", serde_json::to_string_pretty(&task)?);
         }

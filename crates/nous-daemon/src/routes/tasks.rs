@@ -59,18 +59,18 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateTaskBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let task = nous_core::tasks::create_task(
-        &state.pool,
-        &body.title,
-        body.description.as_deref(),
-        body.priority.as_deref(),
-        body.assignee_id.as_deref(),
-        body.labels.as_deref(),
-        body.room_id.as_deref(),
-        body.create_room.unwrap_or(false),
-        None,
-        None,
-    )
+    let task = nous_core::tasks::create_task(nous_core::tasks::CreateTaskParams {
+        db: &state.pool,
+        title: &body.title,
+        description: body.description.as_deref(),
+        priority: body.priority.as_deref(),
+        assignee_id: body.assignee_id.as_deref(),
+        labels: body.labels.as_deref(),
+        room_id: body.room_id.as_deref(),
+        create_room: body.create_room.unwrap_or(false),
+        actor_id: None,
+        registry: None,
+    })
     .await?;
     Ok((StatusCode::CREATED, Json(task)))
 }
@@ -79,16 +79,16 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListTasksQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tasks = nous_core::tasks::list_tasks(
-        &state.pool,
-        params.status.as_deref(),
-        params.assignee_id.as_deref(),
-        params.label.as_deref(),
-        params.limit,
-        params.offset,
-        None,
-        None,
-    )
+    let tasks = nous_core::tasks::list_tasks(nous_core::tasks::ListTasksParams {
+        db: &state.pool,
+        status: params.status.as_deref(),
+        assignee_id: params.assignee_id.as_deref(),
+        label: params.label.as_deref(),
+        limit: params.limit,
+        offset: params.offset,
+        order_by: None,
+        order_dir: None,
+    })
     .await?;
     Ok(Json(tasks))
 }
@@ -106,17 +106,17 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<UpdateTaskBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let task = nous_core::tasks::update_task(
-        &state.pool,
-        &id,
-        body.status.as_deref(),
-        body.priority.as_deref(),
-        body.assignee_id.as_deref(),
-        body.description.as_deref(),
-        None,
-        None,
-        None,
-    )
+    let task = nous_core::tasks::update_task(nous_core::tasks::UpdateTaskParams {
+        db: &state.pool,
+        id: &id,
+        status: body.status.as_deref(),
+        priority: body.priority.as_deref(),
+        assignee_id: body.assignee_id.as_deref(),
+        description: body.description.as_deref(),
+        labels: None,
+        actor_id: None,
+        registry: None,
+    })
     .await?;
     Ok(Json(task))
 }
