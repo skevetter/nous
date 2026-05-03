@@ -105,11 +105,30 @@ async fn run_loop(
             let config = config.clone();
             let active = active.clone();
 
+            let schedule_id = schedule.id.clone();
+            let schedule_name = schedule.name.clone();
             tokio::spawn(async move {
-                execute_schedule(&state, &schedule, &config, &clock).await;
+                let result = std::panic::AssertUnwindSafe(
+                    execute_schedule(&state, &schedule, &config, &clock),
+                );
+                let outcome = futures::FutureExt::catch_unwind(result).await;
+                if let Err(panic_info) = outcome {
+                    let msg = panic_info
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("unknown panic");
+                    tracing::error!(
+                        schedule_id = %schedule.id,
+                        schedule_name = %schedule.name,
+                        panic = %msg,
+                        "schedule execution task panicked"
+                    );
+                }
                 active.lock().await.remove(&schedule.id);
                 drop(permit);
             });
+            tracing::debug!(schedule_id = %schedule_id, schedule_name = %schedule_name, "spawned schedule execution task");
         }
     }
 
