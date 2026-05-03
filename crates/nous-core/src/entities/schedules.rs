@@ -7,7 +7,7 @@ pub struct Model {
     pub id: String,
     pub name: String,
     pub cron_expr: String,
-    pub trigger_at: Option<i64>,
+    pub trigger_at: Option<String>,
     pub timezone: String,
     pub enabled: bool,
     pub action_type: String,
@@ -17,10 +17,10 @@ pub struct Model {
     pub timeout_secs: Option<i32>,
     pub max_output_bytes: i32,
     pub max_runs: i32,
-    pub last_run_at: Option<i64>,
-    pub next_run_at: Option<i64>,
-    pub created_at: i64,
-    pub updated_at: i64,
+    pub last_run_at: Option<String>,
+    pub next_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

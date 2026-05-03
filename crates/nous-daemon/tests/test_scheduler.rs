@@ -123,7 +123,10 @@ async fn test_once_schedule_fires_and_disables() {
     .unwrap();
 
     assert!(schedule.enabled);
-    assert_eq!(schedule.next_run_at, Some(trigger_at));
+    assert_eq!(
+        schedule.next_run_at,
+        Some(nous_core::schedules::ts_to_iso(trigger_at))
+    );
 
     // Advance past trigger_at
     clock.set(trigger_at + 1);

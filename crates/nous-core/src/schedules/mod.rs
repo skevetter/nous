@@ -1,5 +1,6 @@
 pub mod cron_parser;
 
+use chrono::{DateTime, TimeZone, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Set, Statement};
 use serde::{Deserialize, Serialize};
@@ -11,12 +12,29 @@ use crate::entities::schedule_runs as run_entity;
 use crate::entities::schedules as sched_entity;
 use crate::error::NousError;
 
+pub fn ts_to_iso(ts: i64) -> String {
+    Utc.timestamp_opt(ts, 0)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        .unwrap_or_else(|| Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+}
+
+pub fn iso_to_ts(iso: &str) -> i64 {
+    DateTime::parse_from_rfc3339(iso)
+        .map(|dt| dt.timestamp())
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.fZ")
+                .map(|ndt| ndt.and_utc().timestamp())
+        })
+        .unwrap_or_else(|_| Utc::now().timestamp())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schedule {
     pub id: String,
     pub name: String,
     pub cron_expr: String,
-    pub trigger_at: Option<i64>,
+    pub trigger_at: Option<String>,
     pub timezone: String,
     pub enabled: bool,
     pub action_type: String,
@@ -26,10 +44,10 @@ pub struct Schedule {
     pub timeout_secs: Option<i32>,
     pub max_output_bytes: i32,
     pub max_runs: i32,
-    pub last_run_at: Option<i64>,
-    pub next_run_at: Option<i64>,
-    pub created_at: i64,
-    pub updated_at: i64,
+    pub last_run_at: Option<String>,
+    pub next_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 impl Schedule {
@@ -54,14 +72,22 @@ impl Schedule {
             updated_at: m.updated_at,
         }
     }
+
+    pub fn trigger_at_ts(&self) -> Option<i64> {
+        self.trigger_at.as_deref().map(iso_to_ts)
+    }
+
+    pub fn next_run_at_ts(&self) -> Option<i64> {
+        self.next_run_at.as_deref().map(iso_to_ts)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleRun {
     pub id: String,
     pub schedule_id: String,
-    pub started_at: i64,
-    pub finished_at: Option<i64>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
     pub status: String,
     pub exit_code: Option<i32>,
     pub output: Option<String>,
@@ -142,13 +168,14 @@ pub async fn create_schedule(params: CreateScheduleParams<'_>) -> Result<Schedul
     let max_output_bytes = max_output_bytes.unwrap_or(65536);
     let max_runs = max_runs.unwrap_or(100);
 
-    let next_run_at = compute_next_run(cron_expr, trigger_at, clock.now_utc());
+    let next_run_at = compute_next_run(cron_expr, trigger_at, clock.now_utc()).map(ts_to_iso);
+    let now_iso = ts_to_iso(clock.now_utc());
 
     let model = sched_entity::ActiveModel {
         id: Set(id.clone()),
         name: Set(name.to_string()),
         cron_expr: Set(cron_expr.to_string()),
-        trigger_at: Set(trigger_at),
+        trigger_at: Set(trigger_at.map(ts_to_iso)),
         timezone: Set(timezone.to_string()),
         enabled: Set(true),
         action_type: Set(action_type.to_string()),
@@ -160,8 +187,8 @@ pub async fn create_schedule(params: CreateScheduleParams<'_>) -> Result<Schedul
         max_runs: Set(max_runs),
         last_run_at: Set(None),
         next_run_at: Set(next_run_at),
-        created_at: Set(0), // DB default via trigger
-        updated_at: Set(0), // DB default via trigger
+        created_at: Set(now_iso.clone()),
+        updated_at: Set(now_iso),
     };
 
     sched_entity::Entity::insert(model).exec(db).await?;
@@ -267,7 +294,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     let final_cron = cron_expr.unwrap_or(&existing.cron_expr);
     let final_trigger_at = match trigger_at {
         Some(t) => t,
-        None => existing.trigger_at,
+        None => existing.trigger_at_ts(),
     };
     let final_enabled = enabled.unwrap_or(existing.enabled);
 
@@ -285,7 +312,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     if let Some(t) = trigger_at {
         if let Some(ts) = t {
             sets.push("trigger_at = ?".to_string());
-            values.push(ts.into());
+            values.push(ts_to_iso(ts).into());
         } else {
             sets.push("trigger_at = NULL".to_string());
         }
@@ -335,7 +362,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
         let next = compute_next_run(final_cron, final_trigger_at, clock.now_utc());
         if let Some(n) = next {
             sets.push("next_run_at = ?".to_string());
-            values.push(n.into());
+            values.push(ts_to_iso(n).into());
         } else {
             sets.push("next_run_at = NULL".to_string());
         }
@@ -343,7 +370,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
         sets.push("next_run_at = NULL".to_string());
     }
 
-    sets.push("updated_at = strftime('%s','now')".to_string());
+    sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')".to_string());
 
     if sets.is_empty() {
         return get_schedule(db, id).await;
@@ -433,11 +460,14 @@ pub async fn record_run(params: RecordRunParams<'_>) -> Result<ScheduleRun, Nous
     let id = Uuid::now_v7().to_string();
     let duration_ms = (finished_at - started_at) * 1000;
 
+    let started_at_iso = ts_to_iso(started_at);
+    let finished_at_iso = ts_to_iso(finished_at);
+
     let model = run_entity::ActiveModel {
         id: Set(id.clone()),
         schedule_id: Set(schedule_id.to_string()),
-        started_at: Set(started_at),
-        finished_at: Set(Some(finished_at)),
+        started_at: Set(started_at_iso),
+        finished_at: Set(Some(finished_at_iso.clone())),
         status: Set(status.to_string()),
         exit_code: Set(exit_code),
         output: Set(output.map(String::from)),
@@ -448,15 +478,13 @@ pub async fn record_run(params: RecordRunParams<'_>) -> Result<ScheduleRun, Nous
 
     run_entity::Entity::insert(model).exec(db).await?;
 
-    // Update last_run_at on the schedule
     db.execute(Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,
         "UPDATE schedules SET last_run_at = ? WHERE id = ?",
-        [finished_at.into(), schedule_id.to_string().into()],
+        [finished_at_iso.into(), schedule_id.to_string().into()],
     ))
     .await?;
 
-    // Purge runs exceeding max_runs
     let schedule = sched_entity::Entity::find_by_id(schedule_id)
         .one(db)
         .await?;
@@ -525,8 +553,8 @@ pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Valu
             [],
         ))
         .await?;
-    let next_upcoming: Option<i64> =
-        next_row.and_then(|r| r.try_get_by::<Option<i64>, _>("val").ok().flatten());
+    let next_upcoming: Option<String> =
+        next_row.and_then(|r| r.try_get_by::<Option<String>, _>("val").ok().flatten());
 
     Ok(serde_json::json!({
         "total": total,
@@ -540,9 +568,10 @@ pub async fn list_due_schedules(
     db: &DatabaseConnection,
     now: i64,
 ) -> Result<Vec<Schedule>, NousError> {
+    let now_iso = ts_to_iso(now);
     let models = sched_entity::Entity::find()
         .filter(sched_entity::Column::Enabled.eq(true))
-        .filter(sched_entity::Column::NextRunAt.lte(now))
+        .filter(sched_entity::Column::NextRunAt.lte(now_iso))
         .all(db)
         .await?;
 
@@ -553,12 +582,12 @@ pub async fn advance_next_run_at(
     db: &DatabaseConnection,
     id: &str,
     clock: &dyn Clock,
-) -> Result<Option<i64>, NousError> {
+) -> Result<Option<String>, NousError> {
     let schedule = get_schedule(db, id).await?;
 
     if schedule.cron_expr.starts_with("@once") {
-        if let Some(t) = schedule.trigger_at {
-            if t <= clock.now_utc() {
+        if let Some(trigger_ts) = schedule.trigger_at_ts() {
+            if trigger_ts <= clock.now_utc() {
                 return Ok(None);
             }
         } else {
@@ -571,14 +600,15 @@ pub async fn advance_next_run_at(
 
     match next {
         Some(ts) => {
-            let now = clock.now_utc();
+            let next_iso = ts_to_iso(ts);
+            let now_iso = ts_to_iso(clock.now_utc());
             db.execute(Statement::from_sql_and_values(
                 sea_orm::DbBackend::Sqlite,
                 "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
-                [ts.into(), now.into(), id.to_string().into()],
+                [next_iso.clone().into(), now_iso.into(), id.to_string().into()],
             ))
             .await?;
-            Ok(Some(ts))
+            Ok(Some(next_iso))
         }
         None => Ok(None),
     }

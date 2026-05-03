@@ -145,13 +145,14 @@ async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Dur
         ))
         .await;
 
-    let next: Option<i64> = result.ok().flatten().and_then(|row| {
+    let next_iso: Option<String> = result.ok().flatten().and_then(|row| {
         use sea_orm::TryGetable;
-        i64::try_get_by(&row, 0usize).ok()
+        String::try_get_by(&row, 0usize).ok()
     });
 
-    match next {
-        Some(ts) => {
+    match next_iso {
+        Some(iso) => {
+            let ts = nous_core::schedules::iso_to_ts(&iso);
             let now = clock.now_utc();
             let diff = ts - now;
             if diff <= 0 {

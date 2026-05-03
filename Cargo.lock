@@ -3850,6 +3850,7 @@ dependencies = [
  "axum 0.8.9",
  "chrono",
  "dirs",
+ "futures",
  "http-body-util",
  "libc",
  "microsandbox",
