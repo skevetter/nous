@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::error::NousError;
@@ -8,7 +9,43 @@ pub struct AgentDefinition {
     pub agent: AgentSection,
     pub process: Option<ProcessSection>,
     pub skills: Option<SkillsSection>,
+    pub tools: Option<ToolsSection>,
     pub metadata: Option<MetadataSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsSection {
+    pub allow: Option<Vec<String>>,
+    pub deny: Option<Vec<String>>,
+    pub custom: Option<Vec<CustomToolDef>>,
+    pub permissions: Option<ToolPermissionsConfig>,
+    pub execution: Option<ExecutionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomToolDef {
+    pub name: String,
+    pub script: Option<String>,
+    pub description: String,
+    pub input_schema: Option<Value>,
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPermissionsConfig {
+    pub filesystem_read: Option<Vec<String>>,
+    pub filesystem_write: Option<Vec<String>>,
+    pub network_hosts: Option<Vec<String>>,
+    pub shell_commands: Option<Vec<String>>,
+    pub require_confirmation: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionConfig {
+    pub default_timeout_secs: Option<u64>,
+    pub max_retries: Option<u32>,
+    pub max_output_bytes: Option<usize>,
+    pub sandbox_required: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +208,7 @@ version = "0.1.0"
         assert!(def.agent.description.is_none());
         assert!(def.process.is_none());
         assert!(def.skills.is_none());
+        assert!(def.tools.is_none());
         assert!(def.metadata.is_none());
     }
 
@@ -222,5 +260,92 @@ version = "1.0.0"
             }
             other => panic!("expected Validation, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_parse_full_tools_section() {
+        let toml_str = r#"
+[agent]
+name       = "code-reviewer"
+type       = "engineer"
+version    = "1.0.0"
+description = "Reviews pull requests"
+
+[process]
+type          = "claude"
+spawn_command = "claude --model claude-sonnet-4-6"
+
+[skills]
+refs = ["code-review"]
+
+[tools]
+allow = ["fs_read", "fs_search", "code_grep", "shell_exec"]
+deny = ["fs_delete", "shell_kill"]
+
+[[tools.custom]]
+name = "lint_check"
+script = "scripts/lint.sh"
+description = "Run project linter"
+
+[[tools.custom]]
+name = "test_runner"
+script = "scripts/test.py"
+description = "Run test suite"
+timeout_secs = 120
+
+[tools.permissions]
+filesystem_read  = ["**/*.rs", "**/*.toml"]
+filesystem_write = []
+network_hosts    = []
+shell_commands   = ["git", "cargo"]
+require_confirmation = false
+
+[tools.execution]
+default_timeout_secs = 30
+max_retries          = 1
+max_output_bytes     = 2097152
+sandbox_required     = false
+
+[metadata]
+model   = "global.anthropic.claude-sonnet-4-6-v1"
+timeout = 3600
+tags    = ["review", "quality"]
+"#;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+
+        let tools = def.tools.unwrap();
+        let allow = tools.allow.unwrap();
+        assert_eq!(allow, vec!["fs_read", "fs_search", "code_grep", "shell_exec"]);
+
+        let deny = tools.deny.unwrap();
+        assert_eq!(deny, vec!["fs_delete", "shell_kill"]);
+
+        let custom = tools.custom.unwrap();
+        assert_eq!(custom.len(), 2);
+        assert_eq!(custom[0].name, "lint_check");
+        assert_eq!(custom[0].script.as_deref(), Some("scripts/lint.sh"));
+        assert_eq!(custom[1].name, "test_runner");
+        assert_eq!(custom[1].timeout_secs, Some(120));
+
+        let perms = tools.permissions.unwrap();
+        assert_eq!(
+            perms.filesystem_read.as_deref(),
+            Some(vec!["**/*.rs".to_string(), "**/*.toml".to_string()].as_slice())
+        );
+        assert_eq!(perms.require_confirmation, Some(false));
+
+        let exec = tools.execution.unwrap();
+        assert_eq!(exec.default_timeout_secs, Some(30));
+        assert_eq!(exec.max_retries, Some(1));
+        assert_eq!(exec.max_output_bytes, Some(2097152));
+        assert_eq!(exec.sandbox_required, Some(false));
+    }
+
+    #[test]
+    fn test_parse_minimal_without_tools_backward_compat() {
+        let toml_str = FULL_TOML;
+        let def: AgentDefinition = toml::from_str(toml_str).unwrap();
+        assert!(def.tools.is_none());
+        assert_eq!(def.agent.name, "reviewer");
     }
 }
