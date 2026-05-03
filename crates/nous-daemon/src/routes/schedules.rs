@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -71,7 +71,7 @@ pub async fn create(
     })
     .await?;
     state.schedule_notify.notify_one();
-    Ok((StatusCode::CREATED, Json(schedule)))
+    Ok(ApiResponse::created(schedule))
 }
 
 pub async fn list(
@@ -85,7 +85,7 @@ pub async fn list(
         params.limit,
     )
     .await?;
-    Ok(Json(schedules))
+    Ok(ApiResponse::ok(schedules))
 }
 
 pub async fn get(
@@ -93,7 +93,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let schedule = nous_core::schedules::get_schedule(&state.pool, &id).await?;
-    Ok(Json(schedule))
+    Ok(ApiResponse::ok(schedule))
 }
 
 pub async fn update(
@@ -122,7 +122,7 @@ pub async fn update(
     })
     .await?;
     state.schedule_notify.notify_one();
-    Ok(Json(schedule))
+    Ok(ApiResponse::ok(schedule))
 }
 
 pub async fn delete(
@@ -131,7 +131,7 @@ pub async fn delete(
 ) -> Result<impl IntoResponse, AppError> {
     nous_core::schedules::delete_schedule(&state.pool, &id).await?;
     state.schedule_notify.notify_one();
-    Ok(StatusCode::NO_CONTENT)
+    Ok(crate::response::no_content())
 }
 
 pub async fn list_runs(
@@ -142,10 +142,10 @@ pub async fn list_runs(
     let runs =
         nous_core::schedules::list_runs(&state.pool, &id, params.status.as_deref(), params.limit)
             .await?;
-    Ok(Json(runs))
+    Ok(ApiResponse::ok(runs))
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let health = nous_core::schedules::schedule_health(&state.pool).await?;
-    Ok(Json(health))
+    Ok(ApiResponse::ok(health))
 }

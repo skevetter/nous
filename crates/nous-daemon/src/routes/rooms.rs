@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -37,7 +37,7 @@ pub async fn create(
         body.metadata.as_ref(),
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(room)))
+    Ok(ApiResponse::created(room))
 }
 
 pub async fn list(
@@ -45,7 +45,7 @@ pub async fn list(
     Query(params): Query<ListRoomsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let rooms = nous_core::rooms::list_rooms(&state.pool, params.include_archived).await?;
-    Ok(Json(rooms))
+    Ok(ApiResponse::ok(rooms))
 }
 
 pub async fn get(
@@ -53,7 +53,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let room = nous_core::rooms::get_room(&state.pool, &id).await?;
-    Ok(Json(room))
+    Ok(ApiResponse::ok(room))
 }
 
 pub async fn delete(
@@ -63,5 +63,5 @@ pub async fn delete(
 ) -> Result<impl IntoResponse, AppError> {
     let room = nous_core::rooms::get_room(&state.pool, &id).await?;
     nous_core::rooms::delete_room(&state.pool, &room.id, params.hard).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(crate::response::no_content())
 }

@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -88,7 +88,7 @@ pub async fn register(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(resource)))
+    Ok(ApiResponse::created(resource))
 }
 
 pub async fn list(
@@ -125,7 +125,7 @@ pub async fn list(
         },
     )
     .await?;
-    Ok(Json(resources))
+    Ok(ApiResponse::ok(resources))
 }
 
 pub async fn get(
@@ -133,7 +133,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let resource = nous_core::resources::get_resource_by_id(&state.pool, &id).await?;
-    Ok(Json(resource))
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn update(
@@ -165,7 +165,7 @@ pub async fn update(
         },
     )
     .await?;
-    Ok(Json(resource))
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn archive(
@@ -173,7 +173,7 @@ pub async fn archive(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let resource = nous_core::resources::archive_resource(&state.pool, &id).await?;
-    Ok(Json(resource))
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn deregister(
@@ -184,9 +184,9 @@ pub async fn deregister(
     let hard = params.hard.unwrap_or(false);
     nous_core::resources::deregister_resource(&state.pool, &id, hard).await?;
     if hard {
-        Ok(StatusCode::NO_CONTENT.into_response())
+        Ok(crate::response::no_content().into_response())
     } else {
-        Ok(Json(serde_json::json!({"ok": true})).into_response())
+        Ok(ApiResponse::ok(serde_json::json!({"ok": true})).into_response())
     }
 }
 
@@ -195,7 +195,7 @@ pub async fn heartbeat(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let resource = nous_core::resources::heartbeat_resource(&state.pool, &id).await?;
-    Ok(Json(resource))
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn search(
@@ -231,7 +231,7 @@ pub async fn search(
         },
     )
     .await?;
-    Ok(Json(resources))
+    Ok(ApiResponse::ok(resources))
 }
 
 pub async fn transfer(
@@ -244,5 +244,5 @@ pub async fn transfer(
         body.to_agent_id.as_deref(),
     )
     .await?;
-    Ok(Json(serde_json::json!({"transferred": count})))
+    Ok(ApiResponse::ok(serde_json::json!({"transferred": count})))
 }

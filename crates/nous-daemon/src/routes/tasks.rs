@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -72,7 +72,7 @@ pub async fn create(
         registry: None,
     })
     .await?;
-    Ok((StatusCode::CREATED, Json(task)))
+    Ok(ApiResponse::created(task))
 }
 
 pub async fn list(
@@ -90,7 +90,7 @@ pub async fn list(
         order_dir: None,
     })
     .await?;
-    Ok(Json(tasks))
+    Ok(ApiResponse::ok(tasks))
 }
 
 pub async fn get(
@@ -98,7 +98,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let task = nous_core::tasks::get_task(&state.pool, &id).await?;
-    Ok(Json(task))
+    Ok(ApiResponse::ok(task))
 }
 
 pub async fn update(
@@ -118,7 +118,7 @@ pub async fn update(
         registry: None,
     })
     .await?;
-    Ok(Json(task))
+    Ok(ApiResponse::ok(task))
 }
 
 pub async fn close(
@@ -126,7 +126,7 @@ pub async fn close(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let task = nous_core::tasks::close_task(&state.pool, &id, None).await?;
-    Ok(Json(task))
+    Ok(ApiResponse::ok(task))
 }
 
 pub async fn link(
@@ -141,7 +141,7 @@ pub async fn link(
         None,
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(task_link)))
+    Ok(ApiResponse::created(task_link))
 }
 
 pub async fn unlink(
@@ -156,7 +156,7 @@ pub async fn unlink(
         None,
     )
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(crate::response::no_content())
 }
 
 pub async fn list_links(
@@ -164,7 +164,7 @@ pub async fn list_links(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let links = nous_core::tasks::list_links(&state.pool, &id).await?;
-    Ok(Json(links))
+    Ok(ApiResponse::ok(links))
 }
 
 pub async fn add_note(
@@ -173,5 +173,5 @@ pub async fn add_note(
     Json(body): Json<AddNoteBody>,
 ) -> Result<impl IntoResponse, AppError> {
     let msg = nous_core::tasks::add_note(&state.pool, &id, &body.sender_id, &body.content).await?;
-    Ok((StatusCode::CREATED, Json(msg)))
+    Ok(ApiResponse::created(msg))
 }

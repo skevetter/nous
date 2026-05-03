@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -72,7 +72,7 @@ pub async fn register(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(item)))
+    Ok(ApiResponse::created(item))
 }
 
 pub async fn list(
@@ -103,7 +103,7 @@ pub async fn list(
         },
     )
     .await?;
-    Ok(Json(items))
+    Ok(ApiResponse::ok(items))
 }
 
 pub async fn get(
@@ -111,7 +111,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let item = nous_core::inventory::get_item_by_id(&state.pool, &id).await?;
-    Ok(Json(item))
+    Ok(ApiResponse::ok(item))
 }
 
 pub async fn update(
@@ -131,7 +131,7 @@ pub async fn update(
         },
     )
     .await?;
-    Ok(Json(item))
+    Ok(ApiResponse::ok(item))
 }
 
 pub async fn archive(
@@ -139,7 +139,7 @@ pub async fn archive(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let item = nous_core::inventory::archive_item(&state.pool, &id).await?;
-    Ok(Json(item))
+    Ok(ApiResponse::ok(item))
 }
 
 pub async fn deregister(
@@ -150,9 +150,9 @@ pub async fn deregister(
     let hard = params.hard.unwrap_or(false);
     nous_core::inventory::deregister_item(&state.pool, &id, hard).await?;
     if hard {
-        Ok(StatusCode::NO_CONTENT.into_response())
+        Ok(crate::response::no_content().into_response())
     } else {
-        Ok(Json(serde_json::json!({"ok": true})).into_response())
+        Ok(ApiResponse::ok(serde_json::json!({"ok": true})).into_response())
     }
 }
 
@@ -189,5 +189,5 @@ pub async fn search(
         },
     )
     .await?;
-    Ok(Json(items))
+    Ok(ApiResponse::ok(items))
 }

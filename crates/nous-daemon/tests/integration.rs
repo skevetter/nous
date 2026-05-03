@@ -89,10 +89,10 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let room: Value = json_body(response).await;
-    assert_eq!(room["name"], "e2e-room");
-    assert_eq!(room["purpose"], "End-to-end test");
-    let room_id = room["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "e2e-room");
+    assert_eq!(body["data"]["purpose"], "End-to-end test");
+    let room_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // 2. Post message
     let response = app(state.clone())
@@ -114,10 +114,10 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let msg: Value = json_body(response).await;
-    assert_eq!(msg["content"], "Integration test message about deployment");
-    assert_eq!(msg["sender_id"], "test-agent");
-    assert_eq!(msg["room_id"], room_id);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["content"], "Integration test message about deployment");
+    assert_eq!(body["data"]["sender_id"], "test-agent");
+    assert_eq!(body["data"]["room_id"], room_id);
 
     // 3. Read messages
     let response = app(state.clone())
@@ -131,8 +131,9 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let messages: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let messages = body["data"].as_array().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(
         messages[0]["content"],
@@ -151,8 +152,9 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let results: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let results = body["data"].as_array().unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0]["content"]
         .as_str()
@@ -211,8 +213,8 @@ async fn e2e_create_post_read_search_delete() {
         .unwrap();
 
     // Soft delete still returns by ID (archived), so we verify the room is archived
-    let fetched: Value = json_body(response).await;
-    assert_eq!(fetched["archived"], true);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["archived"], true);
 }
 
 #[tokio::test]
@@ -237,8 +239,8 @@ async fn e2e_hard_delete_then_404() {
         .await
         .unwrap();
 
-    let room: Value = json_body(response).await;
-    let room_id = room["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    let room_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // Hard delete
     let response = app(state.clone())
@@ -294,7 +296,7 @@ async fn error_create_room_empty_name() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body: Value = json_body(response).await;
-    assert!(body["error"].as_str().unwrap().contains("empty"));
+    assert!(body["error"]["message"].as_str().unwrap().contains("empty"));
 }
 
 #[tokio::test]
@@ -348,7 +350,7 @@ async fn error_post_message_empty_content() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body: Value = json_body(response).await;
-    assert!(body["error"].as_str().unwrap().contains("empty"));
+    assert!(body["error"]["message"].as_str().unwrap().contains("empty"));
 }
 
 #[tokio::test]
@@ -394,7 +396,7 @@ async fn error_create_room_duplicate_name() {
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let body: Value = json_body(response).await;
-    assert!(body["error"].as_str().unwrap().contains("already exists"));
+    assert!(body["error"]["message"].as_str().unwrap().contains("already exists"));
 }
 
 #[tokio::test]
@@ -728,14 +730,14 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     let status = response.status();
-    let wt: Value = json_body(response).await;
-    assert_eq!(status, StatusCode::CREATED, "body: {wt}");
-    assert_eq!(wt["branch"], "feat/wt-test");
-    assert_eq!(wt["slug"], "wt-test");
-    assert_eq!(wt["status"], "active");
-    assert_eq!(wt["agent_id"], "agent-1");
-    assert_eq!(wt["task_id"], task.id);
-    let wt_id = wt["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert_eq!(body["data"]["branch"], "feat/wt-test");
+    assert_eq!(body["data"]["slug"], "wt-test");
+    assert_eq!(body["data"]["status"], "active");
+    assert_eq!(body["data"]["agent_id"], "agent-1");
+    assert_eq!(body["data"]["task_id"], task.id);
+    let wt_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // 2. List worktrees
     let response = app(state.clone())
@@ -749,8 +751,9 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let wts: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let wts = body["data"].as_array().unwrap();
     assert_eq!(wts.len(), 1);
     assert_eq!(wts[0]["slug"], "wt-test");
 
@@ -766,9 +769,9 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let fetched: Value = json_body(response).await;
-    assert_eq!(fetched["id"], wt_id);
-    assert_eq!(fetched["branch"], "feat/wt-test");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["id"], wt_id);
+    assert_eq!(body["data"]["branch"], "feat/wt-test");
 
     // 4. Update status
     let response = app(state.clone())
@@ -786,8 +789,8 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let updated: Value = json_body(response).await;
-    assert_eq!(updated["status"], "stale");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["status"], "stale");
 
     // 5. Archive
     let response = app(state.clone())
@@ -802,8 +805,8 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let archived: Value = json_body(response).await;
-    assert_eq!(archived["status"], "archived");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["status"], "archived");
 
     // 6. Get — verify archived
     let response = app(state.clone())
@@ -817,8 +820,8 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let after_archive: Value = json_body(response).await;
-    assert_eq!(after_archive["status"], "archived");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["status"], "archived");
 
     // 7. Delete
     let response = app(state.clone())
@@ -846,8 +849,8 @@ async fn e2e_worktree_lifecycle() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let after_delete: Value = json_body(response).await;
-    assert_eq!(after_delete["status"], "deleted");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["status"], "deleted");
 }
 
 #[tokio::test]
@@ -876,7 +879,7 @@ async fn error_create_worktree_empty_branch() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body: Value = json_body(response).await;
-    assert!(body["error"].as_str().unwrap().contains("empty"));
+    assert!(body["error"]["message"].as_str().unwrap().contains("empty"));
 }
 
 #[tokio::test]
@@ -1041,10 +1044,10 @@ async fn e2e_agent_register_list_get_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let agent: Value = json_body(response).await;
-    assert_eq!(agent["name"], "test-director");
-    assert_eq!(agent["namespace"], "test-ns");
-    let agent_id = agent["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "test-director");
+    assert_eq!(body["data"]["namespace"], "test-ns");
+    let agent_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // List agents
     let response = app(state.clone())
@@ -1058,8 +1061,9 @@ async fn e2e_agent_register_list_get_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let agents: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let agents = body["data"].as_array().unwrap();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["name"], "test-director");
 
@@ -1075,8 +1079,8 @@ async fn e2e_agent_register_list_get_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let fetched: Value = json_body(response).await;
-    assert_eq!(fetched["id"], agent_id);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["id"], agent_id);
 
     // Deregister
     let response = app(state.clone())
@@ -1091,8 +1095,8 @@ async fn e2e_agent_register_list_get_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let result: Value = json_body(response).await;
-    assert_eq!(result["result"], "deleted");
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["result"], "deleted");
 
     // Verify 404
     let response = app(state.clone())
@@ -1131,8 +1135,8 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .await
         .unwrap();
 
-    let dir: Value = json_body(response).await;
-    let dir_id = dir["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    let dir_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // Register manager under director
     let response = app(state.clone())
@@ -1154,8 +1158,8 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .await
         .unwrap();
 
-    let mgr: Value = json_body(response).await;
-    let mgr_id = mgr["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    let mgr_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // Register engineer under manager
     let response = app(state.clone())
@@ -1177,8 +1181,8 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .await
         .unwrap();
 
-    let eng: Value = json_body(response).await;
-    let eng_id = eng["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    let eng_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // Get tree
     let response = app(state.clone())
@@ -1192,8 +1196,9 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let tree: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let tree = body["data"].as_array().unwrap();
     assert_eq!(tree.len(), 1);
     assert_eq!(tree[0]["name"], "dir-1");
     assert_eq!(tree[0]["children"][0]["name"], "mgr-1");
@@ -1211,8 +1216,9 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let children: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let children = body["data"].as_array().unwrap();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0]["name"], "mgr-1");
 
@@ -1228,8 +1234,9 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let ancestors: Vec<Value> =
+    let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let ancestors = body["data"].as_array().unwrap();
     assert_eq!(ancestors.len(), 2);
     assert_eq!(ancestors[0]["name"], "dir-1");
     assert_eq!(ancestors[1]["name"], "mgr-1");
@@ -1268,8 +1275,8 @@ async fn e2e_agent_heartbeat() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let result: Value = json_body(response).await;
-    assert_eq!(result["ok"], true);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["ok"], true);
 
     // Verify agent status changed
     let updated = nous_core::agents::get_agent_by_id(&state.pool, &agent.id)
@@ -1320,10 +1327,10 @@ async fn e2e_artifact_register_list_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let artifact: Value = json_body(response).await;
-    assert_eq!(artifact["name"], "work-room");
-    assert_eq!(artifact["artifact_type"], "room");
-    let art_id = artifact["id"].as_str().unwrap().to_string();
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "work-room");
+    assert_eq!(body["data"]["artifact_type"], "room");
+    let art_id = body["data"]["id"].as_str().unwrap().to_string();
 
     // List artifacts
     let response = app(state.clone())
@@ -1337,8 +1344,9 @@ async fn e2e_artifact_register_list_deregister() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let arts: Vec<Value> =
+    let __body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let arts: Vec<Value> = serde_json::from_value(__body["data"].clone()).unwrap();
     assert_eq!(arts.len(), 1);
 
     // Deregister artifact
@@ -2388,7 +2396,8 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let resource: Value = json_body(response).await;
+    let body: Value = json_body(response).await;
+    let resource = &body["data"];
     assert_eq!(resource["name"], "test-worktree");
     assert_eq!(resource["resource_type"], "worktree");
     assert_eq!(resource["ownership_policy"], "cascade-delete");
@@ -2405,7 +2414,8 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let list: Vec<Value> = serde_json::from_value(json_body(response).await).unwrap();
+    let __body: Value = json_body(response).await;
+    let list: Vec<Value> = serde_json::from_value(__body["data"].clone()).unwrap();
     assert_eq!(list.len(), 1);
 
     // Get resource
@@ -2419,7 +2429,8 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let fetched: Value = json_body(response).await;
+    let body: Value = json_body(response).await;
+    let fetched = &body["data"];
     assert_eq!(fetched["name"], "test-worktree");
 
     // Archive
@@ -2434,7 +2445,8 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let archived: Value = json_body(response).await;
+    let body: Value = json_body(response).await;
+    let archived = &body["data"];
     assert_eq!(archived["status"], "archived");
 
     // Deregister (hard delete)
@@ -2487,7 +2499,8 @@ async fn e2e_resource_search_and_heartbeat() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let resource: Value = json_body(response).await;
+    let body: Value = json_body(response).await;
+    let resource = &body["data"];
     let res_id = resource["id"].as_str().unwrap().to_string();
 
     // Search by tags
@@ -2501,7 +2514,8 @@ async fn e2e_resource_search_and_heartbeat() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let results: Vec<Value> = serde_json::from_value(json_body(response).await).unwrap();
+    let __body: Value = json_body(response).await;
+    let results: Vec<Value> = serde_json::from_value(__body["data"].clone()).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["name"], "search-target");
 
@@ -2517,7 +2531,8 @@ async fn e2e_resource_search_and_heartbeat() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let hb: Value = json_body(response).await;
+    let body: Value = json_body(response).await;
+    let hb = &body["data"];
     assert!(hb["last_seen_at"].as_str().is_some());
 }
 

@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::response::ApiResponse;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -45,7 +45,7 @@ pub async fn create(
         },
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(wt)))
+    Ok(ApiResponse::created(wt))
 }
 
 pub async fn list(
@@ -69,7 +69,7 @@ pub async fn list(
         },
     )
     .await?;
-    Ok(Json(wts))
+    Ok(ApiResponse::ok(wts))
 }
 
 pub async fn get(
@@ -77,7 +77,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let wt = nous_core::worktrees::get(&state.pool, &id).await?;
-    Ok(Json(wt))
+    Ok(ApiResponse::ok(wt))
 }
 
 pub async fn update_status(
@@ -87,7 +87,7 @@ pub async fn update_status(
 ) -> Result<impl IntoResponse, AppError> {
     let status: nous_core::worktrees::WorktreeStatus = body.status.parse()?;
     let wt = nous_core::worktrees::update_status(&state.pool, &id, status).await?;
-    Ok(Json(wt))
+    Ok(ApiResponse::ok(wt))
 }
 
 pub async fn archive(
@@ -95,7 +95,7 @@ pub async fn archive(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let wt = nous_core::worktrees::archive(&state.pool, &id).await?;
-    Ok(Json(wt))
+    Ok(ApiResponse::ok(wt))
 }
 
 pub async fn delete(
@@ -103,5 +103,5 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     nous_core::worktrees::delete(&state.pool, &id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(crate::response::no_content())
 }
