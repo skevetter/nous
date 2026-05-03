@@ -954,7 +954,7 @@ impl ProcessRegistry {
         use rig::completion::Prompt as _;
 
         let client = state.llm_client.as_ref().ok_or_else(|| {
-            NousError::Config("LLM client not configured — set AWS credentials".into())
+            NousError::Unavailable("LLM client not configured — set AWS credentials".into())
         })?;
 
         let model = metadata

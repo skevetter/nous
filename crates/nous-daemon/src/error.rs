@@ -51,6 +51,9 @@ impl AppError {
             NousError::Internal(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg.clone())
             }
+            NousError::Unavailable(msg) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable", msg.clone())
+            }
         }
     }
 }

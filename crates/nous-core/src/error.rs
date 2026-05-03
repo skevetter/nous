@@ -28,6 +28,9 @@ pub enum NousError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("service unavailable: {0}")]
+    Unavailable(String),
 }
 
 impl NousError {
@@ -117,6 +120,9 @@ mod tests {
         assert!(!err.is_retryable());
 
         let err = NousError::Config("bad toml".into());
+        assert!(!err.is_retryable());
+
+        let err = NousError::Unavailable("LLM not configured".into());
         assert!(!err.is_retryable());
     }
 

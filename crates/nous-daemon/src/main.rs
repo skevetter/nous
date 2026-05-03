@@ -52,7 +52,13 @@ async fn main() {
             (Some(Arc::new(client)), model)
         }
         Err(e) => {
-            tracing::info!("LLM client not available: {e}");
+            tracing::warn!("╔══════════════════════════════════════════════════════╗");
+            tracing::warn!("║  LLM CLIENT NOT CONFIGURED                          ║");
+            tracing::warn!("║                                                      ║");
+            tracing::warn!("║  Agent invocation endpoints will return 503.         ║");
+            tracing::warn!("║  Set AWS_PROFILE or AWS credentials to enable LLM.   ║");
+            tracing::warn!("║  Reason: {:<43} ║", format!("{e}"));
+            tracing::warn!("╚══════════════════════════════════════════════════════╝");
             (None, DEFAULT_MODEL.to_string())
         }
     };
