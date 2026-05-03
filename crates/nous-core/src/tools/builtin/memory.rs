@@ -57,14 +57,38 @@ impl AgentTool for MemorySaveTool {
             .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'content' required".into()))?;
+        let memory_type = args
+            .get("memory_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("observation");
+        let tags: Vec<String> = args
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .save_memory(
+                None,
+                ctx.agent_id.clone(),
+                content.to_string(),
+                memory_type.to_string(),
+                "moderate".to_string(),
+                tags,
+            )
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_save: would save '{}' for agent {}",
-                    content, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -120,15 +144,25 @@ impl AgentTool for MemorySearchTool {
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'query' required".into()))?;
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .search_memories(
+                query.to_string(),
+                Some(ctx.agent_id.clone()),
+                None,
+                None,
+                limit,
+            )
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_search: would search '{}' (limit {}) for agent {}",
-                    query, limit, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -185,14 +219,25 @@ impl AgentTool for MemorySearchHybridTool {
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'query' required".into()))?;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let fts_weight = args.get("fts_weight").and_then(|v| v.as_f64());
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .search_memories_hybrid(
+                query.to_string(),
+                Some(ctx.agent_id.clone()),
+                limit,
+                fts_weight,
+            )
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_search_hybrid: would hybrid-search '{}' for agent {}",
-                    query, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -242,15 +287,19 @@ impl AgentTool for MemoryGetContextTool {
     }
 
     async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20);
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .get_memory_context(Some(ctx.agent_id.clone()), None, None, limit)
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_get_context: would return {} recent memories for agent {}",
-                    limit, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -315,13 +364,21 @@ impl AgentTool for MemoryRelateTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'relation' required".into()))?;
 
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .relate_memories(
+                source_id.to_string(),
+                target_id.to_string(),
+                relation.to_string(),
+            )
+            .await?;
+
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_relate: would create '{}' relationship from {} to {} for agent {}",
-                    relation, source_id, target_id, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -377,14 +434,26 @@ impl AgentTool for MemoryUpdateTool {
             .get("memory_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'memory_id' required".into()))?;
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let importance = args
+            .get("importance")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .update_memory(memory_id.to_string(), content, importance)
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "memory_update: would update {} for agent {}",
-                    memory_id, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -392,12 +461,154 @@ impl AgentTool for MemoryUpdateTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
-    use crate::tools::{NetworkPolicy, ResolvedPermissions, ToolContext};
+    use crate::tools::{NetworkPolicy, ResolvedPermissions, ToolContext, ToolServices};
+
+    struct MockToolServices;
+
+    #[async_trait::async_trait]
+    impl ToolServices for MockToolServices {
+        async fn save_memory(
+            &self,
+            _workspace_id: Option<String>,
+            agent_id: String,
+            content: String,
+            memory_type: String,
+            _importance: String,
+            tags: Vec<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "id": "mem-001",
+                "agent_id": agent_id,
+                "content": content,
+                "memory_type": memory_type,
+                "tags": tags,
+            }))
+        }
+
+        async fn search_memories(
+            &self,
+            query: String,
+            _agent_id: Option<String>,
+            _workspace_id: Option<String>,
+            _memory_type: Option<String>,
+            limit: Option<u32>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "query": query,
+                "limit": limit.unwrap_or(10),
+                "results": [],
+            }))
+        }
+
+        async fn search_memories_hybrid(
+            &self,
+            query: String,
+            _agent_id: Option<String>,
+            limit: Option<u32>,
+            fts_weight: Option<f64>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "query": query,
+                "limit": limit.unwrap_or(10),
+                "fts_weight": fts_weight.unwrap_or(0.5),
+                "results": [],
+            }))
+        }
+
+        async fn get_memory_context(
+            &self,
+            _agent_id: Option<String>,
+            _workspace_id: Option<String>,
+            _topic_key: Option<String>,
+            limit: Option<u32>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "limit": limit.unwrap_or(20),
+                "memories": [],
+            }))
+        }
+
+        async fn relate_memories(
+            &self,
+            source_id: String,
+            target_id: String,
+            relation_type: String,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": relation_type,
+            }))
+        }
+
+        async fn update_memory(
+            &self,
+            memory_id: String,
+            content: Option<String>,
+            importance: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "memory_id": memory_id,
+                "content": content,
+                "importance": importance,
+            }))
+        }
+
+        async fn post_to_room(
+            &self,
+            _room: String,
+            _sender_id: String,
+            _content: String,
+            _reply_to: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn read_room(&self, _room: String, _limit: Option<u32>) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn create_room(
+            &self,
+            _name: String,
+            _purpose: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn wait_for_message(
+            &self,
+            _room: String,
+            _timeout_secs: u64,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn create_task(
+            &self,
+            _title: String,
+            _description: Option<String>,
+            _assignee: Option<String>,
+            _priority: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn update_task(
+            &self,
+            _task_id: String,
+            _status: Option<String>,
+            _note: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+    }
 
     fn test_ctx() -> ToolContext {
         ToolContext {
@@ -414,100 +625,165 @@ mod tests {
                 network_access: NetworkPolicy::None,
                 max_output_bytes: 1_048_576,
             },
+            services: None,
+        }
+    }
+
+    fn test_ctx_with_services() -> ToolContext {
+        ToolContext {
+            services: Some(Arc::new(MockToolServices)),
+            ..test_ctx()
         }
     }
 
     #[tokio::test]
-    async fn memory_save_stub() {
+    async fn memory_save_no_services_returns_error() {
+        let tool = MemorySaveTool::new();
+        let result = tool
+            .call(json!({"content": "test memory"}), &test_ctx())
+            .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no services configured"));
+    }
+
+    #[tokio::test]
+    async fn memory_save_delegates_to_services() {
         let tool = MemorySaveTool::new();
         let output = tool
-            .call(json!({"content": "test memory"}), &test_ctx())
+            .call(
+                json!({"content": "test memory", "tags": ["tag1"]}),
+                &test_ctx_with_services(),
+            )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("memory_save"));
-            assert!(text.contains("test memory"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["id"], "mem-001");
+            assert_eq!(data["content"], "test memory");
+            assert_eq!(data["agent_id"], "test-agent");
+            assert_eq!(data["tags"][0], "tag1");
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
         }
     }
 
     #[tokio::test]
-    async fn memory_search_stub() {
+    async fn memory_search_no_services_returns_error() {
+        let tool = MemorySearchTool::new();
+        let result = tool.call(json!({"query": "test query"}), &test_ctx()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_search_delegates_to_services() {
         let tool = MemorySearchTool::new();
         let output = tool
-            .call(json!({"query": "test query"}), &test_ctx())
+            .call(
+                json!({"query": "test query", "limit": 5}),
+                &test_ctx_with_services(),
+            )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("memory_search"));
-            assert!(text.contains("test query"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["query"], "test query");
+            assert_eq!(data["limit"], 5);
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_search_hybrid_delegates_to_services() {
+        let tool = MemorySearchHybridTool::new();
+        let output = tool
+            .call(
+                json!({"query": "hybrid test", "fts_weight": 0.7}),
+                &test_ctx_with_services(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["query"], "hybrid test");
+            assert_eq!(data["fts_weight"], 0.7);
+        } else {
+            panic!("expected json content");
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_get_context_delegates_to_services() {
+        let tool = MemoryGetContextTool::new();
+        let output = tool
+            .call(json!({"limit": 5}), &test_ctx_with_services())
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["limit"], 5);
+        } else {
+            panic!("expected json content");
         }
     }
 
     #[tokio::test]
     async fn memory_relate_validates_args() {
         let tool = MemoryRelateTool::new();
-        let result = tool.call(json!({"source_id": "a"}), &test_ctx()).await;
-
+        let result = tool
+            .call(json!({"source_id": "a"}), &test_ctx_with_services())
+            .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn memory_get_context_stub() {
-        let tool = MemoryGetContextTool::new();
-        let output = tool.call(json!({}), &test_ctx()).await.unwrap();
-
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("memory_get_context"));
-        } else {
-            panic!("expected text content");
-        }
-    }
-
-    #[tokio::test]
-    async fn memory_search_hybrid_stub() {
-        let tool = MemorySearchHybridTool::new();
-        let output = tool
-            .call(json!({"query": "hybrid test"}), &test_ctx())
-            .await
-            .unwrap();
-
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("memory_search_hybrid"));
-        } else {
-            panic!("expected text content");
-        }
-    }
-
-    #[tokio::test]
-    async fn memory_update_stub() {
-        let tool = MemoryUpdateTool::new();
+    async fn memory_relate_delegates_to_services() {
+        let tool = MemoryRelateTool::new();
         let output = tool
             .call(
-                json!({"memory_id": "mem-123", "content": "updated content"}),
-                &test_ctx(),
+                json!({"source_id": "a", "target_id": "b", "relation": "supports"}),
+                &test_ctx_with_services(),
             )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("memory_update"));
-            assert!(text.contains("mem-123"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["source_id"], "a");
+            assert_eq!(data["target_id"], "b");
+            assert_eq!(data["relation_type"], "supports");
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
         }
     }
 
     #[tokio::test]
     async fn memory_update_validates_args() {
         let tool = MemoryUpdateTool::new();
-        let result = tool.call(json!({"content": "no id"}), &test_ctx()).await;
-
+        let result = tool
+            .call(json!({"content": "no id"}), &test_ctx_with_services())
+            .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_update_delegates_to_services() {
+        let tool = MemoryUpdateTool::new();
+        let output = tool
+            .call(
+                json!({"memory_id": "mem-123", "content": "updated content"}),
+                &test_ctx_with_services(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["memory_id"], "mem-123");
+            assert_eq!(data["content"], "updated content");
+        } else {
+            panic!("expected json content");
+        }
     }
 }

@@ -61,14 +61,27 @@ impl AgentTool for RoomPostTool {
             .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'content' required".into()))?;
+        let reply_to = args
+            .get("reply_to")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .post_to_room(
+                room.to_string(),
+                ctx.agent_id.clone(),
+                content.to_string(),
+                reply_to,
+            )
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "room_post: would post to room '{}' from agent {}: {}",
-                    room, ctx.agent_id, content
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -124,15 +137,17 @@ impl AgentTool for RoomReadTool {
             .get("room")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'room' required".into()))?;
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services.read_room(room.to_string(), limit).await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "room_read: would read {} messages from room '{}' for agent {}",
-                    limit, room, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -187,14 +202,20 @@ impl AgentTool for RoomCreateTool {
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'name' required".into()))?;
+        let purpose = args
+            .get("purpose")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services.create_room(name.to_string(), purpose).await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "room_create: would create room '{}' for agent {}",
-                    name, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -254,13 +275,15 @@ impl AgentTool for RoomWaitTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(60);
 
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services.wait_for_message(room.to_string(), timeout).await?;
+
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "room_wait: would wait {}s for message in room '{}' for agent {}",
-                    timeout, room, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -317,14 +340,30 @@ impl AgentTool for TaskCreateTool {
             .get("title")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'title' required".into()))?;
+        let description = args
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let assignee = args
+            .get("assignee")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let priority = args
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .create_task(title.to_string(), description, assignee, priority)
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "task_create: would create task '{}' by agent {}",
-                    title, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -380,14 +419,23 @@ impl AgentTool for TaskUpdateTool {
             .get("task_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'task_id' required".into()))?;
+        let status = args
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let note = args.get("note").and_then(|v| v.as_str()).map(String::from);
+
+        let services = ctx
+            .services
+            .as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
+
+        let result = services
+            .update_task(task_id.to_string(), status, note)
+            .await?;
 
         Ok(ToolOutput {
-            content: vec![ToolContent::Text {
-                text: format!(
-                    "task_update: would update task '{}' by agent {}",
-                    task_id, ctx.agent_id
-                ),
-            }],
+            content: vec![ToolContent::Json { data: result }],
             metadata: None,
         })
     }
@@ -395,12 +443,155 @@ impl AgentTool for TaskUpdateTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
-    use crate::tools::{NetworkPolicy, ResolvedPermissions, ToolContext};
+    use crate::tools::{NetworkPolicy, ResolvedPermissions, ToolContext, ToolServices};
+
+    struct MockToolServices;
+
+    #[async_trait::async_trait]
+    impl ToolServices for MockToolServices {
+        async fn save_memory(
+            &self,
+            _workspace_id: Option<String>,
+            _agent_id: String,
+            _content: String,
+            _memory_type: String,
+            _importance: String,
+            _tags: Vec<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn search_memories(
+            &self,
+            _query: String,
+            _agent_id: Option<String>,
+            _workspace_id: Option<String>,
+            _memory_type: Option<String>,
+            _limit: Option<u32>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn search_memories_hybrid(
+            &self,
+            _query: String,
+            _agent_id: Option<String>,
+            _limit: Option<u32>,
+            _fts_weight: Option<f64>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn get_memory_context(
+            &self,
+            _agent_id: Option<String>,
+            _workspace_id: Option<String>,
+            _topic_key: Option<String>,
+            _limit: Option<u32>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn relate_memories(
+            &self,
+            _source_id: String,
+            _target_id: String,
+            _relation_type: String,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn update_memory(
+            &self,
+            _memory_id: String,
+            _content: Option<String>,
+            _importance: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({}))
+        }
+
+        async fn post_to_room(
+            &self,
+            room: String,
+            sender_id: String,
+            content: String,
+            reply_to: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "id": "msg-001",
+                "room": room,
+                "sender_id": sender_id,
+                "content": content,
+                "reply_to": reply_to,
+            }))
+        }
+
+        async fn read_room(&self, room: String, limit: Option<u32>) -> Result<Value, ToolError> {
+            Ok(json!({
+                "room": room,
+                "limit": limit.unwrap_or(10),
+                "messages": [],
+            }))
+        }
+
+        async fn create_room(
+            &self,
+            name: String,
+            purpose: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "name": name,
+                "purpose": purpose,
+            }))
+        }
+
+        async fn wait_for_message(
+            &self,
+            room: String,
+            timeout_secs: u64,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "room": room,
+                "timeout_secs": timeout_secs,
+                "message": null,
+            }))
+        }
+
+        async fn create_task(
+            &self,
+            title: String,
+            description: Option<String>,
+            assignee: Option<String>,
+            priority: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "id": "task-001",
+                "title": title,
+                "description": description,
+                "assignee": assignee,
+                "priority": priority,
+            }))
+        }
+
+        async fn update_task(
+            &self,
+            task_id: String,
+            status: Option<String>,
+            note: Option<String>,
+        ) -> Result<Value, ToolError> {
+            Ok(json!({
+                "task_id": task_id,
+                "status": status,
+                "note": note,
+            }))
+        }
+    }
 
     fn test_ctx() -> ToolContext {
         ToolContext {
@@ -417,107 +608,155 @@ mod tests {
                 network_access: NetworkPolicy::None,
                 max_output_bytes: 1_048_576,
             },
+            services: None,
+        }
+    }
+
+    fn test_ctx_with_services() -> ToolContext {
+        ToolContext {
+            services: Some(Arc::new(MockToolServices)),
+            ..test_ctx()
         }
     }
 
     #[tokio::test]
-    async fn room_post_stub() {
+    async fn room_post_no_services_returns_error() {
         let tool = RoomPostTool::new();
-        let output = tool
+        let result = tool
             .call(
                 json!({"room": "test-room", "content": "hello"}),
                 &test_ctx(),
             )
-            .await
-            .unwrap();
-
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("room_post"));
-            assert!(text.contains("test-room"));
-        } else {
-            panic!("expected text content");
-        }
+            .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no services configured"));
     }
 
     #[tokio::test]
-    async fn room_read_stub() {
-        let tool = RoomReadTool::new();
-        let output = tool
-            .call(json!({"room": "test-room"}), &test_ctx())
-            .await
-            .unwrap();
-
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("room_read"));
-        } else {
-            panic!("expected text content");
-        }
-    }
-
-    #[tokio::test]
-    async fn task_create_stub() {
-        let tool = TaskCreateTool::new();
-        let output = tool
-            .call(json!({"title": "test task"}), &test_ctx())
-            .await
-            .unwrap();
-
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("task_create"));
-            assert!(text.contains("test task"));
-        } else {
-            panic!("expected text content");
-        }
-    }
-
-    #[tokio::test]
-    async fn task_update_stub() {
-        let tool = TaskUpdateTool::new();
+    async fn room_post_delegates_to_services() {
+        let tool = RoomPostTool::new();
         let output = tool
             .call(
-                json!({"task_id": "task-123", "status": "done"}),
-                &test_ctx(),
+                json!({"room": "test-room", "content": "hello"}),
+                &test_ctx_with_services(),
             )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("task_update"));
-            assert!(text.contains("task-123"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["id"], "msg-001");
+            assert_eq!(data["room"], "test-room");
+            assert_eq!(data["content"], "hello");
+            assert_eq!(data["sender_id"], "test-agent");
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
         }
     }
 
     #[tokio::test]
-    async fn room_create_stub() {
+    async fn room_read_delegates_to_services() {
+        let tool = RoomReadTool::new();
+        let output = tool
+            .call(
+                json!({"room": "test-room", "limit": 5}),
+                &test_ctx_with_services(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["room"], "test-room");
+            assert_eq!(data["limit"], 5);
+        } else {
+            panic!("expected json content");
+        }
+    }
+
+    #[tokio::test]
+    async fn room_create_delegates_to_services() {
         let tool = RoomCreateTool::new();
         let output = tool
-            .call(json!({"name": "my-room"}), &test_ctx())
+            .call(
+                json!({"name": "my-room", "purpose": "testing"}),
+                &test_ctx_with_services(),
+            )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("room_create"));
-            assert!(text.contains("my-room"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["name"], "my-room");
+            assert_eq!(data["purpose"], "testing");
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
         }
     }
 
     #[tokio::test]
-    async fn room_wait_stub() {
+    async fn room_wait_delegates_to_services() {
         let tool = RoomWaitTool::new();
         let output = tool
-            .call(json!({"room": "wait-room"}), &test_ctx())
+            .call(
+                json!({"room": "wait-room", "timeout_secs": 30}),
+                &test_ctx_with_services(),
+            )
             .await
             .unwrap();
 
-        if let ToolContent::Text { text } = &output.content[0] {
-            assert!(text.contains("room_wait"));
-            assert!(text.contains("wait-room"));
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["room"], "wait-room");
+            assert_eq!(data["timeout_secs"], 30);
         } else {
-            panic!("expected text content");
+            panic!("expected json content");
         }
+    }
+
+    #[tokio::test]
+    async fn task_create_delegates_to_services() {
+        let tool = TaskCreateTool::new();
+        let output = tool
+            .call(
+                json!({"title": "test task", "priority": "high"}),
+                &test_ctx_with_services(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["id"], "task-001");
+            assert_eq!(data["title"], "test task");
+            assert_eq!(data["priority"], "high");
+        } else {
+            panic!("expected json content");
+        }
+    }
+
+    #[tokio::test]
+    async fn task_update_delegates_to_services() {
+        let tool = TaskUpdateTool::new();
+        let output = tool
+            .call(
+                json!({"task_id": "task-123", "status": "done", "note": "completed"}),
+                &test_ctx_with_services(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Json { data } = &output.content[0] {
+            assert_eq!(data["task_id"], "task-123");
+            assert_eq!(data["status"], "done");
+            assert_eq!(data["note"], "completed");
+        } else {
+            panic!("expected json content");
+        }
+    }
+
+    #[tokio::test]
+    async fn task_create_no_services_returns_error() {
+        let tool = TaskCreateTool::new();
+        let result = tool.call(json!({"title": "test task"}), &test_ctx()).await;
+        assert!(result.is_err());
     }
 }

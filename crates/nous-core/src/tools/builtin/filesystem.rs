@@ -812,6 +812,7 @@ mod tests {
                 network_access: NetworkPolicy::None,
                 max_output_bytes: 1_048_576,
             },
+            services: None,
         }
     }
 

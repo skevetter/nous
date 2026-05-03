@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,88 @@ impl<T: AgentTool> AgentToolDyn for T {
     }
 }
 
-#[derive(Debug, Clone)]
+#[async_trait::async_trait]
+pub trait ToolServices: Send + Sync {
+    async fn save_memory(
+        &self,
+        workspace_id: Option<String>,
+        agent_id: String,
+        content: String,
+        memory_type: String,
+        importance: String,
+        tags: Vec<String>,
+    ) -> Result<Value, ToolError>;
+
+    async fn search_memories(
+        &self,
+        query: String,
+        agent_id: Option<String>,
+        workspace_id: Option<String>,
+        memory_type: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Value, ToolError>;
+
+    async fn search_memories_hybrid(
+        &self,
+        query: String,
+        agent_id: Option<String>,
+        limit: Option<u32>,
+        fts_weight: Option<f64>,
+    ) -> Result<Value, ToolError>;
+
+    async fn get_memory_context(
+        &self,
+        agent_id: Option<String>,
+        workspace_id: Option<String>,
+        topic_key: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Value, ToolError>;
+
+    async fn relate_memories(
+        &self,
+        source_id: String,
+        target_id: String,
+        relation_type: String,
+    ) -> Result<Value, ToolError>;
+
+    async fn update_memory(
+        &self,
+        memory_id: String,
+        content: Option<String>,
+        importance: Option<String>,
+    ) -> Result<Value, ToolError>;
+
+    async fn post_to_room(
+        &self,
+        room: String,
+        sender_id: String,
+        content: String,
+        reply_to: Option<String>,
+    ) -> Result<Value, ToolError>;
+
+    async fn read_room(&self, room: String, limit: Option<u32>) -> Result<Value, ToolError>;
+
+    async fn create_room(&self, name: String, purpose: Option<String>) -> Result<Value, ToolError>;
+
+    async fn wait_for_message(&self, room: String, timeout_secs: u64) -> Result<Value, ToolError>;
+
+    async fn create_task(
+        &self,
+        title: String,
+        description: Option<String>,
+        assignee: Option<String>,
+        priority: Option<String>,
+    ) -> Result<Value, ToolError>;
+
+    async fn update_task(
+        &self,
+        task_id: String,
+        status: Option<String>,
+        note: Option<String>,
+    ) -> Result<Value, ToolError>;
+}
+
+#[derive(Clone)]
 pub struct ToolContext {
     pub agent_id: String,
     pub agent_name: String,
@@ -82,6 +164,22 @@ pub struct ToolContext {
     pub session_id: Option<String>,
     pub timeout: Duration,
     pub permissions: ResolvedPermissions,
+    pub services: Option<Arc<dyn ToolServices>>,
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("agent_id", &self.agent_id)
+            .field("agent_name", &self.agent_name)
+            .field("namespace", &self.namespace)
+            .field("workspace_dir", &self.workspace_dir)
+            .field("session_id", &self.session_id)
+            .field("timeout", &self.timeout)
+            .field("permissions", &self.permissions)
+            .field("services", &self.services.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
