@@ -200,13 +200,17 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
                     let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
                     if let Ok(embeddings) = embedder.embed(&texts) {
                         for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
-                            let _ = memory::store_chunk_embedding(vec_pool, &chunk.id, embedding);
+                            if let Err(e) = memory::store_chunk_embedding(vec_pool, &chunk.id, embedding) {
+                                tracing::warn!(chunk_id = %chunk.id, error = %e, "failed to store chunk embedding");
+                            }
                         }
                     }
                 }
                 if let Ok(full_embeddings) = embedder.embed(&[&mem.content]) {
                     if let Some(full_emb) = full_embeddings.first() {
-                        let _ = memory::store_embedding(pool, vec_pool, &mem.id, full_emb).await;
+                        if let Err(e) = memory::store_embedding(pool, vec_pool, &mem.id, full_emb).await {
+                            tracing::warn!(memory_id = %mem.id, error = %e, "failed to store memory embedding");
+                        }
                     }
                 }
             }

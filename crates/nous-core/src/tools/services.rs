@@ -101,7 +101,7 @@ impl ToolServices for DaemonToolServices {
         .await
         .map_err(map_err)?;
         let latency_ms = start.elapsed().as_millis() as i64;
-        let _ = memory::analytics::record_search_event(
+        if let Err(e) = memory::analytics::record_search_event(
             &self.pool,
             &memory::analytics::SearchEvent {
                 query_text: query,
@@ -112,7 +112,10 @@ impl ToolServices for DaemonToolServices {
                 agent_id,
             },
         )
-        .await;
+        .await
+        {
+            tracing::debug!(error = %e, "failed to record fts search analytics");
+        }
         Ok(serde_json::to_value(results).unwrap())
     }
 
@@ -146,7 +149,7 @@ impl ToolServices for DaemonToolServices {
             .await
             .map_err(map_err)?;
             let latency_ms = start.elapsed().as_millis() as i64;
-            let _ = memory::analytics::record_search_event(
+            if let Err(e) = memory::analytics::record_search_event(
                 &self.pool,
                 &memory::analytics::SearchEvent {
                     query_text: query,
@@ -157,7 +160,10 @@ impl ToolServices for DaemonToolServices {
                     agent_id,
                 },
             )
-            .await;
+            .await
+            {
+                tracing::debug!(error = %e, "failed to record hybrid search analytics");
+            }
             Ok(serde_json::to_value(results).unwrap())
         } else {
             let fts_results = memory::search_memories(
@@ -172,7 +178,7 @@ impl ToolServices for DaemonToolServices {
             .await
             .map_err(map_err)?;
             let latency_ms = start.elapsed().as_millis() as i64;
-            let _ = memory::analytics::record_search_event(
+            if let Err(e) = memory::analytics::record_search_event(
                 &self.pool,
                 &memory::analytics::SearchEvent {
                     query_text: query,
@@ -183,7 +189,10 @@ impl ToolServices for DaemonToolServices {
                     agent_id,
                 },
             )
-            .await;
+            .await
+            {
+                tracing::debug!(error = %e, "failed to record fts5_fallback search analytics");
+            }
             Ok(serde_json::json!({
                 "results": fts_results,
                 "_warning": "embedding unavailable, fell back to FTS5-only search"
