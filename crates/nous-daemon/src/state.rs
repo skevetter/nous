@@ -3,6 +3,7 @@ use std::sync::Arc;
 use nous_core::db::VecPool;
 use nous_core::memory::{Embedder, EmbeddingConfig, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
+use nous_core::tools::registry::ToolRegistry;
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub process_registry: Arc<ProcessRegistry>,
     pub llm_client: Option<Arc<LlmClient>>,
     pub default_model: String,
+    pub tool_registry: Arc<ToolRegistry>,
     #[cfg(feature = "sandbox")]
     pub sandbox_manager: Option<Arc<tokio::sync::Mutex<SandboxManager>>>,
 }

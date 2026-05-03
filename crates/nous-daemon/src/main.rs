@@ -57,6 +57,13 @@ async fn main() {
         }
     };
 
+    use nous_core::tools::builtin::register_builtin_tools;
+    use nous_core::tools::registry::ToolRegistry;
+
+    let tool_registry = ToolRegistry::new();
+    register_builtin_tools(&tool_registry).await;
+    let tool_registry = Arc::new(tool_registry);
+
     let shutdown = CancellationToken::new();
 
     {
@@ -86,6 +93,7 @@ async fn main() {
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
         default_model,
+        tool_registry,
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
     };

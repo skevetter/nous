@@ -910,6 +910,10 @@ impl ProcessRegistry {
         metadata: &Option<serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
+        use std::path::PathBuf;
+
+        use nous_core::tools::rig_bridge::NousToolAdapter;
+        use nous_core::tools::{NetworkPolicy, ResolvedPermissions, ToolContext};
         use rig::client::completion::CompletionClient;
         use rig::completion::Prompt as _;
 
@@ -931,6 +935,64 @@ impl ProcessRegistry {
             .unwrap_or("")
             .to_string();
 
+        let agent_id = invocation.agent_id.clone();
+        let agent_db = nous_core::agents::get_agent_by_id(&state.pool, &agent_id)
+            .await
+            .ok();
+
+        let tool_ctx = ToolContext {
+            agent_id: agent_id.clone(),
+            agent_name: agent_db
+                .as_ref()
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
+            namespace: agent_db
+                .as_ref()
+                .map(|a| a.namespace.clone())
+                .unwrap_or_else(|| "default".into()),
+            workspace_dir: agent_db
+                .as_ref()
+                .and_then(|a| a.working_dir.as_deref())
+                .map(PathBuf::from),
+            session_id: None,
+            timeout: Duration::from_secs(timeout_secs.unwrap_or(300) as u64),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::Unrestricted,
+                max_output_bytes: 1_048_576,
+            },
+        };
+
+        let resolved_tools = if let Some(ref agent) = agent_db {
+            use nous_core::agents::definition::{AgentDefinition, AgentSection};
+            let def = AgentDefinition {
+                agent: AgentSection {
+                    name: agent.name.clone(),
+                    r#type: agent.agent_type.clone(),
+                    version: "0.0.0".into(),
+                    namespace: Some(agent.namespace.clone()),
+                    description: None,
+                },
+                process: None,
+                skills: None,
+                tools: None,
+                metadata: None,
+            };
+            nous_core::tools::resolve_agent_tools(&state.tool_registry, &def, &agent.agent_type)
+                .await
+        } else {
+            vec![]
+        };
+
+        let tool_boxes: Vec<Box<dyn rig::tool::ToolDyn>> = resolved_tools
+            .into_iter()
+            .map(|t| -> Box<dyn rig::tool::ToolDyn> {
+                Box::new(NousToolAdapter::new(t, tool_ctx.clone()))
+            })
+            .collect();
+
         if is_async {
             let inv_id = invocation.id.clone();
             let prompt_owned = prompt.to_string();
@@ -938,10 +1000,14 @@ impl ProcessRegistry {
             let state_clone = state.clone();
             let client = client.clone();
             tokio::spawn(async move {
-                let agent = if preamble.is_empty() {
-                    client.agent(&model).build()
+                let mut builder = client.agent(&model);
+                if !preamble.is_empty() {
+                    builder = builder.preamble(&preamble);
+                }
+                let agent = if tool_boxes.is_empty() {
+                    builder.build()
                 } else {
-                    client.agent(&model).preamble(&preamble).build()
+                    builder.tools(tool_boxes).build()
                 };
                 let start = std::time::Instant::now();
                 let result = tokio::time::timeout(timeout, agent.prompt(&prompt_owned)).await;
@@ -990,10 +1056,14 @@ impl ProcessRegistry {
             return Ok(invocation.clone());
         }
 
-        let agent = if preamble.is_empty() {
-            client.agent(&model).build()
+        let mut builder = client.agent(&model);
+        if !preamble.is_empty() {
+            builder = builder.preamble(&preamble);
+        }
+        let agent = if tool_boxes.is_empty() {
+            builder.build()
         } else {
-            client.agent(&model).preamble(&preamble).build()
+            builder.tools(tool_boxes).build()
         };
 
         let start = std::time::Instant::now();

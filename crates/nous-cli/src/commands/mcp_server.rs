@@ -85,6 +85,9 @@ async fn execute(
         (None, llm_config.model)
     };
 
+    let tool_registry = nous_core::tools::registry::ToolRegistry::new();
+    nous_core::tools::builtin::register_builtin_tools(&tool_registry).await;
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
@@ -97,6 +100,7 @@ async fn execute(
         process_registry: Arc::new(ProcessRegistry::new()),
         llm_client,
         default_model,
+        tool_registry: Arc::new(tool_registry),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
     };

@@ -30,6 +30,7 @@ async fn test_state() -> (AppState, TempDir) {
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
         default_model: "test-model".to_string(),
+        tool_registry: Arc::new(nous_core::tools::registry::ToolRegistry::new()),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
     };
@@ -52,6 +53,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
         llm_client: None,
         default_model: "test-model".to_string(),
+        tool_registry: Arc::new(nous_core::tools::registry::ToolRegistry::new()),
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
     };

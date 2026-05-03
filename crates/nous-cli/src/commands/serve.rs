@@ -175,6 +175,9 @@ async fn execute(
     let shutdown = CancellationToken::new();
     let process_registry = Arc::new(ProcessRegistry::new());
 
+    let tool_registry = nous_core::tools::registry::ToolRegistry::new();
+    nous_core::tools::builtin::register_builtin_tools(&tool_registry).await;
+
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
@@ -187,6 +190,7 @@ async fn execute(
         process_registry: process_registry.clone(),
         llm_client,
         default_model,
+        tool_registry: Arc::new(tool_registry),
         #[cfg(feature = "sandbox")]
         sandbox_manager: Some(Arc::new(tokio::sync::Mutex::new(
             nous_daemon::sandbox::SandboxManager::new(),

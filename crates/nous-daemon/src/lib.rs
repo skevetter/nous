@@ -163,6 +163,8 @@ mod tests {
     use tower::ServiceExt;
 
     async fn test_state() -> (AppState, TempDir) {
+        use nous_core::tools::registry::ToolRegistry;
+
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations("porter unicode61").await.unwrap();
@@ -178,6 +180,7 @@ mod tests {
             process_registry: Arc::new(process_manager::ProcessRegistry::new()),
             llm_client: None,
             default_model: "test-model".to_string(),
+            tool_registry: Arc::new(ToolRegistry::new()),
             #[cfg(feature = "sandbox")]
             sandbox_manager: None,
         };

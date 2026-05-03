@@ -1531,8 +1531,31 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
     ]
 }
 
-pub async fn list_tools() -> impl IntoResponse {
-    let tools = get_tool_schemas();
+pub async fn list_tools(State(state): State<AppState>) -> impl IntoResponse {
+    let static_tools = get_tool_schemas();
+    let registry_tools = state.tool_registry.list().await;
+
+    let mut tools: Vec<Value> = static_tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            })
+        })
+        .collect();
+
+    for meta in &registry_tools {
+        if !static_tools.iter().any(|s| s.name == meta.name) {
+            tools.push(serde_json::json!({
+                "name": meta.name,
+                "description": meta.description,
+                "input_schema": meta.input_schema,
+            }));
+        }
+    }
+
     Json(serde_json::json!({ "tools": tools }))
 }
 
