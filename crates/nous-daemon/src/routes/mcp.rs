@@ -2465,11 +2465,15 @@ pub async fn dispatch(
                 },
             )
             .await;
+            for mem in &results {
+                let _ = memory::log_access(&state.pool, &mem.id, "search", None).await;
+            }
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_get" => {
             let id = require_str(args, "id")?;
             let mem = memory::get_memory_by_id(&state.pool, id).await?;
+            let _ = memory::log_access(&state.pool, &mem.id, "get", None).await;
             Ok(serde_json::to_value(mem).unwrap())
         }
         "memory_update" => {
@@ -2553,6 +2557,9 @@ pub async fn dispatch(
                 },
             )
             .await?;
+            for mem in &results {
+                let _ = memory::log_access(&state.pool, &mem.id, "context", None).await;
+            }
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_relations" => {

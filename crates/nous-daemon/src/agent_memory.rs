@@ -194,6 +194,7 @@ impl VectorStoreIndex for NousMemoryIndex {
 
         let mut out = Vec::with_capacity(results.len());
         for sm in results {
+            let _ = memory::log_access(&self.fts_pool, &sm.memory.id, "recall", None).await;
             let doc = serde_json::json!({
                 "title": sm.memory.title,
                 "content": sm.memory.content,
@@ -218,6 +219,9 @@ impl VectorStoreIndex for NousMemoryIndex {
             .await
             .map_err(nous_err_to_store)?;
 
+        for sm in &results {
+            let _ = memory::log_access(&self.fts_pool, &sm.memory.id, "recall", None).await;
+        }
         Ok(results
             .into_iter()
             .map(|sm| (sm.score as f64, sm.memory.id))
