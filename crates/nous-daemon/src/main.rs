@@ -100,7 +100,7 @@ async fn main() {
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, nous_daemon::app(state))
+    axum::serve(listener, nous_daemon::app_with_rate_limit(state, &config.rate_limit))
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
         .unwrap();
