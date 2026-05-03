@@ -78,14 +78,16 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListSchedulesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset: u32 = 0;
     let schedules = nous_core::schedules::list_schedules(
         &state.pool,
         params.enabled,
         params.action_type.as_deref(),
-        params.limit,
+        Some(limit + 1),
     )
     .await?;
-    Ok(ApiResponse::ok(schedules))
+    Ok(crate::response::paginated(schedules, limit, offset))
 }
 
 pub async fn get(
@@ -139,10 +141,12 @@ pub async fn list_runs(
     Path(id): Path<String>,
     Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    let limit = params.limit.unwrap_or(50);
+    let offset: u32 = 0;
     let runs =
-        nous_core::schedules::list_runs(&state.pool, &id, params.status.as_deref(), params.limit)
+        nous_core::schedules::list_runs(&state.pool, &id, params.status.as_deref(), Some(limit + 1))
             .await?;
-    Ok(ApiResponse::ok(runs))
+    Ok(crate::response::paginated(runs, limit, offset))
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
