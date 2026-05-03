@@ -3,11 +3,15 @@ pub mod definition;
 pub mod processes;
 pub mod sandbox;
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::entities::agents as agent_entity;
+use crate::entities::agent_relationships as rel_entity;
+use crate::entities::agent_versions as ver_entity;
+use crate::entities::agent_templates as tmpl_entity;
 use crate::error::NousError;
 use crate::notifications::subscribe_to_room;
 use crate::rooms;
@@ -213,28 +217,49 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub(crate) fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        let upgrade_flag: i32 = row.try_get("upgrade_available")?;
-        let auto_restart_flag: i32 = row.try_get("auto_restart")?;
+    pub(crate) fn from_model(m: agent_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            agent_type: m.agent_type,
+            parent_agent_id: m.parent_agent_id,
+            namespace: m.namespace,
+            status: m.status,
+            room: m.room,
+            last_seen_at: m.last_seen_at,
+            metadata_json: m.metadata_json,
+            current_version_id: m.current_version_id,
+            upgrade_available: m.upgrade_available,
+            template_id: m.template_id,
+            process_type: m.process_type,
+            spawn_command: m.spawn_command,
+            working_dir: m.working_dir,
+            auto_restart: m.auto_restart,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+
+    fn from_query_result(row: &sea_orm::QueryResult) -> Result<Self, sea_orm::DbErr> {
         Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            agent_type: row.try_get("agent_type")?,
-            parent_agent_id: row.try_get("parent_agent_id")?,
-            namespace: row.try_get("namespace")?,
-            status: row.try_get("status")?,
-            room: row.try_get("room")?,
-            last_seen_at: row.try_get("last_seen_at")?,
-            metadata_json: row.try_get("metadata_json")?,
-            current_version_id: row.try_get("current_version_id")?,
-            upgrade_available: upgrade_flag != 0,
-            template_id: row.try_get("template_id")?,
-            process_type: row.try_get("process_type")?,
-            spawn_command: row.try_get("spawn_command")?,
-            working_dir: row.try_get("working_dir")?,
-            auto_restart: auto_restart_flag != 0,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
+            id: row.try_get_by("id")?,
+            name: row.try_get_by("name")?,
+            agent_type: row.try_get_by("agent_type")?,
+            parent_agent_id: row.try_get_by("parent_agent_id")?,
+            namespace: row.try_get_by("namespace")?,
+            status: row.try_get_by("status")?,
+            room: row.try_get_by("room")?,
+            last_seen_at: row.try_get_by("last_seen_at")?,
+            metadata_json: row.try_get_by("metadata_json")?,
+            current_version_id: row.try_get_by("current_version_id")?,
+            upgrade_available: row.try_get_by("upgrade_available")?,
+            template_id: row.try_get_by("template_id")?,
+            process_type: row.try_get_by("process_type")?,
+            spawn_command: row.try_get_by("spawn_command")?,
+            working_dir: row.try_get_by("working_dir")?,
+            auto_restart: row.try_get_by("auto_restart")?,
+            created_at: row.try_get_by("created_at")?,
+            updated_at: row.try_get_by("updated_at")?,
         })
     }
 }
@@ -321,7 +346,7 @@ pub struct ListArtifactsFilter {
 // --- Agent operations ---
 
 pub async fn register_agent(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: RegisterAgentRequest,
 ) -> Result<Agent, NousError> {
     if req.name.trim().is_empty() {
@@ -333,7 +358,7 @@ pub async fn register_agent(
     let id = Uuid::now_v7().to_string();
 
     if let Some(ref parent_id) = req.parent_id {
-        let parent = get_agent_by_id(pool, parent_id).await?;
+        let parent = get_agent_by_id(db, parent_id).await?;
         if parent.namespace != namespace {
             return Err(NousError::Validation(
                 "parent agent must be in the same namespace".into(),
@@ -341,35 +366,44 @@ pub async fn register_agent(
         }
     }
 
-    sqlx::query(
-        "INSERT INTO agents (id, name, agent_type, parent_agent_id, namespace, status, room, metadata_json) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(req.name.trim())
-    .bind(req.agent_type.as_str())
-    .bind(&req.parent_id)
-    .bind(&namespace)
-    .bind(status.as_str())
-    .bind(&req.room)
-    .bind(&req.metadata)
-    .execute(pool)
-    .await?;
+    let model = agent_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(req.name.trim().to_string()),
+        agent_type: Set(req.agent_type.as_str().to_string()),
+        parent_agent_id: Set(req.parent_id.clone()),
+        namespace: Set(namespace.clone()),
+        status: Set(status.as_str().to_string()),
+        room: Set(req.room.clone()),
+        last_seen_at: Set(None),
+        metadata_json: Set(req.metadata.clone()),
+        current_version_id: Set(None),
+        upgrade_available: Set(false),
+        template_id: Set(None),
+        process_type: Set(None),
+        spawn_command: Set(None),
+        working_dir: Set(None),
+        auto_restart: Set(false),
+        created_at: Set(String::new()),
+        updated_at: Set(String::new()),
+    };
+
+    agent_entity::Entity::insert(model).exec(db).await?;
 
     if let Some(ref parent_id) = req.parent_id {
-        sqlx::query(
-            "INSERT INTO agent_relationships (parent_id, child_id, namespace) VALUES (?, ?, ?)",
-        )
-        .bind(parent_id)
-        .bind(&id)
-        .bind(&namespace)
-        .execute(pool)
-        .await?;
+        let rel_model = rel_entity::ActiveModel {
+            parent_id: Set(parent_id.clone()),
+            child_id: Set(id.clone()),
+            relationship_type: Set("parent-child".to_string()),
+            namespace: Set(namespace.clone()),
+            created_at: Set(String::new()),
+        };
 
-        let parent = get_agent_by_id(pool, parent_id).await?;
+        rel_entity::Entity::insert(rel_model).exec(db).await?;
+
+        let parent = get_agent_by_id(db, parent_id).await?;
         let coord_room_name = format!("coord-{}-{}", namespace, parent.name);
         match rooms::create_room(
-            pool,
+            db,
             &coord_room_name,
             Some(&format!("Coordination room for {}", parent.name)),
             None,
@@ -377,119 +411,99 @@ pub async fn register_agent(
         .await
         {
             Ok(room) => {
-                subscribe_to_room(pool, &room.id, parent_id, None).await?;
-                subscribe_to_room(pool, &room.id, &id, None).await?;
+                subscribe_to_room(db, &room.id, parent_id, None).await?;
+                subscribe_to_room(db, &room.id, &id, None).await?;
             }
             Err(NousError::Conflict(_)) => {
-                let room = rooms::get_room(pool, &coord_room_name).await?;
-                subscribe_to_room(pool, &room.id, &id, None).await?;
+                let room = rooms::get_room(db, &coord_room_name).await?;
+                subscribe_to_room(db, &room.id, &id, None).await?;
             }
             Err(e) => return Err(e),
         }
     }
 
-    get_agent_by_id(pool, &id).await
+    get_agent_by_id(db, &id).await
 }
 
-pub async fn get_agent_by_id(pool: &SqlitePool, id: &str) -> Result<Agent, NousError> {
-    let row = sqlx::query("SELECT * FROM agents WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_agent_by_id(db: &DatabaseConnection, id: &str) -> Result<Agent, NousError> {
+    let model = agent_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("agent '{id}' not found")))?;
-    Agent::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("agent '{id}' not found")))?;
+    Ok(Agent::from_model(model))
 }
 
 pub async fn lookup_agent(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     name: &str,
     namespace: Option<&str>,
 ) -> Result<Agent, NousError> {
     let ns = namespace.unwrap_or("default");
-    let row = sqlx::query("SELECT * FROM agents WHERE name = ? AND namespace = ?")
-        .bind(name)
-        .bind(ns)
-        .fetch_optional(pool)
+    let model = agent_entity::Entity::find()
+        .filter(agent_entity::Column::Name.eq(name))
+        .filter(agent_entity::Column::Namespace.eq(ns))
+        .one(db)
         .await?;
 
-    let row = row.ok_or_else(|| {
+    let model = model.ok_or_else(|| {
         NousError::NotFound(format!("agent '{name}' not found in namespace '{ns}'"))
     })?;
-    Agent::from_row(&row).map_err(NousError::Sqlite)
+    Ok(Agent::from_model(model))
 }
 
 pub async fn list_agents(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: &ListAgentsFilter,
 ) -> Result<Vec<Agent>, NousError> {
-    let limit = filter.limit.unwrap_or(50).min(200);
-    let offset = filter.offset.unwrap_or(0);
+    let limit = filter.limit.unwrap_or(50).min(200) as u64;
+    let offset = filter.offset.unwrap_or(0) as u64;
 
-    let mut sql = String::from("SELECT * FROM agents");
-    let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut query = agent_entity::Entity::find();
 
     if let Some(ref ns) = filter.namespace {
-        conditions.push("namespace = ?".to_string());
-        binds.push(ns.clone());
+        query = query.filter(agent_entity::Column::Namespace.eq(ns.as_str()));
     }
 
     if let Some(ref s) = filter.status {
-        conditions.push("status = ?".to_string());
-        binds.push(s.as_str().to_string());
+        query = query.filter(agent_entity::Column::Status.eq(s.as_str()));
     }
 
     if let Some(ref t) = filter.agent_type {
-        conditions.push("agent_type = ?".to_string());
-        binds.push(t.as_str().to_string());
+        query = query.filter(agent_entity::Column::AgentType.eq(t.as_str()));
     }
 
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    let models = query
+        .order_by_desc(agent_entity::Column::CreatedAt)
+        .limit(limit)
+        .offset(offset)
+        .all(db)
+        .await?;
 
-    sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-    binds.push(limit.to_string());
-    binds.push(offset.to_string());
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Agent::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(Agent::from_model).collect())
 }
 
 pub fn deregister_agent<'a>(
-    pool: &'a SqlitePool,
+    db: &'a DatabaseConnection,
     id: &'a str,
     cascade: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, NousError>> + Send + 'a>> {
     let id = id.to_string();
     Box::pin(async move {
-        let _agent = get_agent_by_id(pool, &id).await?;
+        let _agent = get_agent_by_id(db, &id).await?;
 
         let children: Vec<Agent> = {
-            let rows = sqlx::query(
-                "SELECT a.* FROM agents a \
-                 INNER JOIN agent_relationships r ON r.child_id = a.id \
-                 WHERE r.parent_id = ? AND r.namespace = a.namespace",
-            )
-            .bind(&id)
-            .fetch_all(pool)
-            .await?;
+            let rows = db
+                .query_all(Statement::from_sql_and_values(
+                    sea_orm::DbBackend::Sqlite,
+                    "SELECT a.* FROM agents a \
+                     INNER JOIN agent_relationships r ON r.child_id = a.id \
+                     WHERE r.parent_id = ? AND r.namespace = a.namespace",
+                    [id.clone().into()],
+                ))
+                .await?;
 
             rows.iter()
-                .map(Agent::from_row)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(NousError::Sqlite)?
+                .map(Agent::from_query_result)
+                .collect::<Result<Vec<_>, _>>()?
         };
 
         if !children.is_empty() && !cascade {
@@ -501,20 +515,17 @@ pub fn deregister_agent<'a>(
 
         if cascade {
             for child in &children {
-                deregister_agent(pool, &child.id, true).await?;
+                deregister_agent(db, &child.id, true).await?;
             }
         }
 
         // Handle resource ownership policies before deleting
-        crate::resources::handle_agent_deregistration(pool, &id).await?;
+        crate::resources::handle_agent_deregistration(db, &id).await?;
 
         // Clean up process records before deleting (NO CASCADE on agent_processes FK)
-        processes::cleanup_agent_processes(pool, &id).await?;
+        processes::cleanup_agent_processes(db, &id).await?;
 
-        sqlx::query("DELETE FROM agents WHERE id = ?")
-            .bind(&id)
-            .execute(pool)
-            .await?;
+        agent_entity::Entity::delete_by_id(&id).exec(db).await?;
 
         if cascade && !children.is_empty() {
             Ok("cascaded".to_string())
@@ -525,25 +536,27 @@ pub fn deregister_agent<'a>(
 }
 
 pub async fn update_agent_status(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     status: AgentStatus,
 ) -> Result<Agent, NousError> {
-    let result = sqlx::query("UPDATE agents SET status = ? WHERE id = ?")
-        .bind(status.as_str())
-        .bind(id)
-        .execute(pool)
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE agents SET status = ? WHERE id = ?",
+            [status.as_str().into(), id.into()],
+        ))
         .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("agent '{id}' not found")));
     }
 
-    get_agent_by_id(pool, id).await
+    get_agent_by_id(db, id).await
 }
 
 pub async fn heartbeat(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     status: Option<AgentStatus>,
 ) -> Result<(), NousError> {
@@ -552,11 +565,12 @@ pub async fn heartbeat(
         .to_string();
     let new_status = status.unwrap_or(AgentStatus::Active);
 
-    let result = sqlx::query("UPDATE agents SET last_seen_at = ?, status = ? WHERE id = ?")
-        .bind(&now)
-        .bind(new_status.as_str())
-        .bind(id)
-        .execute(pool)
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE agents SET last_seen_at = ?, status = ? WHERE id = ?",
+            [now.into(), new_status.as_str().into(), id.into()],
+        ))
         .await?;
 
     if result.rows_affected() == 0 {
@@ -569,30 +583,30 @@ pub async fn heartbeat(
 // --- Tree traversal ---
 
 pub async fn list_children(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     parent_id: &str,
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
     let ns = namespace.unwrap_or("default");
-    let rows = sqlx::query(
-        "SELECT a.* FROM agents a \
-         INNER JOIN agent_relationships r ON r.child_id = a.id \
-         WHERE r.parent_id = ? AND r.namespace = ? \
-         ORDER BY a.created_at",
-    )
-    .bind(parent_id)
-    .bind(ns)
-    .fetch_all(pool)
-    .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT a.* FROM agents a \
+             INNER JOIN agent_relationships r ON r.child_id = a.id \
+             WHERE r.parent_id = ? AND r.namespace = ? \
+             ORDER BY a.created_at",
+            [parent_id.into(), ns.into()],
+        ))
+        .await?;
 
     rows.iter()
-        .map(Agent::from_row)
+        .map(Agent::from_query_result)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map_err(NousError::SeaOrm)
 }
 
 pub async fn list_ancestors(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
@@ -601,18 +615,18 @@ pub async fn list_ancestors(
     let mut current_id = agent_id.to_string();
 
     loop {
-        let row = sqlx::query(
-            "SELECT parent_id FROM agent_relationships WHERE child_id = ? AND namespace = ?",
-        )
-        .bind(&current_id)
-        .bind(ns)
-        .fetch_optional(pool)
-        .await?;
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT parent_id FROM agent_relationships WHERE child_id = ? AND namespace = ?",
+                [current_id.clone().into(), ns.into()],
+            ))
+            .await?;
 
         match row {
             Some(r) => {
-                let parent_id: String = r.try_get("parent_id").map_err(NousError::Sqlite)?;
-                let parent = get_agent_by_id(pool, &parent_id).await?;
+                let parent_id: String = r.try_get_by("parent_id")?;
+                let parent = get_agent_by_id(db, &parent_id).await?;
                 ancestors.push(parent);
                 current_id = parent_id;
             }
@@ -625,31 +639,28 @@ pub async fn list_ancestors(
 }
 
 pub async fn get_tree(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     root_id: Option<&str>,
     namespace: Option<&str>,
 ) -> Result<Vec<TreeNode>, NousError> {
     let ns = namespace.unwrap_or("default");
 
     let roots = if let Some(id) = root_id {
-        vec![get_agent_by_id(pool, id).await?]
+        vec![get_agent_by_id(db, id).await?]
     } else {
-        let rows = sqlx::query(
-            "SELECT * FROM agents WHERE parent_agent_id IS NULL AND namespace = ? ORDER BY created_at",
-        )
-        .bind(ns)
-        .fetch_all(pool)
-        .await?;
+        let models = agent_entity::Entity::find()
+            .filter(agent_entity::Column::ParentAgentId.is_null())
+            .filter(agent_entity::Column::Namespace.eq(ns))
+            .order_by_asc(agent_entity::Column::CreatedAt)
+            .all(db)
+            .await?;
 
-        rows.iter()
-            .map(Agent::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)?
+        models.into_iter().map(Agent::from_model).collect()
     };
 
     let mut tree = Vec::new();
     for root in roots {
-        let node = build_tree_node(pool, root, ns).await?;
+        let node = build_tree_node(db, root, ns).await?;
         tree.push(node);
     }
 
@@ -657,15 +668,15 @@ pub async fn get_tree(
 }
 
 async fn build_tree_node(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent: Agent,
     namespace: &str,
 ) -> Result<TreeNode, NousError> {
-    let children_agents = list_children(pool, &agent.id, Some(namespace)).await?;
+    let children_agents = list_children(db, &agent.id, Some(namespace)).await?;
     let mut children = Vec::new();
 
     for child in children_agents {
-        let node = Box::pin(build_tree_node(pool, child, namespace)).await?;
+        let node = Box::pin(build_tree_node(db, child, namespace)).await?;
         children.push(node);
     }
 
@@ -675,7 +686,7 @@ async fn build_tree_node(
 // --- Search ---
 
 pub async fn search_agents(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     query: &str,
     namespace: Option<&str>,
     limit: Option<u32>,
@@ -686,48 +697,43 @@ pub async fn search_agents(
 
     let limit = limit.unwrap_or(20).min(100);
 
-    let sql = if let Some(ns) = namespace {
-        let rows = sqlx::query(
+    let rows = if let Some(ns) = namespace {
+        db.query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "SELECT a.* FROM agents a \
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? AND a.namespace = ? \
              LIMIT ?",
-        )
-        .bind(query)
-        .bind(ns)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-        rows
+            [query.into(), ns.into(), (limit as i32).into()],
+        ))
+        .await?
     } else {
-        let rows = sqlx::query(
+        db.query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "SELECT a.* FROM agents a \
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? \
              LIMIT ?",
-        )
-        .bind(query)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-        rows
+            [query.into(), (limit as i32).into()],
+        ))
+        .await?
     };
 
-    sql.iter()
-        .map(Agent::from_row)
+    rows.iter()
+        .map(Agent::from_query_result)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map_err(NousError::SeaOrm)
 }
 
 // --- Artifact operations (delegating to resources module) ---
 
 pub async fn register_artifact(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: RegisterArtifactRequest,
 ) -> Result<Artifact, NousError> {
     let resource_type: crate::resources::ResourceType = req.artifact_type.as_str().parse()?;
     let resource = crate::resources::register_resource(
-        pool,
+        db,
         crate::resources::RegisterResourceRequest {
             name: req.name,
             resource_type,
@@ -743,13 +749,13 @@ pub async fn register_artifact(
     Ok(Artifact::from_resource(&resource))
 }
 
-pub async fn get_artifact_by_id(pool: &SqlitePool, id: &str) -> Result<Artifact, NousError> {
-    let resource = crate::resources::get_resource_by_id(pool, id).await?;
+pub async fn get_artifact_by_id(db: &DatabaseConnection, id: &str) -> Result<Artifact, NousError> {
+    let resource = crate::resources::get_resource_by_id(db, id).await?;
     Ok(Artifact::from_resource(&resource))
 }
 
 pub async fn list_artifacts(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: &ListArtifactsFilter,
 ) -> Result<Vec<Artifact>, NousError> {
     let resource_type = filter
@@ -764,7 +770,7 @@ pub async fn list_artifacts(
         .transpose()?;
 
     let resources = crate::resources::list_resources(
-        pool,
+        db,
         &crate::resources::ListResourcesFilter {
             resource_type,
             status,
@@ -779,18 +785,18 @@ pub async fn list_artifacts(
     Ok(resources.iter().map(Artifact::from_resource).collect())
 }
 
-pub async fn deregister_artifact(pool: &SqlitePool, id: &str) -> Result<(), NousError> {
-    crate::resources::deregister_resource(pool, id, true).await
+pub async fn deregister_artifact(db: &DatabaseConnection, id: &str) -> Result<(), NousError> {
+    crate::resources::deregister_resource(db, id, true).await
 }
 
 pub async fn update_artifact(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     id: &str,
     name: Option<&str>,
     path: Option<&str>,
 ) -> Result<Artifact, NousError> {
     let resource = crate::resources::update_resource(
-        pool,
+        db,
         crate::resources::UpdateResourceRequest {
             id: id.to_string(),
             name: name.map(String::from),
@@ -818,15 +824,15 @@ pub struct AgentVersion {
 }
 
 impl AgentVersion {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            skill_hash: row.try_get("skill_hash")?,
-            config_hash: row.try_get("config_hash")?,
-            skills_json: row.try_get("skills_json")?,
-            created_at: row.try_get("created_at")?,
-        })
+    fn from_model(m: ver_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            agent_id: m.agent_id,
+            skill_hash: m.skill_hash,
+            config_hash: m.config_hash,
+            skills_json: m.skills_json,
+            created_at: m.created_at,
+        }
     }
 }
 
@@ -842,16 +848,16 @@ pub struct AgentTemplate {
 }
 
 impl AgentTemplate {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            template_type: row.try_get("template_type")?,
-            default_config: row.try_get("default_config")?,
-            skill_refs: row.try_get("skill_refs")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+    fn from_model(m: tmpl_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            template_type: m.template_type,
+            default_config: m.default_config,
+            skill_refs: m.skill_refs,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
@@ -875,105 +881,123 @@ pub struct RecordVersionRequest {
 }
 
 pub async fn record_version(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: RecordVersionRequest,
 ) -> Result<AgentVersion, NousError> {
-    let _agent = get_agent_by_id(pool, &req.agent_id).await?;
+    let _agent = get_agent_by_id(db, &req.agent_id).await?;
     let id = Uuid::now_v7().to_string();
     let skills = req.skills_json.unwrap_or_else(|| "[]".to_string());
 
-    sqlx::query(
-        "INSERT INTO agent_versions (id, agent_id, skill_hash, config_hash, skills_json) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&req.agent_id)
-    .bind(&req.skill_hash)
-    .bind(&req.config_hash)
-    .bind(&skills)
-    .execute(pool)
+    let model = ver_entity::ActiveModel {
+        id: Set(id.clone()),
+        agent_id: Set(req.agent_id.clone()),
+        skill_hash: Set(req.skill_hash),
+        config_hash: Set(req.config_hash),
+        skills_json: Set(skills),
+        created_at: Set(String::new()),
+    };
+
+    ver_entity::Entity::insert(model).exec(db).await?;
+
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?",
+        [id.clone().into(), req.agent_id.into()],
+    ))
     .await?;
 
-    sqlx::query("UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?")
-        .bind(&id)
-        .bind(&req.agent_id)
-        .execute(pool)
-        .await?;
-
-    get_version_by_id(pool, &id).await
+    get_version_by_id(db, &id).await
 }
 
-pub async fn get_version_by_id(pool: &SqlitePool, id: &str) -> Result<AgentVersion, NousError> {
-    let row = sqlx::query("SELECT * FROM agent_versions WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_version_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<AgentVersion, NousError> {
+    let model = ver_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("agent version '{id}' not found")))?;
-    AgentVersion::from_row(&row).map_err(NousError::Sqlite)
+    let model =
+        model.ok_or_else(|| NousError::NotFound(format!("agent version '{id}' not found")))?;
+    Ok(AgentVersion::from_model(model))
 }
 
 pub async fn list_versions(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<AgentVersion>, NousError> {
-    let _agent = get_agent_by_id(pool, agent_id).await?;
-    let limit = limit.unwrap_or(20).min(100);
+    let _agent = get_agent_by_id(db, agent_id).await?;
+    let limit = limit.unwrap_or(20).min(100) as u64;
 
-    let rows = sqlx::query(
-        "SELECT * FROM agent_versions WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
-    )
-    .bind(agent_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+    let models = ver_entity::Entity::find()
+        .filter(ver_entity::Column::AgentId.eq(agent_id))
+        .order_by_desc(ver_entity::Column::CreatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
 
-    rows.iter()
-        .map(AgentVersion::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(AgentVersion::from_model).collect())
 }
 
-pub async fn inspect_agent(pool: &SqlitePool, id: &str) -> Result<AgentInspection, NousError> {
-    let agent = get_agent_by_id(pool, id).await?;
+pub async fn inspect_agent(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<AgentInspection, NousError> {
+    let agent = get_agent_by_id(db, id).await?;
 
     let current_version: Option<AgentVersion> = {
-        let row = sqlx::query(
-            "SELECT v.* FROM agent_versions v \
-             INNER JOIN agents a ON a.current_version_id = v.id \
-             WHERE a.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-        row.map(|r| AgentVersion::from_row(&r))
-            .transpose()
-            .map_err(NousError::Sqlite)?
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT v.* FROM agent_versions v \
+                 INNER JOIN agents a ON a.current_version_id = v.id \
+                 WHERE a.id = ?",
+                [id.into()],
+            ))
+            .await?;
+        row.map(|r| {
+            Ok::<_, sea_orm::DbErr>(AgentVersion {
+                id: r.try_get_by("id")?,
+                agent_id: r.try_get_by("agent_id")?,
+                skill_hash: r.try_get_by("skill_hash")?,
+                config_hash: r.try_get_by("config_hash")?,
+                skills_json: r.try_get_by("skills_json")?,
+                created_at: r.try_get_by("created_at")?,
+            })
+        })
+        .transpose()?
     };
 
     let template: Option<AgentTemplate> = {
-        let row = sqlx::query(
-            "SELECT t.* FROM agent_templates t \
-             INNER JOIN agents a ON a.template_id = t.id \
-             WHERE a.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-        row.map(|r| AgentTemplate::from_row(&r))
-            .transpose()
-            .map_err(NousError::Sqlite)?
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT t.* FROM agent_templates t \
+                 INNER JOIN agents a ON a.template_id = t.id \
+                 WHERE a.id = ?",
+                [id.into()],
+            ))
+            .await?;
+        row.map(|r| {
+            Ok::<_, sea_orm::DbErr>(AgentTemplate {
+                id: r.try_get_by("id")?,
+                name: r.try_get_by("name")?,
+                template_type: r.try_get_by("template_type")?,
+                default_config: r.try_get_by("default_config")?,
+                skill_refs: r.try_get_by("skill_refs")?,
+                created_at: r.try_get_by("created_at")?,
+                updated_at: r.try_get_by("updated_at")?,
+            })
+        })
+        .transpose()?
     };
 
-    let version_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM agent_versions WHERE agent_id = ?")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
+    let version_count = ver_entity::Entity::find()
+        .filter(ver_entity::Column::AgentId.eq(id))
+        .count(db)
+        .await? as i64;
 
-    let active_process = processes::get_active_process(pool, id).await?;
-    let recent_invocations = processes::list_invocations(pool, id, None, Some(5)).await?;
+    let active_process = processes::get_active_process(db, id).await?;
+    let recent_invocations = processes::list_invocations(db, id, None, Some(5)).await?;
 
     Ok(AgentInspection {
         agent,
@@ -986,36 +1010,38 @@ pub async fn inspect_agent(pool: &SqlitePool, id: &str) -> Result<AgentInspectio
 }
 
 pub async fn rollback_agent(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     version_id: &str,
 ) -> Result<AgentVersion, NousError> {
-    let version = get_version_by_id(pool, version_id).await?;
+    let version = get_version_by_id(db, version_id).await?;
     if version.agent_id != agent_id {
         return Err(NousError::Validation(
             "version does not belong to this agent".into(),
         ));
     }
 
-    sqlx::query("UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?")
-        .bind(version_id)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE agents SET current_version_id = ?, upgrade_available = 0 WHERE id = ?",
+        [version_id.into(), agent_id.into()],
+    ))
+    .await?;
 
     Ok(version)
 }
 
 pub async fn set_upgrade_available(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     available: bool,
 ) -> Result<(), NousError> {
-    let flag = if available { 1 } else { 0 };
-    let result = sqlx::query("UPDATE agents SET upgrade_available = ? WHERE id = ?")
-        .bind(flag)
-        .bind(agent_id)
-        .execute(pool)
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE agents SET upgrade_available = ? WHERE id = ?",
+            [available.into(), agent_id.into()],
+        ))
         .await?;
 
     if result.rows_affected() == 0 {
@@ -1025,38 +1051,26 @@ pub async fn set_upgrade_available(
 }
 
 pub async fn list_outdated_agents(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     namespace: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<Agent>, NousError> {
-    let limit = limit.unwrap_or(50).min(200);
+    let limit = limit.unwrap_or(50).min(200) as u64;
+
+    let mut query = agent_entity::Entity::find()
+        .filter(agent_entity::Column::UpgradeAvailable.eq(true));
 
     if let Some(ns) = namespace {
-        let rows = sqlx::query(
-            "SELECT * FROM agents WHERE upgrade_available = 1 AND namespace = ? \
-             ORDER BY updated_at DESC LIMIT ?",
-        )
-        .bind(ns)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-        rows.iter()
-            .map(Agent::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)
-    } else {
-        let rows = sqlx::query(
-            "SELECT * FROM agents WHERE upgrade_available = 1 \
-             ORDER BY updated_at DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-        rows.iter()
-            .map(Agent::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)
+        query = query.filter(agent_entity::Column::Namespace.eq(ns));
     }
+
+    let models = query
+        .order_by_desc(agent_entity::Column::UpdatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
+
+    Ok(models.into_iter().map(Agent::from_model).collect())
 }
 
 // --- Template operations ---
@@ -1070,7 +1084,7 @@ pub struct CreateTemplateRequest {
 }
 
 pub async fn create_template(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: CreateTemplateRequest,
 ) -> Result<AgentTemplate, NousError> {
     if req.name.trim().is_empty() {
@@ -1083,61 +1097,52 @@ pub async fn create_template(
     let config = req.default_config.unwrap_or_else(|| "{}".to_string());
     let skills = req.skill_refs.unwrap_or_else(|| "[]".to_string());
 
-    sqlx::query(
-        "INSERT INTO agent_templates (id, name, template_type, default_config, skill_refs) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(req.name.trim())
-    .bind(&req.template_type)
-    .bind(&config)
-    .bind(&skills)
-    .execute(pool)
-    .await?;
+    let model = tmpl_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(req.name.trim().to_string()),
+        template_type: Set(req.template_type),
+        default_config: Set(config),
+        skill_refs: Set(skills),
+        created_at: Set(String::new()),
+        updated_at: Set(String::new()),
+    };
 
-    get_template_by_id(pool, &id).await
+    tmpl_entity::Entity::insert(model).exec(db).await?;
+
+    get_template_by_id(db, &id).await
 }
 
-pub async fn get_template_by_id(pool: &SqlitePool, id: &str) -> Result<AgentTemplate, NousError> {
-    let row = sqlx::query("SELECT * FROM agent_templates WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_template_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<AgentTemplate, NousError> {
+    let model = tmpl_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("agent template '{id}' not found")))?;
-    AgentTemplate::from_row(&row).map_err(NousError::Sqlite)
+    let model =
+        model.ok_or_else(|| NousError::NotFound(format!("agent template '{id}' not found")))?;
+    Ok(AgentTemplate::from_model(model))
 }
 
 pub async fn list_templates(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     template_type: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<AgentTemplate>, NousError> {
-    let limit = limit.unwrap_or(50).min(200);
+    let limit = limit.unwrap_or(50).min(200) as u64;
+
+    let mut query = tmpl_entity::Entity::find();
 
     if let Some(t) = template_type {
-        let rows = sqlx::query(
-            "SELECT * FROM agent_templates WHERE template_type = ? \
-             ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(t)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
-        rows.iter()
-            .map(AgentTemplate::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)
-    } else {
-        let rows = sqlx::query("SELECT * FROM agent_templates ORDER BY created_at DESC LIMIT ?")
-            .bind(limit)
-            .fetch_all(pool)
-            .await?;
-        rows.iter()
-            .map(AgentTemplate::from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NousError::Sqlite)
+        query = query.filter(tmpl_entity::Column::TemplateType.eq(t));
     }
+
+    let models = query
+        .order_by_desc(tmpl_entity::Column::CreatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
+
+    Ok(models.into_iter().map(AgentTemplate::from_model).collect())
 }
 
 #[derive(Debug, Clone)]
@@ -1150,10 +1155,10 @@ pub struct InstantiateRequest {
 }
 
 pub async fn instantiate_from_template(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: InstantiateRequest,
 ) -> Result<Agent, NousError> {
-    let template = get_template_by_id(pool, &req.template_id).await?;
+    let template = get_template_by_id(db, &req.template_id).await?;
 
     let agent_type: AgentType = template.template_type.parse()?;
     let name = req
@@ -1161,7 +1166,7 @@ pub async fn instantiate_from_template(
         .unwrap_or_else(|| format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8]));
 
     let agent = register_agent(
-        pool,
+        db,
         RegisterAgentRequest {
             name,
             agent_type,
@@ -1177,11 +1182,12 @@ pub async fn instantiate_from_template(
     )
     .await?;
 
-    sqlx::query("UPDATE agents SET template_id = ? WHERE id = ?")
-        .bind(&req.template_id)
-        .bind(&agent.id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE agents SET template_id = ? WHERE id = ?",
+        [req.template_id.into(), agent.id.clone().into()],
+    ))
+    .await?;
 
     // Copy spawn config from template's default_config if present
     if let Ok(config_val) = serde_json::from_str::<serde_json::Value>(&template.default_config) {
@@ -1196,7 +1202,7 @@ pub async fn instantiate_from_template(
             || auto_restart.is_some()
         {
             processes::update_agent(
-                pool,
+                db,
                 &agent.id,
                 process_type,
                 spawn_command,
@@ -1208,7 +1214,7 @@ pub async fn instantiate_from_template(
         }
     }
 
-    get_agent_by_id(pool, &agent.id).await
+    get_agent_by_id(db, &agent.id).await
 }
 
 fn merge_config(base: &str, overrides: Option<&str>) -> String {
@@ -1234,7 +1240,7 @@ fn merge_config(base: &str, overrides: Option<&str>) -> String {
 }
 
 pub async fn list_stale_agents(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     threshold_secs: u64,
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
@@ -1243,19 +1249,19 @@ pub async fn list_stale_agents(
     let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
     // Skip agents with running processes — they are alive even if heartbeat is stale
-    let rows = sqlx::query(
-        "SELECT a.* FROM agents a WHERE a.namespace = ? AND a.last_seen_at IS NOT NULL \
-         AND a.last_seen_at < ? AND a.status NOT IN ('archived', 'inactive', 'done') \
-         AND NOT EXISTS (SELECT 1 FROM agent_processes p WHERE p.agent_id = a.id AND p.status IN ('running','starting')) \
-         ORDER BY a.last_seen_at",
-    )
-    .bind(ns)
-    .bind(&cutoff_str)
-    .fetch_all(pool)
-    .await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT a.* FROM agents a WHERE a.namespace = ? AND a.last_seen_at IS NOT NULL \
+             AND a.last_seen_at < ? AND a.status NOT IN ('archived', 'inactive', 'done') \
+             AND NOT EXISTS (SELECT 1 FROM agent_processes p WHERE p.agent_id = a.id AND p.status IN ('running','starting')) \
+             ORDER BY a.last_seen_at",
+            [ns.into(), cutoff_str.into()],
+        ))
+        .await?;
 
     rows.iter()
-        .map(Agent::from_row)
+        .map(Agent::from_query_result)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map_err(NousError::SeaOrm)
 }

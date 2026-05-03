@@ -1,7 +1,9 @@
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::entities::rooms as rooms_entity;
 use crate::error::NousError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,33 +18,31 @@ pub struct Room {
 }
 
 impl Room {
-    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        use sqlx::Row;
-        let metadata_str: Option<String> = row.try_get("metadata")?;
-        let metadata = match metadata_str.as_deref().map(serde_json::from_str) {
-            Some(Ok(val)) => Some(val),
-            Some(Err(e)) => {
-                tracing::warn!(error = %e, "malformed JSON in room metadata column, treating as null");
-                None
-            }
-            None => None,
-        };
-        let archived: i32 = row.try_get("archived")?;
-
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            purpose: row.try_get("purpose")?,
+    fn from_model(m: rooms_entity::Model) -> Self {
+        let metadata = m
+            .metadata
+            .as_deref()
+            .and_then(|s| match serde_json::from_str(s) {
+                Ok(val) => Some(val),
+                Err(e) => {
+                    tracing::warn!(error = %e, "malformed JSON in room metadata column, treating as null");
+                    None
+                }
+            });
+        Self {
+            id: m.id,
+            name: m.name,
+            purpose: m.purpose,
             metadata,
-            archived: archived != 0,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        })
+            archived: m.archived,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
     }
 }
 
 pub async fn create_room(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     name: &str,
     purpose: Option<&str>,
     metadata: Option<&serde_json::Value>,
@@ -54,89 +54,94 @@ pub async fn create_room(
     let id = Uuid::now_v7().to_string();
     let metadata_json = metadata.map(|m| m.to_string());
 
-    let result = sqlx::query("INSERT INTO rooms (id, name, purpose, metadata) VALUES (?, ?, ?, ?)")
-        .bind(&id)
-        .bind(name)
-        .bind(purpose)
-        .bind(&metadata_json)
-        .execute(pool)
-        .await;
+    let model = rooms_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(name.to_string()),
+        purpose: Set(purpose.map(String::from)),
+        metadata: Set(metadata_json),
+        archived: Set(false),
+        created_at: Set(String::new()),
+        updated_at: Set(String::new()),
+    };
+
+    let result = rooms_entity::Entity::insert(model).exec(db).await;
 
     match result {
         Ok(_) => {}
-        Err(sqlx::Error::Database(ref db_err)) if db_err.code().as_deref() == Some("2067") => {
+        Err(ref e) if e.to_string().contains("2067") || e.to_string().contains("UNIQUE") => {
             return Err(NousError::Conflict(format!(
                 "room with name '{name}' already exists"
             )));
         }
-        Err(e) => return Err(NousError::Sqlite(e)),
+        Err(e) => return Err(NousError::SeaOrm(e)),
     }
 
-    get_room(pool, &id).await
+    get_room(db, &id).await
 }
 
-pub async fn list_rooms(pool: &SqlitePool, include_archived: bool) -> Result<Vec<Room>, NousError> {
-    let query = if include_archived {
-        "SELECT * FROM rooms ORDER BY created_at DESC"
-    } else {
-        "SELECT * FROM rooms WHERE archived = 0 ORDER BY created_at DESC"
-    };
+pub async fn list_rooms(
+    db: &DatabaseConnection,
+    include_archived: bool,
+) -> Result<Vec<Room>, NousError> {
+    let mut query = rooms_entity::Entity::find();
 
-    let rows = sqlx::query(query).fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Room::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
-}
-
-pub async fn get_room(pool: &SqlitePool, id_or_name: &str) -> Result<Room, NousError> {
-    let row = sqlx::query("SELECT * FROM rooms WHERE id = ?")
-        .bind(id_or_name)
-        .fetch_optional(pool)
-        .await?;
-
-    if let Some(row) = row {
-        return Room::from_row(&row).map_err(NousError::Sqlite);
+    if !include_archived {
+        query = query.filter(rooms_entity::Column::Archived.eq(false));
     }
 
-    let row = sqlx::query("SELECT * FROM rooms WHERE name = ? AND archived = 0")
-        .bind(id_or_name)
-        .fetch_optional(pool)
+    let models = query
+        .order_by_desc(rooms_entity::Column::CreatedAt)
+        .all(db)
         .await?;
 
-    match row {
-        Some(row) => Room::from_row(&row).map_err(NousError::Sqlite),
+    Ok(models.into_iter().map(Room::from_model).collect())
+}
+
+pub async fn get_room(db: &DatabaseConnection, id_or_name: &str) -> Result<Room, NousError> {
+    let model = rooms_entity::Entity::find_by_id(id_or_name)
+        .one(db)
+        .await?;
+
+    if let Some(m) = model {
+        return Ok(Room::from_model(m));
+    }
+
+    let model = rooms_entity::Entity::find()
+        .filter(rooms_entity::Column::Name.eq(id_or_name))
+        .filter(rooms_entity::Column::Archived.eq(false))
+        .one(db)
+        .await?;
+
+    match model {
+        Some(m) => Ok(Room::from_model(m)),
         None => Err(NousError::NotFound(format!(
             "room '{id_or_name}' not found"
         ))),
     }
 }
 
-pub async fn delete_room(pool: &SqlitePool, id: &str, hard: bool) -> Result<(), NousError> {
+pub async fn delete_room(db: &DatabaseConnection, id: &str, hard: bool) -> Result<(), NousError> {
     if hard {
-        let result = sqlx::query("DELETE FROM rooms WHERE id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
+        let result = rooms_entity::Entity::delete_by_id(id).exec(db).await?;
 
-        if result.rows_affected() == 0 {
+        if result.rows_affected == 0 {
             return Err(NousError::NotFound(format!("room '{id}' not found")));
         }
     } else {
-        archive_room(pool, id).await?;
+        archive_room(db, id).await?;
     }
 
     Ok(())
 }
 
-pub async fn archive_room(pool: &SqlitePool, id: &str) -> Result<(), NousError> {
-    let result = sqlx::query(
-        "UPDATE rooms SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
+pub async fn archive_room(db: &DatabaseConnection, id: &str) -> Result<(), NousError> {
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE rooms SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [id.into()],
+        ))
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("room '{id}' not found")));
@@ -145,19 +150,20 @@ pub async fn archive_room(pool: &SqlitePool, id: &str) -> Result<(), NousError> 
     Ok(())
 }
 
-pub async fn unarchive_room(pool: &SqlitePool, id: &str) -> Result<Room, NousError> {
-    let result = sqlx::query(
-        "UPDATE rooms SET archived = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
+pub async fn unarchive_room(db: &DatabaseConnection, id: &str) -> Result<Room, NousError> {
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE rooms SET archived = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [id.into()],
+        ))
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("room '{id}' not found")));
     }
 
-    get_room(pool, id).await
+    get_room(db, id).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,26 +174,29 @@ pub struct RoomStats {
     pub subscriber_count: i64,
 }
 
-pub async fn inspect_room(pool: &SqlitePool, id: &str) -> Result<RoomStats, NousError> {
-    let _room = get_room(pool, id).await?;
+pub async fn inspect_room(db: &DatabaseConnection, id: &str) -> Result<RoomStats, NousError> {
+    let _room = get_room(db, id).await?;
 
-    let message_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM room_messages WHERE room_id = ?")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
+    let message_count = crate::entities::room_messages::Entity::find()
+        .filter(crate::entities::room_messages::Column::RoomId.eq(id))
+        .count(db)
+        .await? as i64;
 
-    let last_message_at: Option<String> =
-        sqlx::query_scalar("SELECT MAX(created_at) FROM room_messages WHERE room_id = ?")
-            .bind(id)
-            .fetch_one(pool)
+    let last_message_at: Option<String> = {
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT MAX(created_at) as val FROM room_messages WHERE room_id = ?",
+                [id.into()],
+            ))
             .await?;
+        row.and_then(|r| r.try_get_by::<Option<String>, _>("val").ok().flatten())
+    };
 
-    let subscriber_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM room_subscriptions WHERE room_id = ?")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
+    let subscriber_count = crate::entities::room_subscriptions::Entity::find()
+        .filter(crate::entities::room_subscriptions::Column::RoomId.eq(id))
+        .count(db)
+        .await? as i64;
 
     Ok(RoomStats {
         room_id: id.to_string(),
@@ -203,19 +212,19 @@ mod tests {
     use crate::db::DbPools;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, TempDir) {
+    async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations("porter unicode61").await.unwrap();
-        let pool = pools.fts.clone();
-        (pool, tmp)
+        let db = pools.fts.clone();
+        (db, tmp)
     }
 
     #[tokio::test]
     async fn test_create_room() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
-        let room = create_room(&pool, "general", Some("General discussion"), None)
+        let room = create_room(&db, "general", Some("General discussion"), None)
             .await
             .unwrap();
 
@@ -227,63 +236,63 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_rooms_excludes_archived() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
-        let room1 = create_room(&pool, "active-room", None, None).await.unwrap();
-        let room2 = create_room(&pool, "archived-room", None, None)
+        let room1 = create_room(&db, "active-room", None, None).await.unwrap();
+        let room2 = create_room(&db, "archived-room", None, None)
             .await
             .unwrap();
-        archive_room(&pool, &room2.id).await.unwrap();
+        archive_room(&db, &room2.id).await.unwrap();
 
-        let active = list_rooms(&pool, false).await.unwrap();
+        let active = list_rooms(&db, false).await.unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, room1.id);
 
-        let all = list_rooms(&pool, true).await.unwrap();
+        let all = list_rooms(&db, true).await.unwrap();
         assert_eq!(all.len(), 2);
     }
 
     #[tokio::test]
     async fn test_get_room_by_id_and_name() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
-        let room = create_room(&pool, "lookup-test", Some("test"), None)
+        let room = create_room(&db, "lookup-test", Some("test"), None)
             .await
             .unwrap();
 
-        let by_id = get_room(&pool, &room.id).await.unwrap();
+        let by_id = get_room(&db, &room.id).await.unwrap();
         assert_eq!(by_id.name, "lookup-test");
 
-        let by_name = get_room(&pool, "lookup-test").await.unwrap();
+        let by_name = get_room(&db, "lookup-test").await.unwrap();
         assert_eq!(by_name.id, room.id);
 
-        let not_found = get_room(&pool, "nonexistent").await;
+        let not_found = get_room(&db, "nonexistent").await;
         assert!(matches!(not_found, Err(NousError::NotFound(_))));
     }
 
     #[tokio::test]
     async fn test_delete_room_soft_and_hard() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
-        let room = create_room(&pool, "soft-delete", None, None).await.unwrap();
-        delete_room(&pool, &room.id, false).await.unwrap();
+        let room = create_room(&db, "soft-delete", None, None).await.unwrap();
+        delete_room(&db, &room.id, false).await.unwrap();
 
-        let fetched = get_room(&pool, &room.id).await.unwrap();
+        let fetched = get_room(&db, &room.id).await.unwrap();
         assert!(fetched.archived);
 
-        let room2 = create_room(&pool, "hard-delete", None, None).await.unwrap();
-        delete_room(&pool, &room2.id, true).await.unwrap();
+        let room2 = create_room(&db, "hard-delete", None, None).await.unwrap();
+        delete_room(&db, &room2.id, true).await.unwrap();
 
-        let not_found = get_room(&pool, &room2.id).await;
+        let not_found = get_room(&db, &room2.id).await;
         assert!(matches!(not_found, Err(NousError::NotFound(_))));
     }
 
     #[tokio::test]
     async fn test_create_duplicate_name_conflict() {
-        let (pool, _tmp) = setup().await;
+        let (db, _tmp) = setup().await;
 
-        create_room(&pool, "unique-name", None, None).await.unwrap();
-        let duplicate = create_room(&pool, "unique-name", None, None).await;
+        create_room(&db, "unique-name", None, None).await.unwrap();
+        let duplicate = create_room(&db, "unique-name", None, None).await;
 
         assert!(matches!(duplicate, Err(NousError::Conflict(_))));
     }

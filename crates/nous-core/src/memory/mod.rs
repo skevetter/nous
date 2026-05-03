@@ -4,12 +4,16 @@ pub mod embed;
 pub mod rerank;
 pub mod vector_store;
 
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::db::VecPool;
+use crate::entities::{
+    memories as mem_entity, memory_access_log as access_entity,
+    memory_relations as rel_entity, memory_sessions as session_entity,
+};
 use crate::error::NousError;
 
 pub use chunk::{Chunk, Chunker};
@@ -177,21 +181,39 @@ pub struct Memory {
 }
 
 impl Memory {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+    fn from_model(m: mem_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            workspace_id: m.workspace_id,
+            agent_id: m.agent_id,
+            title: m.title,
+            content: m.content,
+            memory_type: m.memory_type,
+            importance: m.importance,
+            topic_key: m.topic_key,
+            valid_from: m.valid_from,
+            valid_until: m.valid_until,
+            archived: m.archived,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+
+    fn from_query_result(row: &sea_orm::QueryResult) -> Result<Self, sea_orm::DbErr> {
         Ok(Self {
-            id: row.try_get("id")?,
-            workspace_id: row.try_get("workspace_id")?,
-            agent_id: row.try_get("agent_id")?,
-            title: row.try_get("title")?,
-            content: row.try_get("content")?,
-            memory_type: row.try_get("memory_type")?,
-            importance: row.try_get("importance")?,
-            topic_key: row.try_get("topic_key")?,
-            valid_from: row.try_get("valid_from")?,
-            valid_until: row.try_get("valid_until")?,
-            archived: row.try_get::<i32, _>("archived")? != 0,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
+            id: row.try_get_by("id")?,
+            workspace_id: row.try_get_by("workspace_id")?,
+            agent_id: row.try_get_by("agent_id")?,
+            title: row.try_get_by("title")?,
+            content: row.try_get_by("content")?,
+            memory_type: row.try_get_by("memory_type")?,
+            importance: row.try_get_by("importance")?,
+            topic_key: row.try_get_by("topic_key")?,
+            valid_from: row.try_get_by("valid_from")?,
+            valid_until: row.try_get_by("valid_until")?,
+            archived: row.try_get_by("archived")?,
+            created_at: row.try_get_by("created_at")?,
+            updated_at: row.try_get_by("updated_at")?,
         })
     }
 }
@@ -206,14 +228,14 @@ pub struct MemoryRelation {
 }
 
 impl MemoryRelation {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            source_id: row.try_get("source_id")?,
-            target_id: row.try_get("target_id")?,
-            relation_type: row.try_get("relation_type")?,
-            created_at: row.try_get("created_at")?,
-        })
+    fn from_model(m: rel_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            source_id: m.source_id,
+            target_id: m.target_id,
+            relation_type: m.relation_type,
+            created_at: m.created_at,
+        }
     }
 }
 
@@ -279,7 +301,7 @@ pub struct RelateRequest {
 
 // --- Operations ---
 
-pub async fn save_memory(pool: &SqlitePool, req: SaveMemoryRequest) -> Result<Memory, NousError> {
+pub async fn save_memory(db: &DatabaseConnection, req: SaveMemoryRequest) -> Result<Memory, NousError> {
     if req.title.trim().is_empty() {
         return Err(NousError::Validation("memory title cannot be empty".into()));
     }
@@ -292,20 +314,18 @@ pub async fn save_memory(pool: &SqlitePool, req: SaveMemoryRequest) -> Result<Me
     let workspace_id = req.workspace_id.unwrap_or_else(|| "default".to_string());
 
     if let Some(ref topic_key) = req.topic_key {
-        let existing = sqlx::query(
-            "SELECT id FROM memories WHERE topic_key = ? AND workspace_id = ? AND archived = 0",
-        )
-        .bind(topic_key)
-        .bind(&workspace_id)
-        .fetch_optional(pool)
-        .await?;
+        let existing = mem_entity::Entity::find()
+            .filter(mem_entity::Column::TopicKey.eq(topic_key.as_str()))
+            .filter(mem_entity::Column::WorkspaceId.eq(workspace_id.as_str()))
+            .filter(mem_entity::Column::Archived.eq(false))
+            .one(db)
+            .await?;
 
         if let Some(row) = existing {
-            let existing_id: String = row.try_get("id").map_err(NousError::Sqlite)?;
             return update_memory(
-                pool,
+                db,
                 UpdateMemoryRequest {
-                    id: existing_id,
+                    id: row.id,
                     title: Some(req.title),
                     content: Some(req.content),
                     importance: req.importance,
@@ -322,55 +342,53 @@ pub async fn save_memory(pool: &SqlitePool, req: SaveMemoryRequest) -> Result<Me
     let id = Uuid::now_v7().to_string();
     let importance = req.importance.unwrap_or(Importance::Moderate);
 
-    sqlx::query(
-        "INSERT INTO memories (id, workspace_id, agent_id, title, content, memory_type, importance, topic_key, valid_from, valid_until) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&workspace_id)
-    .bind(&req.agent_id)
-    .bind(req.title.trim())
-    .bind(req.content.trim())
-    .bind(req.memory_type.as_str())
-    .bind(importance.as_str())
-    .bind(&req.topic_key)
-    .bind(&req.valid_from)
-    .bind(&req.valid_until)
-    .execute(pool)
-    .await?;
+    let model = mem_entity::ActiveModel {
+        id: Set(id.clone()),
+        workspace_id: Set(workspace_id),
+        agent_id: Set(req.agent_id),
+        title: Set(req.title.trim().to_string()),
+        content: Set(req.content.trim().to_string()),
+        memory_type: Set(req.memory_type.as_str().to_string()),
+        importance: Set(importance.as_str().to_string()),
+        topic_key: Set(req.topic_key),
+        valid_from: Set(req.valid_from),
+        valid_until: Set(req.valid_until),
+        archived: Set(false),
+        created_at: Set(String::new()),
+        updated_at: Set(String::new()),
+        embedding: Set(None),
+        session_id: Set(None),
+    };
 
-    get_memory_by_id(pool, &id).await
+    mem_entity::Entity::insert(model).exec(db).await?;
+
+    get_memory_by_id(db, &id).await
 }
 
-pub async fn get_memory_by_id(pool: &SqlitePool, id: &str) -> Result<Memory, NousError> {
-    let row = sqlx::query(
-        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
-         topic_key, valid_from, valid_until, archived, created_at, updated_at \
-         FROM memories WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+pub async fn get_memory_by_id(db: &DatabaseConnection, id: &str) -> Result<Memory, NousError> {
+    let model = mem_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("memory '{id}' not found")))?;
-    Memory::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("memory '{id}' not found")))?;
+    Ok(Memory::from_model(model))
 }
 
 pub async fn update_memory(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: UpdateMemoryRequest,
 ) -> Result<Memory, NousError> {
-    let _existing = get_memory_by_id(pool, &req.id).await?;
+    let _existing = get_memory_by_id(db, &req.id).await?;
 
     let mut sets: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(ref title) = req.title {
         if title.trim().is_empty() {
             return Err(NousError::Validation("title cannot be empty".into()));
         }
         sets.push("title = ?".to_string());
-        binds.push(title.trim().to_string());
+        params.push(title.trim().to_string().into());
     }
 
     if let Some(ref content) = req.content {
@@ -378,52 +396,53 @@ pub async fn update_memory(
             return Err(NousError::Validation("content cannot be empty".into()));
         }
         sets.push("content = ?".to_string());
-        binds.push(content.trim().to_string());
+        params.push(content.trim().to_string().into());
     }
 
     if let Some(ref importance) = req.importance {
         sets.push("importance = ?".to_string());
-        binds.push(importance.as_str().to_string());
+        params.push(importance.as_str().to_string().into());
     }
 
     if let Some(ref topic_key) = req.topic_key {
         sets.push("topic_key = ?".to_string());
-        binds.push(topic_key.clone());
+        params.push(topic_key.clone().into());
     }
 
     if let Some(ref valid_from) = req.valid_from {
         sets.push("valid_from = ?".to_string());
-        binds.push(valid_from.clone());
+        params.push(valid_from.clone().into());
     }
 
     if let Some(ref valid_until) = req.valid_until {
         sets.push("valid_until = ?".to_string());
-        binds.push(valid_until.clone());
+        params.push(valid_until.clone().into());
     }
 
     if let Some(archived) = req.archived {
         sets.push("archived = ?".to_string());
-        binds.push(if archived { "1" } else { "0" }.to_string());
+        params.push(archived.into());
     }
 
     if sets.is_empty() {
-        return get_memory_by_id(pool, &req.id).await;
+        return get_memory_by_id(db, &req.id).await;
     }
 
     let sql = format!("UPDATE memories SET {} WHERE id = ?", sets.join(", "));
-    binds.push(req.id.clone());
+    params.push(req.id.clone().into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-    query.execute(pool).await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        &sql,
+        params,
+    ))
+    .await?;
 
-    get_memory_by_id(pool, &req.id).await
+    get_memory_by_id(db, &req.id).await
 }
 
 pub async fn search_memories(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: &SearchMemoryRequest,
 ) -> Result<Vec<Memory>, NousError> {
     if req.query.trim().is_empty() {
@@ -433,7 +452,10 @@ pub async fn search_memories(
     let limit = req.limit.unwrap_or(20).min(100);
 
     let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
+
+    let sanitized = sanitize_fts_query(&req.query);
+    params.push(sanitized.into());
 
     if !req.include_archived {
         conditions.push("m.archived = 0".to_string());
@@ -441,22 +463,22 @@ pub async fn search_memories(
 
     if let Some(ref ws) = req.workspace_id {
         conditions.push("m.workspace_id = ?".to_string());
-        binds.push(ws.clone());
+        params.push(ws.clone().into());
     }
 
     if let Some(ref agent) = req.agent_id {
         conditions.push("m.agent_id = ?".to_string());
-        binds.push(agent.clone());
+        params.push(agent.clone().into());
     }
 
     if let Some(ref mt) = req.memory_type {
         conditions.push("m.memory_type = ?".to_string());
-        binds.push(mt.as_str().to_string());
+        params.push(mt.as_str().to_string().into());
     }
 
     if let Some(ref imp) = req.importance {
         conditions.push("m.importance = ?".to_string());
-        binds.push(imp.as_str().to_string());
+        params.push(imp.as_str().to_string().into());
     }
 
     let where_clause = if conditions.is_empty() {
@@ -476,74 +498,58 @@ pub async fn search_memories(
         where_clause
     );
 
-    let sanitized = sanitize_fts_query(&req.query);
-    binds.insert(0, sanitized);
-    binds.push(limit.to_string());
+    params.push((limit as i32).into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            &sql,
+            params,
+        ))
+        .await?;
 
     rows.iter()
-        .map(Memory::from_row)
+        .map(Memory::from_query_result)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map_err(NousError::SeaOrm)
 }
 
 pub async fn get_context(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: &ContextRequest,
 ) -> Result<Vec<Memory>, NousError> {
     let limit = req.limit.unwrap_or(20).min(100);
 
-    let mut conditions: Vec<String> = vec!["archived = 0".to_string()];
-    let mut binds: Vec<String> = Vec::new();
+    let mut query = mem_entity::Entity::find()
+        .filter(mem_entity::Column::Archived.eq(false));
 
     if let Some(ref ws) = req.workspace_id {
-        conditions.push("workspace_id = ?".to_string());
-        binds.push(ws.clone());
+        query = query.filter(mem_entity::Column::WorkspaceId.eq(ws.as_str()));
     }
 
     if let Some(ref agent) = req.agent_id {
-        conditions.push("agent_id = ?".to_string());
-        binds.push(agent.clone());
+        query = query.filter(mem_entity::Column::AgentId.eq(agent.as_str()));
     }
 
     if let Some(ref topic) = req.topic_key {
-        conditions.push("topic_key = ?".to_string());
-        binds.push(topic.clone());
+        query = query.filter(mem_entity::Column::TopicKey.eq(topic.as_str()));
     }
 
-    let sql = format!(
-        "SELECT id, workspace_id, agent_id, title, content, memory_type, importance, \
-         topic_key, valid_from, valid_until, archived, created_at, updated_at \
-         FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?",
-        conditions.join(" AND ")
-    );
-    binds.push(limit.to_string());
+    let models = query
+        .order_by_desc(mem_entity::Column::CreatedAt)
+        .limit(limit as u64)
+        .all(db)
+        .await?;
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Memory::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(Memory::from_model).collect())
 }
 
 pub async fn relate_memories(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: &RelateRequest,
 ) -> Result<MemoryRelation, NousError> {
-    let _source = get_memory_by_id(pool, &req.source_id).await?;
-    let _target = get_memory_by_id(pool, &req.target_id).await?;
+    let _source = get_memory_by_id(db, &req.source_id).await?;
+    let _target = get_memory_by_id(db, &req.target_id).await?;
 
     if req.source_id == req.target_id {
         return Err(NousError::Validation(
@@ -553,84 +559,87 @@ pub async fn relate_memories(
 
     let id = Uuid::now_v7().to_string();
 
-    sqlx::query(
-        "INSERT INTO memory_relations (id, source_id, target_id, relation_type) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&req.source_id)
-    .bind(&req.target_id)
-    .bind(req.relation_type.as_str())
-    .execute(pool)
-    .await
-    .map_err(|e| match &e {
-        sqlx::Error::Database(db_err) if db_err.message().contains("UNIQUE") => {
-            NousError::Conflict("relation already exists".into())
+    let model = rel_entity::ActiveModel {
+        id: Set(id.clone()),
+        source_id: Set(req.source_id.clone()),
+        target_id: Set(req.target_id.clone()),
+        relation_type: Set(req.relation_type.as_str().to_string()),
+        created_at: Set(String::new()),
+    };
+
+    let result = rel_entity::Entity::insert(model).exec(db).await;
+    match result {
+        Ok(_) => {}
+        Err(ref e) if e.to_string().contains("2067") || e.to_string().contains("UNIQUE") => {
+            return Err(NousError::Conflict("relation already exists".into()));
         }
-        _ => NousError::Sqlite(e),
-    })?;
+        Err(e) => return Err(NousError::SeaOrm(e)),
+    }
 
     if req.relation_type == RelationType::Supersedes {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        sqlx::query("UPDATE memories SET valid_until = ? WHERE id = ? AND valid_until IS NULL")
-            .bind(&now)
-            .bind(&req.target_id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET valid_until = ? WHERE id = ? AND valid_until IS NULL",
+            [now.into(), req.target_id.clone().into()],
+        ))
+        .await?;
     }
 
-    get_relation_by_id(pool, &id).await
+    get_relation_by_id(db, &id).await
 }
 
-pub async fn get_relation_by_id(pool: &SqlitePool, id: &str) -> Result<MemoryRelation, NousError> {
-    let row = sqlx::query("SELECT * FROM memory_relations WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
+pub async fn get_relation_by_id(db: &DatabaseConnection, id: &str) -> Result<MemoryRelation, NousError> {
+    let model = rel_entity::Entity::find_by_id(id)
+        .one(db)
         .await?;
 
-    let row =
-        row.ok_or_else(|| NousError::NotFound(format!("memory relation '{id}' not found")))?;
-    MemoryRelation::from_row(&row).map_err(NousError::Sqlite)
+    let model =
+        model.ok_or_else(|| NousError::NotFound(format!("memory relation '{id}' not found")))?;
+    Ok(MemoryRelation::from_model(model))
 }
 
 pub async fn list_relations(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     memory_id: &str,
 ) -> Result<Vec<MemoryRelation>, NousError> {
-    let rows = sqlx::query(
-        "SELECT * FROM memory_relations WHERE source_id = ? OR target_id = ? ORDER BY created_at DESC",
-    )
-    .bind(memory_id)
-    .bind(memory_id)
-    .fetch_all(pool)
-    .await?;
+    use sea_orm::Condition;
 
-    rows.iter()
-        .map(MemoryRelation::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    let models = rel_entity::Entity::find()
+        .filter(
+            Condition::any()
+                .add(rel_entity::Column::SourceId.eq(memory_id))
+                .add(rel_entity::Column::TargetId.eq(memory_id)),
+        )
+        .order_by_desc(rel_entity::Column::CreatedAt)
+        .all(db)
+        .await?;
+
+    Ok(models.into_iter().map(MemoryRelation::from_model).collect())
 }
 
 pub async fn log_access(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     memory_id: &str,
     access_type: &str,
     session_id: Option<&str>,
 ) -> Result<(), NousError> {
-    sqlx::query(
-        "INSERT INTO memory_access_log (memory_id, access_type, session_id) VALUES (?, ?, ?)",
-    )
-    .bind(memory_id)
-    .bind(access_type)
-    .bind(session_id)
-    .execute(pool)
-    .await?;
+    let model = access_entity::ActiveModel {
+        id: Set(0), // auto-increment
+        memory_id: Set(memory_id.to_string()),
+        access_type: Set(access_type.to_string()),
+        session_id: Set(session_id.map(String::from)),
+        accessed_at: Set(String::new()),
+    };
+
+    access_entity::Entity::insert(model).exec(db).await?;
     Ok(())
 }
 
 pub async fn run_importance_decay(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     high_to_moderate_days: u32,
     moderate_to_low_days: u32,
 ) -> Result<u64, NousError> {
@@ -642,75 +651,80 @@ pub async fn run_importance_decay(
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
 
-    // Run moderate→low first so that high→moderate in the same sweep
+    // Run moderate->low first so that high->moderate in the same sweep
     // doesn't immediately cascade to low in one call.
-    let r1 = sqlx::query(
-        "UPDATE memories SET importance = 'low' \
-         WHERE importance = 'moderate' AND archived = 0 \
-         AND id NOT IN (\
-             SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
-         )",
-    )
-    .bind(&moderate_cutoff)
-    .execute(pool)
-    .await?;
+    let r1 = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET importance = 'low' \
+             WHERE importance = 'moderate' AND archived = 0 \
+             AND id NOT IN (\
+                 SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
+             )",
+            [moderate_cutoff.into()],
+        ))
+        .await?;
 
-    let r2 = sqlx::query(
-        "UPDATE memories SET importance = 'moderate' \
-         WHERE importance = 'high' AND archived = 0 \
-         AND id NOT IN (\
-             SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
-         )",
-    )
-    .bind(&high_cutoff)
-    .execute(pool)
-    .await?;
+    let r2 = db
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET importance = 'moderate' \
+             WHERE importance = 'high' AND archived = 0 \
+             AND id NOT IN (\
+                 SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
+             )",
+            [high_cutoff.into()],
+        ))
+        .await?;
 
     Ok(r1.rows_affected() + r2.rows_affected())
 }
 
 pub async fn grant_workspace_access(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     workspace_id: &str,
 ) -> Result<(), NousError> {
-    sqlx::query(
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "INSERT OR IGNORE INTO agent_workspace_access (agent_id, workspace_id) VALUES (?, ?)",
-    )
-    .bind(agent_id)
-    .bind(workspace_id)
-    .execute(pool)
+        [agent_id.into(), workspace_id.into()],
+    ))
     .await?;
     Ok(())
 }
 
 pub async fn revoke_workspace_access(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     workspace_id: &str,
 ) -> Result<(), NousError> {
-    sqlx::query("DELETE FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?")
-        .bind(agent_id)
-        .bind(workspace_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "DELETE FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?",
+        [agent_id.into(), workspace_id.into()],
+    ))
+    .await?;
     Ok(())
 }
 
 pub async fn check_workspace_access(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
     workspace_id: &str,
 ) -> Result<bool, NousError> {
-    let row = sqlx::query(
-        "SELECT EXISTS(SELECT 1 FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?) as has_access",
-    )
-    .bind(agent_id)
-    .bind(workspace_id)
-    .fetch_one(pool)
-    .await?;
+    let row = db
+        .query_one(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT EXISTS(SELECT 1 FROM agent_workspace_access WHERE agent_id = ? AND workspace_id = ?) as has_access",
+            [agent_id.into(), workspace_id.into()],
+        ))
+        .await?;
 
-    Ok(row.try_get::<bool, _>("has_access").unwrap_or(false))
+    match row {
+        Some(r) => Ok(r.try_get_by::<bool, _>("has_access").unwrap_or(false)),
+        None => Ok(false),
+    }
 }
 
 fn sanitize_fts_query(query: &str) -> String {
@@ -733,21 +747,22 @@ fn sanitize_fts_query(query: &str) -> String {
 /// Store a pre-computed embedding vector for a memory.
 /// Writes to the vec0 virtual table for KNN search and also updates the legacy BLOB column.
 pub async fn store_embedding(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     vec_pool: &crate::db::VecPool,
     memory_id: &str,
     embedding: &[f32],
 ) -> Result<(), NousError> {
-    let _ = get_memory_by_id(pool, memory_id).await?;
+    let _ = get_memory_by_id(db, memory_id).await?;
 
     let bytes = embedding_to_bytes(embedding);
 
     // Update legacy BLOB column (backwards compat)
-    sqlx::query("UPDATE memories SET embedding = ? WHERE id = ?")
-        .bind(&bytes)
-        .bind(memory_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE memories SET embedding = ? WHERE id = ?",
+        [bytes.clone().into(), memory_id.into()],
+    ))
+    .await?;
 
     // Upsert into vec0 table
     let conn = vec_pool
@@ -770,7 +785,7 @@ pub async fn store_embedding(
 /// Search memories by KNN using sqlite-vec's vec0 virtual table.
 /// Returns top-K memories with similarity scores, ordered by distance ascending.
 pub async fn search_similar(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     vec_pool: &crate::db::VecPool,
     query_embedding: &[f32],
     limit: u32,
@@ -814,7 +829,7 @@ pub async fn search_similar(
         return Ok(Vec::new());
     }
 
-    // Fetch full Memory structs from FTS pool, filtering by workspace if needed
+    // Fetch full Memory structs from FTS db, filtering by workspace if needed
     let mut results: Vec<SimilarMemory> = Vec::new();
     for (memory_id, distance) in &memory_ids_and_distances {
         // Convert distance to similarity score (1 - normalized_distance for cosine)
@@ -823,7 +838,7 @@ pub async fn search_similar(
             continue;
         }
 
-        let memory = match get_memory_by_id(pool, memory_id).await {
+        let memory = match get_memory_by_id(db, memory_id).await {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -890,53 +905,57 @@ pub struct MemorySession {
 }
 
 impl MemorySession {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            agent_id: row.try_get("agent_id")?,
-            project: row.try_get("project")?,
-            started_at: row.try_get("started_at")?,
-            ended_at: row.try_get("ended_at")?,
-            summary: row.try_get("summary")?,
-        })
+    fn from_model(m: session_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            agent_id: m.agent_id,
+            project: m.project,
+            started_at: m.started_at,
+            ended_at: m.ended_at,
+            summary: m.summary,
+        }
     }
 }
 
 pub async fn session_start(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: Option<&str>,
     project: Option<&str>,
 ) -> Result<MemorySession, NousError> {
     let id = Uuid::now_v7().to_string();
 
-    sqlx::query("INSERT INTO memory_sessions (id, agent_id, project) VALUES (?, ?, ?)")
-        .bind(&id)
-        .bind(agent_id)
-        .bind(project)
-        .execute(pool)
-        .await?;
+    let model = session_entity::ActiveModel {
+        id: Set(id.clone()),
+        agent_id: Set(agent_id.map(String::from)),
+        project: Set(project.map(String::from)),
+        started_at: Set(String::new()),
+        ended_at: Set(None),
+        summary: Set(None),
+    };
 
-    get_session_by_id(pool, &id).await
+    session_entity::Entity::insert(model).exec(db).await?;
+
+    get_session_by_id(db, &id).await
 }
 
-pub async fn session_end(pool: &SqlitePool, session_id: &str) -> Result<MemorySession, NousError> {
-    let session = get_session_by_id(pool, session_id).await?;
+pub async fn session_end(db: &DatabaseConnection, session_id: &str) -> Result<MemorySession, NousError> {
+    let session = get_session_by_id(db, session_id).await?;
     if session.ended_at.is_some() {
         return Err(NousError::Validation("session already ended".into()));
     }
 
-    sqlx::query(
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "UPDATE memory_sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    )
-    .bind(session_id)
-    .execute(pool)
+        [session_id.into()],
+    ))
     .await?;
 
-    get_session_by_id(pool, session_id).await
+    get_session_by_id(db, session_id).await
 }
 
 pub async fn session_summary(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     session_id: &str,
     summary: &str,
     agent_id: Option<&str>,
@@ -946,16 +965,17 @@ pub async fn session_summary(
         return Err(NousError::Validation("summary cannot be empty".into()));
     }
 
-    let _session = get_session_by_id(pool, session_id).await?;
+    let _session = get_session_by_id(db, session_id).await?;
 
-    sqlx::query("UPDATE memory_sessions SET summary = ? WHERE id = ?")
-        .bind(summary.trim())
-        .bind(session_id)
-        .execute(pool)
-        .await?;
+    db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE memory_sessions SET summary = ? WHERE id = ?",
+        [summary.trim().into(), session_id.into()],
+    ))
+    .await?;
 
     save_memory(
-        pool,
+        db,
         SaveMemoryRequest {
             workspace_id: workspace_id.map(String::from),
             agent_id: agent_id.map(String::from),
@@ -970,11 +990,11 @@ pub async fn session_summary(
     )
     .await?;
 
-    get_session_by_id(pool, session_id).await
+    get_session_by_id(db, session_id).await
 }
 
 pub async fn save_prompt(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     session_id: Option<&str>,
     agent_id: Option<&str>,
     workspace_id: Option<&str>,
@@ -985,11 +1005,11 @@ pub async fn save_prompt(
     }
 
     if let Some(sid) = session_id {
-        let _session = get_session_by_id(pool, sid).await?;
+        let _session = get_session_by_id(db, sid).await?;
     }
 
     let mem = save_memory(
-        pool,
+        db,
         SaveMemoryRequest {
             workspace_id: workspace_id.map(String::from),
             agent_id: agent_id.map(String::from),
@@ -1005,14 +1025,15 @@ pub async fn save_prompt(
     .await?;
 
     if let Some(sid) = session_id {
-        sqlx::query("UPDATE memories SET session_id = ? WHERE id = ?")
-            .bind(sid)
-            .bind(&mem.id)
-            .execute(pool)
-            .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET session_id = ? WHERE id = ?",
+            [sid.into(), mem.id.clone().into()],
+        ))
+        .await?;
     }
 
-    get_memory_by_id(pool, &mem.id).await
+    get_memory_by_id(db, &mem.id).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1048,8 +1069,8 @@ pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
                     .unwrap_or_else(|| "unknown".into());
                 return Some(DetectedProject {
                     name,
-                    project_type: project_type.to_string(),
-                    path: dir.to_string_lossy().to_string(),
+                    project_type: String::from(*project_type),
+                    path: dir.to_string_lossy().into_owned(),
                 });
             }
         }
@@ -1058,14 +1079,13 @@ pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
     None
 }
 
-async fn get_session_by_id(pool: &SqlitePool, id: &str) -> Result<MemorySession, NousError> {
-    let row = sqlx::query("SELECT * FROM memory_sessions WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
+async fn get_session_by_id(db: &DatabaseConnection, id: &str) -> Result<MemorySession, NousError> {
+    let model = session_entity::Entity::find_by_id(id)
+        .one(db)
         .await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("memory session '{id}' not found")))?;
-    MemorySession::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("memory session '{id}' not found")))?;
+    Ok(MemorySession::from_model(model))
 }
 
 fn truncate_title(s: &str) -> String {
@@ -1130,14 +1150,14 @@ pub fn store_chunk_embedding(
 }
 
 pub async fn search_hybrid(
-    fts_pool: &SqlitePool,
+    fts_db: &DatabaseConnection,
     vec_pool: &VecPool,
     query: &str,
     query_embedding: &[f32],
     limit: usize,
 ) -> Result<Vec<SimilarMemory>, NousError> {
     search_hybrid_filtered(
-        fts_pool,
+        fts_db,
         vec_pool,
         query,
         query_embedding,
@@ -1151,7 +1171,7 @@ pub async fn search_hybrid(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search_hybrid_filtered(
-    fts_pool: &SqlitePool,
+    fts_db: &DatabaseConnection,
     vec_pool: &VecPool,
     query: &str,
     query_embedding: &[f32],
@@ -1165,7 +1185,7 @@ pub async fn search_hybrid_filtered(
 
     // FTS search with filters
     let fts_memories = search_memories(
-        fts_pool,
+        fts_db,
         &SearchMemoryRequest {
             query: query.to_string(),
             limit: Some(fts_limit),
@@ -1187,7 +1207,7 @@ pub async fn search_hybrid_filtered(
 
     // Vector search (workspace_id supported natively; agent_id/memory_type filtered post-KNN)
     let vec_results = search_similar(
-        fts_pool,
+        fts_db,
         vec_pool,
         query_embedding,
         vec_limit,
@@ -1290,19 +1310,19 @@ mod tests {
     use crate::db::DbPools;
     use tempfile::TempDir;
 
-    async fn setup() -> (SqlitePool, crate::db::VecPool, TempDir) {
+    async fn setup() -> (DatabaseConnection, crate::db::VecPool, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
+        pools.run_migrations().await.unwrap();
         (pools.fts, pools.vec, tmp)
     }
 
     #[tokio::test]
     async fn save_and_get_memory() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: Some("agent-1".into()),
@@ -1325,17 +1345,17 @@ mod tests {
         assert_eq!(mem.agent_id.as_deref(), Some("agent-1"));
         assert!(!mem.archived);
 
-        let fetched = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        let fetched = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(fetched.id, mem.id);
         assert_eq!(fetched.content, "This is a test memory content");
     }
 
     #[tokio::test]
     async fn save_empty_title_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let err = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1356,10 +1376,10 @@ mod tests {
 
     #[tokio::test]
     async fn topic_key_upsert() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1376,7 +1396,7 @@ mod tests {
         .unwrap();
 
         let m2 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1399,10 +1419,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_memory_fields() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1419,7 +1439,7 @@ mod tests {
         .unwrap();
 
         let updated = update_memory(
-            &pool,
+            &db,
             UpdateMemoryRequest {
                 id: mem.id.clone(),
                 title: Some("Updated title".into()),
@@ -1441,10 +1461,10 @@ mod tests {
 
     #[tokio::test]
     async fn search_fts() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1461,7 +1481,7 @@ mod tests {
         .unwrap();
 
         save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1478,7 +1498,7 @@ mod tests {
         .unwrap();
 
         let results = search_memories(
-            &pool,
+            &db,
             &SearchMemoryRequest {
                 query: "migration".into(),
                 ..Default::default()
@@ -1493,10 +1513,10 @@ mod tests {
 
     #[tokio::test]
     async fn search_with_filters() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: Some("ws-1".into()),
                 agent_id: None,
@@ -1513,7 +1533,7 @@ mod tests {
         .unwrap();
 
         save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: Some("ws-2".into()),
                 agent_id: None,
@@ -1530,7 +1550,7 @@ mod tests {
         .unwrap();
 
         let results = search_memories(
-            &pool,
+            &db,
             &SearchMemoryRequest {
                 query: "decision".into(),
                 workspace_id: Some("ws-1".into()),
@@ -1546,11 +1566,11 @@ mod tests {
 
     #[tokio::test]
     async fn get_context_returns_recent() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         for i in 1..=5 {
             save_memory(
-                &pool,
+                &db,
                 SaveMemoryRequest {
                     workspace_id: Some("ws-ctx".into()),
                     agent_id: None,
@@ -1568,7 +1588,7 @@ mod tests {
         }
 
         let results = get_context(
-            &pool,
+            &db,
             &ContextRequest {
                 workspace_id: Some("ws-ctx".into()),
                 limit: Some(3),
@@ -1584,10 +1604,10 @@ mod tests {
 
     #[tokio::test]
     async fn relate_memories_creates_relation() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1604,7 +1624,7 @@ mod tests {
         .unwrap();
 
         let m2 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1621,7 +1641,7 @@ mod tests {
         .unwrap();
 
         let rel = relate_memories(
-            &pool,
+            &db,
             &RelateRequest {
                 source_id: m1.id.clone(),
                 target_id: m2.id.clone(),
@@ -1635,16 +1655,16 @@ mod tests {
         assert_eq!(rel.target_id, m2.id);
         assert_eq!(rel.relation_type, "related");
 
-        let rels = list_relations(&pool, &m1.id).await.unwrap();
+        let rels = list_relations(&db, &m1.id).await.unwrap();
         assert_eq!(rels.len(), 1);
     }
 
     #[tokio::test]
     async fn supersedes_sets_valid_until() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let old = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1661,7 +1681,7 @@ mod tests {
         .unwrap();
 
         let new = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1678,7 +1698,7 @@ mod tests {
         .unwrap();
 
         relate_memories(
-            &pool,
+            &db,
             &RelateRequest {
                 source_id: new.id.clone(),
                 target_id: old.id.clone(),
@@ -1688,16 +1708,16 @@ mod tests {
         .await
         .unwrap();
 
-        let old_refreshed = get_memory_by_id(&pool, &old.id).await.unwrap();
+        let old_refreshed = get_memory_by_id(&db, &old.id).await.unwrap();
         assert!(old_refreshed.valid_until.is_some());
     }
 
     #[tokio::test]
     async fn self_relation_rejected() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1714,7 +1734,7 @@ mod tests {
         .unwrap();
 
         let err = relate_memories(
-            &pool,
+            &db,
             &RelateRequest {
                 source_id: mem.id.clone(),
                 target_id: mem.id.clone(),
@@ -1729,10 +1749,10 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_relation_rejected() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let m1 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1749,7 +1769,7 @@ mod tests {
         .unwrap();
 
         let m2 = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1766,7 +1786,7 @@ mod tests {
         .unwrap();
 
         relate_memories(
-            &pool,
+            &db,
             &RelateRequest {
                 source_id: m1.id.clone(),
                 target_id: m2.id.clone(),
@@ -1777,7 +1797,7 @@ mod tests {
         .unwrap();
 
         let err = relate_memories(
-            &pool,
+            &db,
             &RelateRequest {
                 source_id: m1.id.clone(),
                 target_id: m2.id.clone(),
@@ -1792,10 +1812,10 @@ mod tests {
 
     #[tokio::test]
     async fn importance_decay() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1813,25 +1833,25 @@ mod tests {
 
         assert_eq!(mem.importance, "high");
 
-        let affected = run_importance_decay(&pool, 0, 0).await.unwrap();
+        let affected = run_importance_decay(&db, 0, 0).await.unwrap();
         assert!(affected > 0);
 
-        let refreshed = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        let refreshed = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(refreshed.importance, "moderate");
 
-        let affected2 = run_importance_decay(&pool, 0, 0).await.unwrap();
+        let affected2 = run_importance_decay(&db, 0, 0).await.unwrap();
         assert!(affected2 > 0);
 
-        let refreshed2 = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        let refreshed2 = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(refreshed2.importance, "low");
     }
 
     #[tokio::test]
     async fn access_log_prevents_decay() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1847,45 +1867,45 @@ mod tests {
         .await
         .unwrap();
 
-        log_access(&pool, &mem.id, "recall", None).await.unwrap();
+        log_access(&db, &mem.id, "recall", None).await.unwrap();
 
-        run_importance_decay(&pool, 30, 60).await.unwrap();
+        run_importance_decay(&db, 30, 60).await.unwrap();
 
-        let refreshed = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        let refreshed = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(refreshed.importance, "high");
     }
 
     #[tokio::test]
     async fn workspace_access_crud() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        assert!(!check_workspace_access(&pool, "agent-1", "ws-1")
+        assert!(!check_workspace_access(&db, "agent-1", "ws-1")
             .await
             .unwrap());
 
-        grant_workspace_access(&pool, "agent-1", "ws-1")
+        grant_workspace_access(&db, "agent-1", "ws-1")
             .await
             .unwrap();
 
-        assert!(check_workspace_access(&pool, "agent-1", "ws-1")
+        assert!(check_workspace_access(&db, "agent-1", "ws-1")
             .await
             .unwrap());
 
-        revoke_workspace_access(&pool, "agent-1", "ws-1")
+        revoke_workspace_access(&db, "agent-1", "ws-1")
             .await
             .unwrap();
 
-        assert!(!check_workspace_access(&pool, "agent-1", "ws-1")
+        assert!(!check_workspace_access(&db, "agent-1", "ws-1")
             .await
             .unwrap());
     }
 
     #[tokio::test]
     async fn search_archived_excluded_by_default() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -1902,7 +1922,7 @@ mod tests {
         .unwrap();
 
         update_memory(
-            &pool,
+            &db,
             UpdateMemoryRequest {
                 id: mem.id.clone(),
                 title: None,
@@ -1918,7 +1938,7 @@ mod tests {
         .unwrap();
 
         let results = search_memories(
-            &pool,
+            &db,
             &SearchMemoryRequest {
                 query: "archived".into(),
                 ..Default::default()
@@ -1929,7 +1949,7 @@ mod tests {
         assert_eq!(results.len(), 0);
 
         let results = search_memories(
-            &pool,
+            &db,
             &SearchMemoryRequest {
                 query: "archived".into(),
                 include_archived: true,
@@ -1984,10 +2004,10 @@ mod tests {
     #[tokio::test]
     async fn store_and_search_embedding() {
         use crate::db::EMBEDDING_DIMENSION;
-        let (pool, vec_pool, _tmp) = setup().await;
+        let (db, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -2005,14 +2025,14 @@ mod tests {
 
         let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
         embedding[0] = 1.0;
-        store_embedding(&pool, &vec_pool, &mem.id, &embedding)
+        store_embedding(&db, &vec_pool, &mem.id, &embedding)
             .await
             .unwrap();
 
         let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
         query[0] = 0.9;
         query[1] = 0.1;
-        let results = search_similar(&pool, &vec_pool, &query, 10, None, None)
+        let results = search_similar(&db, &vec_pool, &query, 10, None, None)
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -2023,10 +2043,10 @@ mod tests {
     #[tokio::test]
     async fn search_similar_respects_threshold() {
         use crate::db::EMBEDDING_DIMENSION;
-        let (pool, vec_pool, _tmp) = setup().await;
+        let (db, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: None,
@@ -2044,14 +2064,14 @@ mod tests {
 
         let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
         embedding[0] = 1.0;
-        store_embedding(&pool, &vec_pool, &mem.id, &embedding)
+        store_embedding(&db, &vec_pool, &mem.id, &embedding)
             .await
             .unwrap();
 
         // Orthogonal vector — high threshold should filter it out
         let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
         query[1] = 1.0;
-        let results = search_similar(&pool, &vec_pool, &query, 10, None, Some(0.9))
+        let results = search_similar(&db, &vec_pool, &query, 10, None, Some(0.9))
             .await
             .unwrap();
         assert_eq!(results.len(), 0);
@@ -2082,9 +2102,9 @@ mod tests {
 
     #[tokio::test]
     async fn session_start_creates_session() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, Some("agent-1"), Some("my-project"))
+        let session = session_start(&db, Some("agent-1"), Some("my-project"))
             .await
             .unwrap();
 
@@ -2098,9 +2118,9 @@ mod tests {
 
     #[tokio::test]
     async fn session_start_without_optional_fields() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, None, None).await.unwrap();
+        let session = session_start(&db, None, None).await.unwrap();
 
         assert!(!session.id.is_empty());
         assert!(session.agent_id.is_none());
@@ -2109,32 +2129,32 @@ mod tests {
 
     #[tokio::test]
     async fn session_end_sets_ended_at() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, None, None).await.unwrap();
+        let session = session_start(&db, None, None).await.unwrap();
         assert!(session.ended_at.is_none());
 
-        let ended = session_end(&pool, &session.id).await.unwrap();
+        let ended = session_end(&db, &session.id).await.unwrap();
         assert!(ended.ended_at.is_some());
         assert_eq!(ended.id, session.id);
     }
 
     #[tokio::test]
     async fn session_end_already_ended_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, None, None).await.unwrap();
-        session_end(&pool, &session.id).await.unwrap();
+        let session = session_start(&db, None, None).await.unwrap();
+        session_end(&db, &session.id).await.unwrap();
 
-        let err = session_end(&pool, &session.id).await.unwrap_err();
+        let err = session_end(&db, &session.id).await.unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
     }
 
     #[tokio::test]
     async fn session_end_nonexistent_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = session_end(&pool, "nonexistent-session-id")
+        let err = session_end(&db, "nonexistent-session-id")
             .await
             .unwrap_err();
         assert!(matches!(err, NousError::NotFound(_)));
@@ -2142,14 +2162,14 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_saves_summary_and_memory() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, Some("agent-1"), Some("proj"))
+        let session = session_start(&db, Some("agent-1"), Some("proj"))
             .await
             .unwrap();
 
         let updated = session_summary(
-            &pool,
+            &db,
             &session.id,
             "Completed migration refactoring",
             Some("agent-1"),
@@ -2166,7 +2186,7 @@ mod tests {
 
         // Verify a session_summary memory was also created
         let results = search_memories(
-            &pool,
+            &db,
             &SearchMemoryRequest {
                 query: "migration refactoring".into(),
                 ..Default::default()
@@ -2180,11 +2200,11 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_empty_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, None, None).await.unwrap();
+        let session = session_start(&db, None, None).await.unwrap();
 
-        let err = session_summary(&pool, &session.id, "   ", None, None)
+        let err = session_summary(&db, &session.id, "   ", None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
@@ -2192,9 +2212,9 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_nonexistent_session_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = session_summary(&pool, "nonexistent-id", "some summary", None, None)
+        let err = session_summary(&db, "nonexistent-id", "some summary", None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, NousError::NotFound(_)));
@@ -2202,10 +2222,10 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_creates_memory() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
         let mem = save_prompt(
-            &pool,
+            &db,
             None,
             Some("agent-1"),
             Some("ws-1"),
@@ -2222,12 +2242,12 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_with_session_links_memory() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let session = session_start(&pool, Some("agent-1"), None).await.unwrap();
+        let session = session_start(&db, Some("agent-1"), None).await.unwrap();
 
         let mem = save_prompt(
-            &pool,
+            &db,
             Some(&session.id),
             Some("agent-1"),
             None,
@@ -2242,9 +2262,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_empty_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&pool, None, None, None, "   ")
+        let err = save_prompt(&db, None, None, None, "   ")
             .await
             .unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
@@ -2252,9 +2272,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_prompt_nonexistent_session_fails() {
-        let (pool, _vec_pool, _tmp) = setup().await;
+        let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&pool, Some("bad-session"), None, None, "a prompt")
+        let err = save_prompt(&db, Some("bad-session"), None, None, "a prompt")
             .await
             .unwrap_err();
         assert!(matches!(err, NousError::NotFound(_)));
@@ -2284,10 +2304,10 @@ mod tests {
         use crate::memory::embed::MockEmbedder;
         use crate::memory::Embedder;
 
-        let (pool, vec_pool, _tmp) = setup().await;
+        let (db, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
-            &pool,
+            &db,
             SaveMemoryRequest {
                 workspace_id: None,
                 agent_id: Some("test-agent".into()),
@@ -2315,11 +2335,11 @@ mod tests {
         }
 
         let full_embeddings = embedder.embed(&[&mem.content]).unwrap();
-        store_embedding(&pool, &vec_pool, &mem.id, &full_embeddings[0])
+        store_embedding(&db, &vec_pool, &mem.id, &full_embeddings[0])
             .await
             .unwrap();
 
-        let fetched = get_memory_by_id(&pool, &mem.id).await.unwrap();
+        let fetched = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(fetched.id, mem.id);
 
         let conn = vec_pool.lock().unwrap();

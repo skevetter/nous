@@ -1,5 +1,5 @@
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 use crate::error::NousError;
 
@@ -182,12 +182,12 @@ pub struct SearchItemsRequest {
 // --- Operations (delegate to resources module) ---
 
 pub async fn register_item(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: RegisterItemRequest,
 ) -> Result<InventoryItem, NousError> {
     let resource_type: crate::resources::ResourceType = req.artifact_type.as_str().parse()?;
     let resource = crate::resources::register_resource(
-        pool,
+        db,
         crate::resources::RegisterResourceRequest {
             name: req.name,
             resource_type,
@@ -203,13 +203,13 @@ pub async fn register_item(
     Ok(InventoryItem::from_resource(&resource))
 }
 
-pub async fn get_item_by_id(pool: &SqlitePool, id: &str) -> Result<InventoryItem, NousError> {
-    let resource = crate::resources::get_resource_by_id(pool, id).await?;
+pub async fn get_item_by_id(db: &DatabaseConnection, id: &str) -> Result<InventoryItem, NousError> {
+    let resource = crate::resources::get_resource_by_id(db, id).await?;
     Ok(InventoryItem::from_resource(&resource))
 }
 
 pub async fn list_items(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: &ListItemsFilter,
 ) -> Result<Vec<InventoryItem>, NousError> {
     let resource_type = filter
@@ -222,7 +222,7 @@ pub async fn list_items(
         .transpose()?;
 
     let resources = crate::resources::list_resources(
-        pool,
+        db,
         &crate::resources::ListResourcesFilter {
             resource_type,
             status,
@@ -239,7 +239,7 @@ pub async fn list_items(
 }
 
 pub async fn update_item(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: UpdateItemRequest,
 ) -> Result<InventoryItem, NousError> {
     let status = req
@@ -248,7 +248,7 @@ pub async fn update_item(
         .transpose()?;
 
     let resource = crate::resources::update_resource(
-        pool,
+        db,
         crate::resources::UpdateResourceRequest {
             id: req.id,
             name: req.name,
@@ -263,17 +263,17 @@ pub async fn update_item(
     Ok(InventoryItem::from_resource(&resource))
 }
 
-pub async fn archive_item(pool: &SqlitePool, id: &str) -> Result<InventoryItem, NousError> {
-    let resource = crate::resources::archive_resource(pool, id).await?;
+pub async fn archive_item(db: &DatabaseConnection, id: &str) -> Result<InventoryItem, NousError> {
+    let resource = crate::resources::archive_resource(db, id).await?;
     Ok(InventoryItem::from_resource(&resource))
 }
 
-pub async fn deregister_item(pool: &SqlitePool, id: &str, hard: bool) -> Result<(), NousError> {
-    crate::resources::deregister_resource(pool, id, hard).await
+pub async fn deregister_item(db: &DatabaseConnection, id: &str, hard: bool) -> Result<(), NousError> {
+    crate::resources::deregister_resource(db, id, hard).await
 }
 
 pub async fn search_by_tags(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: &SearchItemsRequest,
 ) -> Result<Vec<InventoryItem>, NousError> {
     let resource_type = req
@@ -286,7 +286,7 @@ pub async fn search_by_tags(
         .transpose()?;
 
     let resources = crate::resources::search_by_tags(
-        pool,
+        db,
         &crate::resources::SearchResourcesRequest {
             tags: req.tags.clone(),
             resource_type,
@@ -300,19 +300,19 @@ pub async fn search_by_tags(
 }
 
 pub async fn search_fts(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     query_str: &str,
     namespace: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<InventoryItem>, NousError> {
-    let resources = crate::resources::search_fts(pool, query_str, namespace, limit).await?;
+    let resources = crate::resources::search_fts(db, query_str, namespace, limit).await?;
     Ok(resources.iter().map(InventoryItem::from_resource).collect())
 }
 
 pub async fn transfer_ownership(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     from_agent_id: &str,
     to_agent_id: Option<&str>,
 ) -> Result<u64, NousError> {
-    crate::resources::transfer_ownership(pool, from_agent_id, to_agent_id).await
+    crate::resources::transfer_ownership(db, from_agent_id, to_agent_id).await
 }

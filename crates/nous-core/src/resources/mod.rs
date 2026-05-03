@@ -1,8 +1,9 @@
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
+use crate::entities::resources as res_entity;
 use crate::error::NousError;
 
 // --- Types ---
@@ -164,23 +165,23 @@ pub struct Resource {
 }
 
 impl Resource {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            resource_type: row.try_get("resource_type")?,
-            owner_agent_id: row.try_get("owner_agent_id")?,
-            namespace: row.try_get("namespace")?,
-            path: row.try_get("path")?,
-            status: row.try_get("status")?,
-            metadata: row.try_get("metadata")?,
-            tags: row.try_get("tags")?,
-            ownership_policy: row.try_get("ownership_policy")?,
-            last_seen_at: row.try_get("last_seen_at")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-            archived_at: row.try_get("archived_at")?,
-        })
+    fn from_model(m: res_entity::Model) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            resource_type: m.resource_type,
+            owner_agent_id: m.owner_agent_id,
+            namespace: m.namespace,
+            path: m.path,
+            status: m.status,
+            metadata: m.metadata,
+            tags: m.tags,
+            ownership_policy: m.ownership_policy,
+            last_seen_at: m.last_seen_at,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            archived_at: m.archived_at,
+        }
     }
 
     pub fn tags_vec(&self) -> Vec<String> {
@@ -237,7 +238,7 @@ pub struct SearchResourcesRequest {
 // --- Operations ---
 
 pub async fn register_resource(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: RegisterResourceRequest,
 ) -> Result<Resource, NousError> {
     if req.name.trim().is_empty() {
@@ -249,13 +250,15 @@ pub async fn register_resource(
     let namespace = req.namespace.unwrap_or_else(|| "default".to_string());
 
     if let Some(ref agent_id) = req.owner_agent_id {
-        let row = sqlx::query("SELECT namespace FROM agents WHERE id = ?")
-            .bind(agent_id)
-            .fetch_optional(pool)
-            .await?;
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT namespace FROM agents WHERE id = ?",
+            [agent_id.clone().into()],
+        );
+        let row = db.query_one(stmt).await?;
         let row =
             row.ok_or_else(|| NousError::NotFound(format!("owner agent '{agent_id}' not found")))?;
-        let agent_ns: String = row.try_get("namespace").map_err(NousError::Sqlite)?;
+        let agent_ns: String = row.try_get("", "namespace")?;
         if agent_ns != namespace {
             return Err(NousError::Validation(
                 "resource namespace must match owning agent's namespace".into(),
@@ -282,105 +285,88 @@ pub async fn register_resource(
         .ownership_policy
         .unwrap_or_else(|| req.resource_type.default_ownership_policy());
 
-    sqlx::query(
-        "INSERT INTO resources (id, name, resource_type, owner_agent_id, namespace, path, metadata, tags, ownership_policy) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(req.name.trim())
-    .bind(req.resource_type.as_str())
-    .bind(&req.owner_agent_id)
-    .bind(&namespace)
-    .bind(&req.path)
-    .bind(&req.metadata)
-    .bind(&tags_json)
-    .bind(policy.as_str())
-    .execute(pool)
-    .await?;
+    let model = res_entity::ActiveModel {
+        id: Set(id.clone()),
+        name: Set(req.name.trim().to_string()),
+        resource_type: Set(req.resource_type.as_str().to_string()),
+        owner_agent_id: Set(req.owner_agent_id),
+        namespace: Set(namespace),
+        path: Set(req.path),
+        status: Set("active".to_string()),
+        metadata: Set(req.metadata),
+        tags: Set(tags_json),
+        ownership_policy: Set(policy.as_str().to_string()),
+        last_seen_at: Set(None),
+        created_at: Set(String::new()),
+        updated_at: Set(String::new()),
+        archived_at: Set(None),
+    };
 
-    get_resource_by_id(pool, &id).await
+    res_entity::Entity::insert(model).exec(db).await?;
+
+    get_resource_by_id(db, &id).await
 }
 
-pub async fn get_resource_by_id(pool: &SqlitePool, id: &str) -> Result<Resource, NousError> {
-    let row = sqlx::query("SELECT * FROM resources WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn get_resource_by_id(db: &DatabaseConnection, id: &str) -> Result<Resource, NousError> {
+    let model = res_entity::Entity::find_by_id(id).one(db).await?;
 
-    let row = row.ok_or_else(|| NousError::NotFound(format!("resource '{id}' not found")))?;
-    Resource::from_row(&row).map_err(NousError::Sqlite)
+    let model = model.ok_or_else(|| NousError::NotFound(format!("resource '{id}' not found")))?;
+    Ok(Resource::from_model(model))
 }
 
 pub async fn list_resources(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     filter: &ListResourcesFilter,
 ) -> Result<Vec<Resource>, NousError> {
+    use sea_orm::Condition;
+
     let limit = filter.limit.unwrap_or(50).min(200);
     let offset = filter.offset.unwrap_or(0);
 
-    let mut sql = String::from("SELECT * FROM resources");
-    let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut cond = Condition::all();
 
     if let Some(ref t) = filter.resource_type {
-        conditions.push("resource_type = ?".to_string());
-        binds.push(t.as_str().to_string());
+        cond = cond.add(res_entity::Column::ResourceType.eq(t.as_str()));
     }
 
     if let Some(ref s) = filter.status {
-        conditions.push("status = ?".to_string());
-        binds.push(s.as_str().to_string());
+        cond = cond.add(res_entity::Column::Status.eq(s.as_str()));
     } else {
-        conditions.push("status != ?".to_string());
-        binds.push("deleted".to_string());
+        cond = cond.add(res_entity::Column::Status.ne("deleted"));
     }
 
     if let Some(ref agent_id) = filter.owner_agent_id {
-        conditions.push("owner_agent_id = ?".to_string());
-        binds.push(agent_id.clone());
+        cond = cond.add(res_entity::Column::OwnerAgentId.eq(agent_id.as_str()));
     }
 
     if let Some(ref ns) = filter.namespace {
-        conditions.push("namespace = ?".to_string());
-        binds.push(ns.clone());
+        cond = cond.add(res_entity::Column::Namespace.eq(ns.as_str()));
     }
 
     if filter.orphaned == Some(true) {
-        conditions.push("owner_agent_id IS NULL".to_string());
+        cond = cond.add(res_entity::Column::OwnerAgentId.is_null());
     }
 
     if let Some(ref p) = filter.ownership_policy {
-        conditions.push("ownership_policy = ?".to_string());
-        binds.push(p.as_str().to_string());
+        cond = cond.add(res_entity::Column::OwnershipPolicy.eq(p.as_str()));
     }
 
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    let models = res_entity::Entity::find()
+        .filter(cond)
+        .order_by_desc(res_entity::Column::CreatedAt)
+        .limit(Some(limit as u64))
+        .offset(Some(offset as u64))
+        .all(db)
+        .await?;
 
-    sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-    binds.push(limit.to_string());
-    binds.push(offset.to_string());
-
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
-
-    rows.iter()
-        .map(Resource::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+    Ok(models.into_iter().map(Resource::from_model).collect())
 }
 
 pub async fn update_resource(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: UpdateResourceRequest,
 ) -> Result<Resource, NousError> {
-    let existing = get_resource_by_id(pool, &req.id).await?;
+    let existing = get_resource_by_id(db, &req.id).await?;
 
     if existing.status == "deleted" {
         return Err(NousError::Validation(
@@ -389,26 +375,26 @@ pub async fn update_resource(
     }
 
     let mut sets: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(ref name) = req.name {
         if name.trim().is_empty() {
             return Err(NousError::Validation("name cannot be empty".into()));
         }
         sets.push("name = ?".to_string());
-        binds.push(name.trim().to_string());
+        params.push(name.trim().to_string().into());
     }
 
     if let Some(ref path) = req.path {
         sets.push("path = ?".to_string());
-        binds.push(path.clone());
+        params.push(path.clone().into());
     }
 
     if let Some(ref metadata) = req.metadata {
         serde_json::from_str::<serde_json::Value>(metadata)
             .map_err(|e| NousError::Validation(format!("metadata must be valid JSON: {e}")))?;
         sets.push("metadata = ?".to_string());
-        binds.push(metadata.clone());
+        params.push(metadata.clone().into());
     }
 
     if let Some(ref tags) = req.tags {
@@ -416,24 +402,24 @@ pub async fn update_resource(
             serde_json::to_string(&tags.iter().map(|t| t.to_lowercase()).collect::<Vec<_>>())
                 .unwrap_or_else(|_| "[]".to_string());
         sets.push("tags = ?".to_string());
-        binds.push(tags_json);
+        params.push(tags_json.into());
     }
 
     if let Some(ref status) = req.status {
         sets.push("status = ?".to_string());
-        binds.push(status.as_str().to_string());
+        params.push(status.as_str().to_string().into());
         if *status == ResourceStatus::Archived {
             let now = chrono::Utc::now()
                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string();
             sets.push("archived_at = COALESCE(archived_at, ?)".to_string());
-            binds.push(now);
+            params.push(now.into());
         }
     }
 
     if let Some(ref policy) = req.ownership_policy {
         sets.push("ownership_policy = ?".to_string());
-        binds.push(policy.as_str().to_string());
+        params.push(policy.as_str().to_string().into());
     }
 
     if sets.is_empty() {
@@ -441,19 +427,16 @@ pub async fn update_resource(
     }
 
     let sql = format!("UPDATE resources SET {} WHERE id = ?", sets.join(", "));
-    binds.push(req.id.clone());
+    params.push(req.id.clone().into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-    query.execute(pool).await?;
+    let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &sql, params);
+    db.execute(stmt).await?;
 
-    get_resource_by_id(pool, &req.id).await
+    get_resource_by_id(db, &req.id).await
 }
 
-pub async fn archive_resource(pool: &SqlitePool, id: &str) -> Result<Resource, NousError> {
-    let existing = get_resource_by_id(pool, id).await?;
+pub async fn archive_resource(db: &DatabaseConnection, id: &str) -> Result<Resource, NousError> {
+    let existing = get_resource_by_id(db, id).await?;
 
     if existing.status != "active" {
         return Err(NousError::Validation(format!(
@@ -466,23 +449,21 @@ pub async fn archive_resource(pool: &SqlitePool, id: &str) -> Result<Resource, N
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
 
-    sqlx::query("UPDATE resources SET status = 'archived', archived_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let stmt = Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE resources SET status = 'archived', archived_at = ? WHERE id = ?",
+        [now.into(), id.into()],
+    );
+    db.execute(stmt).await?;
 
-    get_resource_by_id(pool, id).await
+    get_resource_by_id(db, id).await
 }
 
-pub async fn deregister_resource(pool: &SqlitePool, id: &str, hard: bool) -> Result<(), NousError> {
-    let existing = get_resource_by_id(pool, id).await?;
+pub async fn deregister_resource(db: &DatabaseConnection, id: &str, hard: bool) -> Result<(), NousError> {
+    let existing = get_resource_by_id(db, id).await?;
 
     if hard {
-        sqlx::query("DELETE FROM resources WHERE id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
+        res_entity::Entity::delete_by_id(id).exec(db).await?;
     } else {
         if existing.status == "deleted" {
             return Err(NousError::Validation("resource is already deleted".into()));
@@ -490,38 +471,38 @@ pub async fn deregister_resource(pool: &SqlitePool, id: &str, hard: bool) -> Res
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        sqlx::query(
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "UPDATE resources SET status = 'deleted', archived_at = COALESCE(archived_at, ?) WHERE id = ?",
-        )
-        .bind(&now)
-        .bind(id)
-        .execute(pool)
-        .await?;
+            [now.into(), id.into()],
+        );
+        db.execute(stmt).await?;
     }
 
     Ok(())
 }
 
-pub async fn heartbeat_resource(pool: &SqlitePool, id: &str) -> Result<Resource, NousError> {
+pub async fn heartbeat_resource(db: &DatabaseConnection, id: &str) -> Result<Resource, NousError> {
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
 
-    let result = sqlx::query("UPDATE resources SET last_seen_at = ? WHERE id = ?")
-        .bind(&now)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let stmt = Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE resources SET last_seen_at = ? WHERE id = ?",
+        [now.into(), id.into()],
+    );
+    let result = db.execute(stmt).await?;
 
     if result.rows_affected() == 0 {
         return Err(NousError::NotFound(format!("resource '{id}' not found")));
     }
 
-    get_resource_by_id(pool, id).await
+    get_resource_by_id(db, id).await
 }
 
 pub async fn search_by_tags(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     req: &SearchResourcesRequest,
 ) -> Result<Vec<Resource>, NousError> {
     if req.tags.is_empty() {
@@ -534,47 +515,60 @@ pub async fn search_by_tags(
 
     let mut sql = String::from("SELECT * FROM resources WHERE ");
     let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
 
     for tag in &req.tags {
         conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)".to_string());
-        binds.push(tag.to_lowercase());
+        params.push(tag.to_lowercase().into());
     }
 
     if let Some(ref t) = req.resource_type {
         conditions.push("resource_type = ?".to_string());
-        binds.push(t.as_str().to_string());
+        params.push(t.as_str().to_string().into());
     }
 
     if let Some(ref s) = req.status {
         conditions.push("status = ?".to_string());
-        binds.push(s.as_str().to_string());
+        params.push(s.as_str().to_string().into());
     }
 
     if let Some(ref ns) = req.namespace {
         conditions.push("namespace = ?".to_string());
-        binds.push(ns.clone());
+        params.push(ns.clone().into());
     }
 
     sql.push_str(&conditions.join(" AND "));
     sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-    binds.push(limit.to_string());
+    params.push((limit as i32).into());
 
-    let mut query = sqlx::query(&sql);
-    for bind in &binds {
-        query = query.bind(bind);
-    }
-
-    let rows = query.fetch_all(pool).await?;
+    let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &sql, params);
+    let rows = db.query_all(stmt).await?;
 
     rows.iter()
-        .map(Resource::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map(|row| {
+            Ok(Resource {
+                id: row.try_get("", "id")?,
+                name: row.try_get("", "name")?,
+                resource_type: row.try_get("", "resource_type")?,
+                owner_agent_id: row.try_get("", "owner_agent_id")?,
+                namespace: row.try_get("", "namespace")?,
+                path: row.try_get("", "path")?,
+                status: row.try_get("", "status")?,
+                metadata: row.try_get("", "metadata")?,
+                tags: row.try_get("", "tags")?,
+                ownership_policy: row.try_get("", "ownership_policy")?,
+                last_seen_at: row.try_get("", "last_seen_at")?,
+                created_at: row.try_get("", "created_at")?,
+                updated_at: row.try_get("", "updated_at")?,
+                archived_at: row.try_get("", "archived_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()
+        .map_err(NousError::SeaOrm)
 }
 
 pub async fn search_fts(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     query_str: &str,
     namespace: Option<&str>,
     limit: Option<u32>,
@@ -585,125 +579,138 @@ pub async fn search_fts(
 
     let limit = limit.unwrap_or(20).min(100);
 
-    let rows = if let Some(ns) = namespace {
-        sqlx::query(
+    let (sql, params): (&str, Vec<sea_orm::Value>) = if let Some(ns) = namespace {
+        (
             "SELECT r.* FROM resources r \
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? AND r.namespace = ? \
              LIMIT ?",
+            vec![query_str.into(), ns.into(), (limit as i32).into()],
         )
-        .bind(query_str)
-        .bind(ns)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?
     } else {
-        sqlx::query(
+        (
             "SELECT r.* FROM resources r \
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? \
              LIMIT ?",
+            vec![query_str.into(), (limit as i32).into()],
         )
-        .bind(query_str)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?
     };
 
+    let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, sql, params);
+    let rows = db.query_all(stmt).await?;
+
     rows.iter()
-        .map(Resource::from_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(NousError::Sqlite)
+        .map(|row| {
+            Ok(Resource {
+                id: row.try_get("", "id")?,
+                name: row.try_get("", "name")?,
+                resource_type: row.try_get("", "resource_type")?,
+                owner_agent_id: row.try_get("", "owner_agent_id")?,
+                namespace: row.try_get("", "namespace")?,
+                path: row.try_get("", "path")?,
+                status: row.try_get("", "status")?,
+                metadata: row.try_get("", "metadata")?,
+                tags: row.try_get("", "tags")?,
+                ownership_policy: row.try_get("", "ownership_policy")?,
+                last_seen_at: row.try_get("", "last_seen_at")?,
+                created_at: row.try_get("", "created_at")?,
+                updated_at: row.try_get("", "updated_at")?,
+                archived_at: row.try_get("", "archived_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()
+        .map_err(NousError::SeaOrm)
 }
 
 pub async fn transfer_ownership(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     from_agent_id: &str,
     to_agent_id: Option<&str>,
 ) -> Result<u64, NousError> {
     let result = if let Some(target) = to_agent_id {
-        let _target_agent = sqlx::query("SELECT id FROM agents WHERE id = ?")
-            .bind(target)
-            .fetch_optional(pool)
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT id FROM agents WHERE id = ?",
+            [target.into()],
+        );
+        db.query_one(stmt)
             .await?
             .ok_or_else(|| NousError::NotFound(format!("target agent '{target}' not found")))?;
 
-        sqlx::query(
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "UPDATE resources SET owner_agent_id = ? \
              WHERE owner_agent_id = ? AND status = 'active'",
-        )
-        .bind(target)
-        .bind(from_agent_id)
-        .execute(pool)
-        .await?
+            [target.into(), from_agent_id.into()],
+        );
+        db.execute(stmt).await?
     } else {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        sqlx::query(
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "UPDATE resources SET owner_agent_id = NULL, status = 'archived', archived_at = ? \
              WHERE owner_agent_id = ? AND status = 'active'",
-        )
-        .bind(&now)
-        .bind(from_agent_id)
-        .execute(pool)
-        .await?
+            [now.into(), from_agent_id.into()],
+        );
+        db.execute(stmt).await?
     };
 
     Ok(result.rows_affected())
 }
 
 pub async fn handle_agent_deregistration(
-    pool: &SqlitePool,
+    db: &DatabaseConnection,
     agent_id: &str,
 ) -> Result<(), NousError> {
     // 1. Hard-delete resources with cascade-delete policy
-    sqlx::query(
+    let stmt = Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "DELETE FROM resources WHERE owner_agent_id = ? AND ownership_policy = 'cascade-delete'",
-    )
-    .bind(agent_id)
-    .execute(pool)
-    .await?;
+        [agent_id.into()],
+    );
+    db.execute(stmt).await?;
 
     // 2. Transfer resources with transfer-to-parent policy
-    let parent_row =
-        sqlx::query("SELECT parent_id FROM agent_relationships WHERE child_id = ? LIMIT 1")
-            .bind(agent_id)
-            .fetch_optional(pool)
-            .await?;
+    let stmt = Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "SELECT parent_id FROM agent_relationships WHERE child_id = ? LIMIT 1",
+        [agent_id.into()],
+    );
+    let parent_row = db.query_one(stmt).await?;
 
     if let Some(row) = parent_row {
-        let parent_id: String = row.try_get("parent_id").map_err(NousError::Sqlite)?;
-        sqlx::query(
+        let parent_id: String = row.try_get("", "parent_id")?;
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "UPDATE resources SET owner_agent_id = ? \
              WHERE owner_agent_id = ? AND ownership_policy = 'transfer-to-parent'",
-        )
-        .bind(&parent_id)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+            [parent_id.into(), agent_id.into()],
+        );
+        db.execute(stmt).await?;
     } else {
         let now = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
-        sqlx::query(
+        let stmt = Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
             "UPDATE resources SET owner_agent_id = NULL, status = 'archived', archived_at = ? \
              WHERE owner_agent_id = ? AND ownership_policy = 'transfer-to-parent'",
-        )
-        .bind(&now)
-        .bind(agent_id)
-        .execute(pool)
-        .await?;
+            [now.into(), agent_id.into()],
+        );
+        db.execute(stmt).await?;
     }
 
     // 3. Orphan remaining resources (policy = 'orphan')
-    sqlx::query(
+    let stmt = Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
         "UPDATE resources SET owner_agent_id = NULL \
          WHERE owner_agent_id = ? AND ownership_policy = 'orphan'",
-    )
-    .bind(agent_id)
-    .execute(pool)
-    .await?;
+        [agent_id.into()],
+    );
+    db.execute(stmt).await?;
 
     Ok(())
 }
@@ -714,16 +721,16 @@ mod tests {
     use crate::db::DbPools;
     use tempfile::TempDir;
 
-    async fn test_pool() -> (SqlitePool, TempDir) {
+    async fn test_pool() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
         pools.run_migrations("porter unicode61").await.unwrap();
         (pools.fts.clone(), tmp)
     }
 
-    async fn create_agent(pool: &SqlitePool, name: &str) -> String {
+    async fn create_agent(db: &DatabaseConnection, name: &str) -> String {
         let agent = crate::agents::register_agent(
-            pool,
+            db,
             crate::agents::RegisterAgentRequest {
                 name: name.to_string(),
                 agent_type: crate::agents::AgentType::Engineer,
@@ -756,8 +763,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_and_get() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("my-wt", ResourceType::Worktree))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("my-wt", ResourceType::Worktree))
             .await
             .unwrap();
         assert_eq!(r.name, "my-wt");
@@ -766,17 +773,17 @@ mod tests {
         assert_eq!(r.namespace, "default");
         assert_eq!(r.ownership_policy, "cascade-delete");
 
-        let fetched = get_resource_by_id(&pool, &r.id).await.unwrap();
+        let fetched = get_resource_by_id(&db, &r.id).await.unwrap();
         assert_eq!(fetched.id, r.id);
     }
 
     #[tokio::test]
     async fn register_with_owner() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "owner-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "owner-agent").await;
 
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id.clone()),
                 ..reg("owned-room", ResourceType::Room)
@@ -790,8 +797,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_empty_name_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let err = register_resource(&pool, reg("  ", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let err = register_resource(&db, reg("  ", ResourceType::File))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("cannot be empty"));
@@ -799,9 +806,9 @@ mod tests {
 
     #[tokio::test]
     async fn register_invalid_metadata_rejected() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         let err = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 metadata: Some("not-json".into()),
                 ..reg("bad-meta", ResourceType::File)
@@ -814,9 +821,9 @@ mod tests {
 
     #[tokio::test]
     async fn register_nonexistent_owner_rejected() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         let err = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some("no-such-agent".into()),
                 ..reg("orphan-res", ResourceType::File)
@@ -829,16 +836,16 @@ mod tests {
 
     #[tokio::test]
     async fn get_nonexistent_returns_not_found() {
-        let (pool, _tmp) = test_pool().await;
-        let err = get_resource_by_id(&pool, "no-such-id").await.unwrap_err();
+        let (db, _tmp) = test_pool().await;
+        let err = get_resource_by_id(&db, "no-such-id").await.unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 
     #[tokio::test]
     async fn register_with_tags_and_metadata() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 tags: Some(vec!["CI".into(), "prod".into()]),
                 metadata: Some(r#"{"key":"value"}"#.into()),
@@ -853,23 +860,23 @@ mod tests {
 
     #[tokio::test]
     async fn default_ownership_policy_applied() {
-        let (pool, _tmp) = test_pool().await;
-        let wt = register_resource(&pool, reg("wt", ResourceType::Worktree))
+        let (db, _tmp) = test_pool().await;
+        let wt = register_resource(&db, reg("wt", ResourceType::Worktree))
             .await
             .unwrap();
         assert_eq!(wt.ownership_policy, "cascade-delete");
 
-        let br = register_resource(&pool, reg("br", ResourceType::Branch))
+        let br = register_resource(&db, reg("br", ResourceType::Branch))
             .await
             .unwrap();
         assert_eq!(br.ownership_policy, "cascade-delete");
 
-        let rm = register_resource(&pool, reg("rm", ResourceType::Room))
+        let rm = register_resource(&db, reg("rm", ResourceType::Room))
             .await
             .unwrap();
         assert_eq!(rm.ownership_policy, "orphan");
 
-        let f = register_resource(&pool, reg("f", ResourceType::File))
+        let f = register_resource(&db, reg("f", ResourceType::File))
             .await
             .unwrap();
         assert_eq!(f.ownership_policy, "orphan");
@@ -877,9 +884,9 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_ownership_policy_overrides_default() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 ownership_policy: Some(OwnershipPolicy::TransferToParent),
                 ..reg("xfer-room", ResourceType::Room)
@@ -894,16 +901,16 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_type_and_status() {
-        let (pool, _tmp) = test_pool().await;
-        register_resource(&pool, reg("wt1", ResourceType::Worktree))
+        let (db, _tmp) = test_pool().await;
+        register_resource(&db, reg("wt1", ResourceType::Worktree))
             .await
             .unwrap();
-        register_resource(&pool, reg("rm1", ResourceType::Room))
+        register_resource(&db, reg("rm1", ResourceType::Room))
             .await
             .unwrap();
 
         let wts = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 resource_type: Some(ResourceType::Worktree),
                 ..Default::default()
@@ -917,13 +924,13 @@ mod tests {
 
     #[tokio::test]
     async fn list_excludes_deleted_by_default() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("del-me", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("del-me", ResourceType::File))
             .await
             .unwrap();
-        deregister_resource(&pool, &r.id, false).await.unwrap();
+        deregister_resource(&db, &r.id, false).await.unwrap();
 
-        let all = list_resources(&pool, &ListResourcesFilter::default())
+        let all = list_resources(&db, &ListResourcesFilter::default())
             .await
             .unwrap();
         assert!(all.is_empty());
@@ -931,14 +938,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_orphaned_filter() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "orphan-test-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "orphan-test-agent").await;
 
-        register_resource(&pool, reg("no-owner", ResourceType::File))
+        register_resource(&db, reg("no-owner", ResourceType::File))
             .await
             .unwrap();
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id),
                 ..reg("has-owner", ResourceType::File)
@@ -948,7 +955,7 @@ mod tests {
         .unwrap();
 
         let orphans = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 orphaned: Some(true),
                 ..Default::default()
@@ -962,15 +969,15 @@ mod tests {
 
     #[tokio::test]
     async fn list_pagination() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         for i in 0..5 {
-            register_resource(&pool, reg(&format!("item-{i}"), ResourceType::File))
+            register_resource(&db, reg(&format!("item-{i}"), ResourceType::File))
                 .await
                 .unwrap();
         }
 
         let page1 = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 limit: Some(2),
                 offset: Some(0),
@@ -982,7 +989,7 @@ mod tests {
         assert_eq!(page1.len(), 2);
 
         let page2 = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 limit: Some(2),
                 offset: Some(2),
@@ -999,13 +1006,13 @@ mod tests {
 
     #[tokio::test]
     async fn update_fields() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("orig", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("orig", ResourceType::File))
             .await
             .unwrap();
 
         let updated = update_resource(
-            &pool,
+            &db,
             UpdateResourceRequest {
                 id: r.id.clone(),
                 name: Some("renamed".into()),
@@ -1026,13 +1033,13 @@ mod tests {
 
     #[tokio::test]
     async fn update_no_changes_returns_existing() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("nochange", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("nochange", ResourceType::File))
             .await
             .unwrap();
 
         let same = update_resource(
-            &pool,
+            &db,
             UpdateResourceRequest {
                 id: r.id.clone(),
                 name: None,
@@ -1050,14 +1057,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_deleted_resource_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("del-upd", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("del-upd", ResourceType::File))
             .await
             .unwrap();
-        deregister_resource(&pool, &r.id, false).await.unwrap();
+        deregister_resource(&db, &r.id, false).await.unwrap();
 
         let err = update_resource(
-            &pool,
+            &db,
             UpdateResourceRequest {
                 id: r.id,
                 name: Some("x".into()),
@@ -1075,14 +1082,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_ownership_policy() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("policy-upd", ResourceType::Room))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("policy-upd", ResourceType::Room))
             .await
             .unwrap();
         assert_eq!(r.ownership_policy, "orphan");
 
         let updated = update_resource(
-            &pool,
+            &db,
             UpdateResourceRequest {
                 id: r.id,
                 name: None,
@@ -1102,26 +1109,26 @@ mod tests {
 
     #[tokio::test]
     async fn archive_sets_status_and_timestamp() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("to-archive", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("to-archive", ResourceType::File))
             .await
             .unwrap();
         assert!(r.archived_at.is_none());
 
-        let archived = archive_resource(&pool, &r.id).await.unwrap();
+        let archived = archive_resource(&db, &r.id).await.unwrap();
         assert_eq!(archived.status, "archived");
         assert!(archived.archived_at.is_some());
     }
 
     #[tokio::test]
     async fn archive_non_active_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("arch-twice", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("arch-twice", ResourceType::File))
             .await
             .unwrap();
-        archive_resource(&pool, &r.id).await.unwrap();
+        archive_resource(&db, &r.id).await.unwrap();
 
-        let err = archive_resource(&pool, &r.id).await.unwrap_err();
+        let err = archive_resource(&db, &r.id).await.unwrap_err();
         assert!(err.to_string().contains("can only archive active"));
     }
 
@@ -1129,38 +1136,38 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_hard_deletes() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("hard-del", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("hard-del", ResourceType::File))
             .await
             .unwrap();
-        deregister_resource(&pool, &r.id, true).await.unwrap();
+        deregister_resource(&db, &r.id, true).await.unwrap();
 
-        let err = get_resource_by_id(&pool, &r.id).await.unwrap_err();
+        let err = get_resource_by_id(&db, &r.id).await.unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 
     #[tokio::test]
     async fn deregister_soft_sets_deleted() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("soft-del", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("soft-del", ResourceType::File))
             .await
             .unwrap();
-        deregister_resource(&pool, &r.id, false).await.unwrap();
+        deregister_resource(&db, &r.id, false).await.unwrap();
 
-        let fetched = get_resource_by_id(&pool, &r.id).await.unwrap();
+        let fetched = get_resource_by_id(&db, &r.id).await.unwrap();
         assert_eq!(fetched.status, "deleted");
         assert!(fetched.archived_at.is_some());
     }
 
     #[tokio::test]
     async fn deregister_soft_already_deleted_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("del-twice", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("del-twice", ResourceType::File))
             .await
             .unwrap();
-        deregister_resource(&pool, &r.id, false).await.unwrap();
+        deregister_resource(&db, &r.id, false).await.unwrap();
 
-        let err = deregister_resource(&pool, &r.id, false).await.unwrap_err();
+        let err = deregister_resource(&db, &r.id, false).await.unwrap_err();
         assert!(err.to_string().contains("already deleted"));
     }
 
@@ -1168,24 +1175,24 @@ mod tests {
 
     #[tokio::test]
     async fn heartbeat_updates_last_seen() {
-        let (pool, _tmp) = test_pool().await;
-        let r = register_resource(&pool, reg("hb-res", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        let r = register_resource(&db, reg("hb-res", ResourceType::File))
             .await
             .unwrap();
         assert!(r.last_seen_at.is_none());
 
-        let hb = heartbeat_resource(&pool, &r.id).await.unwrap();
+        let hb = heartbeat_resource(&db, &r.id).await.unwrap();
         assert!(hb.last_seen_at.is_some());
     }
 
     #[tokio::test]
     async fn heartbeat_nonexistent_returns_not_found() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         // Verify the table exists by doing a quick list first
-        list_resources(&pool, &ListResourcesFilter::default())
+        list_resources(&db, &ListResourcesFilter::default())
             .await
             .unwrap();
-        let err = heartbeat_resource(&pool, "nope").await.unwrap_err();
+        let err = heartbeat_resource(&db, "nope").await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not found"), "unexpected error: {msg}");
     }
@@ -1194,9 +1201,9 @@ mod tests {
 
     #[tokio::test]
     async fn search_by_tags_finds_matching() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 tags: Some(vec!["ci".into(), "prod".into()]),
                 ..reg("tagged", ResourceType::File)
@@ -1205,7 +1212,7 @@ mod tests {
         .await
         .unwrap();
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 tags: Some(vec!["dev".into()]),
                 ..reg("untagged", ResourceType::File)
@@ -1215,7 +1222,7 @@ mod tests {
         .unwrap();
 
         let results = search_by_tags(
-            &pool,
+            &db,
             &SearchResourcesRequest {
                 tags: vec!["ci".into()],
                 resource_type: None,
@@ -1232,9 +1239,9 @@ mod tests {
 
     #[tokio::test]
     async fn search_by_tags_empty_tags_rejected() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         let err = search_by_tags(
-            &pool,
+            &db,
             &SearchResourcesRequest {
                 tags: vec![],
                 resource_type: None,
@@ -1252,24 +1259,24 @@ mod tests {
 
     #[tokio::test]
     async fn fts_search_finds_by_name() {
-        let (pool, _tmp) = test_pool().await;
-        register_resource(&pool, reg("deployment-pipeline", ResourceType::File))
+        let (db, _tmp) = test_pool().await;
+        register_resource(&db, reg("deployment-pipeline", ResourceType::File))
             .await
             .unwrap();
-        register_resource(&pool, reg("unrelated-thing", ResourceType::File))
+        register_resource(&db, reg("unrelated-thing", ResourceType::File))
             .await
             .unwrap();
 
-        let results = search_fts(&pool, "deployment", None, None).await.unwrap();
+        let results = search_fts(&db, "deployment", None, None).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "deployment-pipeline");
     }
 
     #[tokio::test]
     async fn fts_search_respects_namespace() {
-        let (pool, _tmp) = test_pool().await;
+        let (db, _tmp) = test_pool().await;
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 namespace: Some("ns-a".into()),
                 ..reg("shared-name", ResourceType::File)
@@ -1278,7 +1285,7 @@ mod tests {
         .await
         .unwrap();
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 namespace: Some("ns-b".into()),
                 ..reg("shared-name", ResourceType::File)
@@ -1287,7 +1294,7 @@ mod tests {
         .await
         .unwrap();
 
-        let results = search_fts(&pool, "shared", Some("ns-a"), None)
+        let results = search_fts(&db, "shared", Some("ns-a"), None)
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -1296,8 +1303,8 @@ mod tests {
 
     #[tokio::test]
     async fn fts_empty_query_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let err = search_fts(&pool, "  ", None, None).await.unwrap_err();
+        let (db, _tmp) = test_pool().await;
+        let err = search_fts(&db, "  ", None, None).await.unwrap_err();
         assert!(err.to_string().contains("cannot be empty"));
     }
 
@@ -1305,12 +1312,12 @@ mod tests {
 
     #[tokio::test]
     async fn transfer_to_agent() {
-        let (pool, _tmp) = test_pool().await;
-        let from_id = create_agent(&pool, "from-agent").await;
-        let to_id = create_agent(&pool, "to-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let from_id = create_agent(&db, "from-agent").await;
+        let to_id = create_agent(&db, "to-agent").await;
 
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(from_id.clone()),
                 ..reg("xfer-file", ResourceType::File)
@@ -1319,13 +1326,13 @@ mod tests {
         .await
         .unwrap();
 
-        let count = transfer_ownership(&pool, &from_id, Some(&to_id))
+        let count = transfer_ownership(&db, &from_id, Some(&to_id))
             .await
             .unwrap();
         assert_eq!(count, 1);
 
         let resources = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 owner_agent_id: Some(to_id.clone()),
                 ..Default::default()
@@ -1339,11 +1346,11 @@ mod tests {
 
     #[tokio::test]
     async fn transfer_to_none_archives() {
-        let (pool, _tmp) = test_pool().await;
-        let from_id = create_agent(&pool, "from-agent2").await;
+        let (db, _tmp) = test_pool().await;
+        let from_id = create_agent(&db, "from-agent2").await;
 
         register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(from_id.clone()),
                 ..reg("orphan-file", ResourceType::File)
@@ -1352,11 +1359,11 @@ mod tests {
         .await
         .unwrap();
 
-        let count = transfer_ownership(&pool, &from_id, None).await.unwrap();
+        let count = transfer_ownership(&db, &from_id, None).await.unwrap();
         assert_eq!(count, 1);
 
         let resources = list_resources(
-            &pool,
+            &db,
             &ListResourcesFilter {
                 status: Some(ResourceStatus::Archived),
                 ..Default::default()
@@ -1370,10 +1377,10 @@ mod tests {
 
     #[tokio::test]
     async fn transfer_to_nonexistent_agent_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let from_id = create_agent(&pool, "from-agent3").await;
+        let (db, _tmp) = test_pool().await;
+        let from_id = create_agent(&db, "from-agent3").await;
 
-        let err = transfer_ownership(&pool, &from_id, Some("no-such-agent"))
+        let err = transfer_ownership(&db, &from_id, Some("no-such-agent"))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -1383,11 +1390,11 @@ mod tests {
 
     #[tokio::test]
     async fn deregistration_cascade_deletes() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "cascade-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "cascade-agent").await;
 
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id.clone()),
                 ownership_policy: Some(OwnershipPolicy::CascadeDelete),
@@ -1397,19 +1404,19 @@ mod tests {
         .await
         .unwrap();
 
-        handle_agent_deregistration(&pool, &agent_id).await.unwrap();
+        handle_agent_deregistration(&db, &agent_id).await.unwrap();
 
-        let err = get_resource_by_id(&pool, &r.id).await.unwrap_err();
+        let err = get_resource_by_id(&db, &r.id).await.unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 
     #[tokio::test]
     async fn deregistration_orphans_resources() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "orphan-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "orphan-agent").await;
 
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id.clone()),
                 ownership_policy: Some(OwnershipPolicy::Orphan),
@@ -1419,19 +1426,19 @@ mod tests {
         .await
         .unwrap();
 
-        handle_agent_deregistration(&pool, &agent_id).await.unwrap();
+        handle_agent_deregistration(&db, &agent_id).await.unwrap();
 
-        let fetched = get_resource_by_id(&pool, &r.id).await.unwrap();
+        let fetched = get_resource_by_id(&db, &r.id).await.unwrap();
         assert!(fetched.owner_agent_id.is_none());
         assert_eq!(fetched.status, "active");
     }
 
     #[tokio::test]
     async fn deregistration_transfers_to_parent() {
-        let (pool, _tmp) = test_pool().await;
-        let parent_id = create_agent(&pool, "parent-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let parent_id = create_agent(&db, "parent-agent").await;
         let child = crate::agents::register_agent(
-            &pool,
+            &db,
             crate::agents::RegisterAgentRequest {
                 name: "child-agent".into(),
                 agent_type: crate::agents::AgentType::Engineer,
@@ -1446,7 +1453,7 @@ mod tests {
         .unwrap();
 
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(child.id.clone()),
                 ownership_policy: Some(OwnershipPolicy::TransferToParent),
@@ -1456,20 +1463,20 @@ mod tests {
         .await
         .unwrap();
 
-        handle_agent_deregistration(&pool, &child.id).await.unwrap();
+        handle_agent_deregistration(&db, &child.id).await.unwrap();
 
-        let fetched = get_resource_by_id(&pool, &r.id).await.unwrap();
+        let fetched = get_resource_by_id(&db, &r.id).await.unwrap();
         assert_eq!(fetched.owner_agent_id.as_deref(), Some(parent_id.as_str()));
         assert_eq!(fetched.status, "active");
     }
 
     #[tokio::test]
     async fn deregistration_transfer_no_parent_archives() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "no-parent-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "no-parent-agent").await;
 
         let r = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id.clone()),
                 ownership_policy: Some(OwnershipPolicy::TransferToParent),
@@ -1479,19 +1486,19 @@ mod tests {
         .await
         .unwrap();
 
-        handle_agent_deregistration(&pool, &agent_id).await.unwrap();
+        handle_agent_deregistration(&db, &agent_id).await.unwrap();
 
-        let fetched = get_resource_by_id(&pool, &r.id).await.unwrap();
+        let fetched = get_resource_by_id(&db, &r.id).await.unwrap();
         assert!(fetched.owner_agent_id.is_none());
         assert_eq!(fetched.status, "archived");
     }
 
     #[tokio::test]
     async fn deregistration_mixed_policies() {
-        let (pool, _tmp) = test_pool().await;
-        let parent_id = create_agent(&pool, "mixed-parent").await;
+        let (db, _tmp) = test_pool().await;
+        let parent_id = create_agent(&db, "mixed-parent").await;
         let child = crate::agents::register_agent(
-            &pool,
+            &db,
             crate::agents::RegisterAgentRequest {
                 name: "mixed-child".into(),
                 agent_type: crate::agents::AgentType::Engineer,
@@ -1506,7 +1513,7 @@ mod tests {
         .unwrap();
 
         let cascade = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(child.id.clone()),
                 ownership_policy: Some(OwnershipPolicy::CascadeDelete),
@@ -1516,7 +1523,7 @@ mod tests {
         .await
         .unwrap();
         let transfer = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(child.id.clone()),
                 ownership_policy: Some(OwnershipPolicy::TransferToParent),
@@ -1526,7 +1533,7 @@ mod tests {
         .await
         .unwrap();
         let orphan = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(child.id.clone()),
                 ownership_policy: Some(OwnershipPolicy::Orphan),
@@ -1536,14 +1543,14 @@ mod tests {
         .await
         .unwrap();
 
-        handle_agent_deregistration(&pool, &child.id).await.unwrap();
+        handle_agent_deregistration(&db, &child.id).await.unwrap();
 
-        assert!(get_resource_by_id(&pool, &cascade.id).await.is_err());
+        assert!(get_resource_by_id(&db, &cascade.id).await.is_err());
 
-        let t = get_resource_by_id(&pool, &transfer.id).await.unwrap();
+        let t = get_resource_by_id(&db, &transfer.id).await.unwrap();
         assert_eq!(t.owner_agent_id.as_deref(), Some(parent_id.as_str()));
 
-        let o = get_resource_by_id(&pool, &orphan.id).await.unwrap();
+        let o = get_resource_by_id(&db, &orphan.id).await.unwrap();
         assert!(o.owner_agent_id.is_none());
         assert_eq!(o.status, "active");
     }
@@ -1575,11 +1582,11 @@ mod tests {
 
     #[tokio::test]
     async fn namespace_mismatch_rejected() {
-        let (pool, _tmp) = test_pool().await;
-        let agent_id = create_agent(&pool, "ns-agent").await;
+        let (db, _tmp) = test_pool().await;
+        let agent_id = create_agent(&db, "ns-agent").await;
 
         let err = register_resource(
-            &pool,
+            &db,
             RegisterResourceRequest {
                 owner_agent_id: Some(agent_id),
                 namespace: Some("wrong-ns".into()),
