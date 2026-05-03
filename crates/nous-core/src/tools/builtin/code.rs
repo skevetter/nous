@@ -1,6 +1,7 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
+use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::tools::{
@@ -214,6 +215,94 @@ impl AgentTool for CodeGlobTool {
 
 // --- CodeSymbolsTool ---
 
+struct LangPatterns {
+    patterns: &'static [(&'static str, &'static LazyLock<Regex>)],
+}
+
+static RE_RS_FN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(pub\s+)?(async\s+)?fn\s+(\w+)").unwrap());
+static RE_RS_STRUCT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(pub\s+)?struct\s+(\w+)").unwrap());
+static RE_RS_ENUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(pub\s+)?enum\s+(\w+)").unwrap());
+static RE_RS_TRAIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(pub\s+)?trait\s+(\w+)").unwrap());
+static RE_RS_IMPL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*impl\s+(<[^>]+>\s+)?(\w+)").unwrap());
+static RE_RS_USE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*use\s+").unwrap());
+static RE_RS_MOD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(pub\s+)?mod\s+(\w+)").unwrap());
+
+static RE_PY_DEF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(async\s+)?def\s+(\w+)").unwrap());
+static RE_PY_CLASS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*class\s+(\w+)").unwrap());
+static RE_PY_IMPORT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(import|from)\s+").unwrap());
+
+static RE_JS_FUNCTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(export\s+)?(async\s+)?function\s+(\w+)").unwrap());
+static RE_JS_CLASS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(export\s+)?class\s+(\w+)").unwrap());
+static RE_JS_INTERFACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(export\s+)?interface\s+(\w+)").unwrap());
+static RE_JS_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(export\s+)?type\s+(\w+)").unwrap());
+static RE_JS_IMPORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*import\s+").unwrap());
+static RE_JS_CONST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(export\s+)?(const|let)\s+(\w+)").unwrap());
+
+static RE_GO_FUNC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^func\s+(\([^)]*\)\s+)?(\w+)").unwrap());
+static RE_GO_TYPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^type\s+(\w+)").unwrap());
+static RE_GO_IMPORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*import\s+").unwrap());
+
+static RE_GENERIC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(fn|func|def|function)\s+\w+").unwrap());
+
+static PATTERNS_RS: LangPatterns = LangPatterns {
+    patterns: &[
+        ("fn", &RE_RS_FN),
+        ("struct", &RE_RS_STRUCT),
+        ("enum", &RE_RS_ENUM),
+        ("trait", &RE_RS_TRAIT),
+        ("impl", &RE_RS_IMPL),
+        ("use", &RE_RS_USE),
+        ("mod", &RE_RS_MOD),
+    ],
+};
+
+static PATTERNS_PY: LangPatterns = LangPatterns {
+    patterns: &[
+        ("def", &RE_PY_DEF),
+        ("class", &RE_PY_CLASS),
+        ("import", &RE_PY_IMPORT),
+    ],
+};
+
+static PATTERNS_JS: LangPatterns = LangPatterns {
+    patterns: &[
+        ("function", &RE_JS_FUNCTION),
+        ("class", &RE_JS_CLASS),
+        ("interface", &RE_JS_INTERFACE),
+        ("type", &RE_JS_TYPE),
+        ("import", &RE_JS_IMPORT),
+        ("const/let", &RE_JS_CONST),
+    ],
+};
+
+static PATTERNS_GO: LangPatterns = LangPatterns {
+    patterns: &[
+        ("func", &RE_GO_FUNC),
+        ("type", &RE_GO_TYPE),
+        ("import", &RE_GO_IMPORT),
+    ],
+};
+
+static PATTERNS_GENERIC: LangPatterns = LangPatterns {
+    patterns: &[("function", &RE_GENERIC)],
+};
+
 #[derive(Default)]
 pub struct CodeSymbolsTool {
     meta: OnceLock<ToolMetadata>,
@@ -276,85 +365,17 @@ impl AgentTool for CodeSymbolsTool {
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let patterns: Vec<(&str, regex::Regex)> = match ext {
-            "rs" => vec![
-                (
-                    "fn",
-                    regex::Regex::new(r"^\s*(pub\s+)?(async\s+)?fn\s+(\w+)").unwrap(),
-                ),
-                (
-                    "struct",
-                    regex::Regex::new(r"^\s*(pub\s+)?struct\s+(\w+)").unwrap(),
-                ),
-                (
-                    "enum",
-                    regex::Regex::new(r"^\s*(pub\s+)?enum\s+(\w+)").unwrap(),
-                ),
-                (
-                    "trait",
-                    regex::Regex::new(r"^\s*(pub\s+)?trait\s+(\w+)").unwrap(),
-                ),
-                (
-                    "impl",
-                    regex::Regex::new(r"^\s*impl\s+(<[^>]+>\s+)?(\w+)").unwrap(),
-                ),
-                ("use", regex::Regex::new(r"^\s*use\s+").unwrap()),
-                (
-                    "mod",
-                    regex::Regex::new(r"^\s*(pub\s+)?mod\s+(\w+)").unwrap(),
-                ),
-            ],
-            "py" => vec![
-                (
-                    "def",
-                    regex::Regex::new(r"^\s*(async\s+)?def\s+(\w+)").unwrap(),
-                ),
-                ("class", regex::Regex::new(r"^\s*class\s+(\w+)").unwrap()),
-                (
-                    "import",
-                    regex::Regex::new(r"^\s*(import|from)\s+").unwrap(),
-                ),
-            ],
-            "ts" | "tsx" | "js" | "jsx" => vec![
-                (
-                    "function",
-                    regex::Regex::new(r"^\s*(export\s+)?(async\s+)?function\s+(\w+)").unwrap(),
-                ),
-                (
-                    "class",
-                    regex::Regex::new(r"^\s*(export\s+)?class\s+(\w+)").unwrap(),
-                ),
-                (
-                    "interface",
-                    regex::Regex::new(r"^\s*(export\s+)?interface\s+(\w+)").unwrap(),
-                ),
-                (
-                    "type",
-                    regex::Regex::new(r"^\s*(export\s+)?type\s+(\w+)").unwrap(),
-                ),
-                ("import", regex::Regex::new(r"^\s*import\s+").unwrap()),
-                (
-                    "const/let",
-                    regex::Regex::new(r"^\s*(export\s+)?(const|let)\s+(\w+)").unwrap(),
-                ),
-            ],
-            "go" => vec![
-                (
-                    "func",
-                    regex::Regex::new(r"^func\s+(\([^)]*\)\s+)?(\w+)").unwrap(),
-                ),
-                ("type", regex::Regex::new(r"^type\s+(\w+)").unwrap()),
-                ("import", regex::Regex::new(r"^\s*import\s+").unwrap()),
-            ],
-            _ => vec![(
-                "function",
-                regex::Regex::new(r"(fn|func|def|function)\s+\w+").unwrap(),
-            )],
+        let lang = match ext {
+            "rs" => &PATTERNS_RS,
+            "py" => &PATTERNS_PY,
+            "ts" | "tsx" | "js" | "jsx" => &PATTERNS_JS,
+            "go" => &PATTERNS_GO,
+            _ => &PATTERNS_GENERIC,
         };
 
         let mut symbols = Vec::new();
         for (i, line) in content.lines().enumerate() {
-            for (kind, re) in &patterns {
+            for &(kind, re) in lang.patterns {
                 if re.is_match(line) {
                     symbols.push(format!(
                         "{}:{} [{}] {}",
