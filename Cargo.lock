@@ -3738,6 +3738,7 @@ dependencies = [
  "dirs",
  "ort",
  "proptest",
+ "rig-core",
  "rusqlite",
  "serde",
  "serde_json",

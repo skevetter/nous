@@ -2,6 +2,7 @@ pub mod analytics;
 pub mod chunk;
 pub mod embed;
 pub mod rerank;
+pub mod vector_store;
 
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
@@ -12,8 +13,12 @@ use crate::db::VecPool;
 use crate::error::NousError;
 
 pub use chunk::{Chunk, Chunker};
-pub use embed::{Embedder, MockEmbedder, OnnxEmbeddingModel};
+pub use embed::{
+    AsyncEmbedder, Embedder, EmbeddingConfig, EmbeddingProvider, MockEmbedder, OnnxEmbeddingModel,
+    RigEmbedderAdapter,
+};
 pub use rerank::rerank_rrf;
+pub use vector_store::{QdrantConfig, VectorStoreBackend, VectorStoreConfig};
 
 // --- Types ---
 
