@@ -1945,7 +1945,7 @@ async fn mcp_artifact_update() {
         &state.pool,
         nous_core::agents::RegisterArtifactRequest {
             agent_id: agent.id.clone(),
-            artifact_type: nous_core::agents::ArtifactType::Branch,
+            artifact_type: nous_core::resources::ResourceType::Branch,
             name: "feat/old-name".into(),
             path: Some("/old/path".into()),
             namespace: None,

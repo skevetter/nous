@@ -59,60 +59,62 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let artifact_type: nous_core::inventory::InventoryType = body.artifact_type.parse()?;
-    let item = nous_core::inventory::register_item(
+    let resource_type: nous_core::resources::ResourceType = body.artifact_type.parse()?;
+    let resource = nous_core::resources::register_resource(
         &state.pool,
-        nous_core::inventory::RegisterItemRequest {
+        nous_core::resources::RegisterResourceRequest {
             name: body.name,
-            artifact_type,
+            resource_type,
             owner_agent_id: body.owner_agent_id,
             namespace: body.namespace,
             path: body.path,
             metadata: body.metadata,
             tags: body.tags,
+            ownership_policy: Some(resource_type.default_ownership_policy()),
         },
     )
     .await?;
-    Ok(ApiResponse::created(item))
+    Ok(ApiResponse::created(resource))
 }
 
 pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let artifact_type = params
+    let resource_type = params
         .artifact_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::inventory::InventoryType>())
+        .map(|s| s.parse::<nous_core::resources::ResourceType>())
         .transpose()?;
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::inventory::InventoryStatus>())
+        .map(|s| s.parse::<nous_core::resources::ResourceStatus>())
         .transpose()?;
 
-    let items = nous_core::inventory::list_items(
+    let resources = nous_core::resources::list_resources(
         &state.pool,
-        &nous_core::inventory::ListItemsFilter {
-            artifact_type,
+        &nous_core::resources::ListResourcesFilter {
+            resource_type,
             status,
             owner_agent_id: params.owner_agent_id,
             namespace: params.namespace,
             orphaned: params.orphaned,
             limit: params.limit,
             offset: params.offset,
+            ..Default::default()
         },
     )
     .await?;
-    Ok(ApiResponse::ok(items))
+    Ok(ApiResponse::ok(resources))
 }
 
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let item = nous_core::inventory::get_item_by_id(&state.pool, &id).await?;
-    Ok(ApiResponse::ok(item))
+    let resource = nous_core::resources::get_resource_by_id(&state.pool, &id).await?;
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn update(
@@ -120,27 +122,28 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<UpdateBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let item = nous_core::inventory::update_item(
+    let resource = nous_core::resources::update_resource(
         &state.pool,
-        nous_core::inventory::UpdateItemRequest {
+        nous_core::resources::UpdateResourceRequest {
             id,
             name: body.name,
             path: body.path,
             metadata: body.metadata,
             tags: body.tags,
             status: None,
+            ownership_policy: None,
         },
     )
     .await?;
-    Ok(ApiResponse::ok(item))
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn archive(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let item = nous_core::inventory::archive_item(&state.pool, &id).await?;
-    Ok(ApiResponse::ok(item))
+    let resource = nous_core::resources::archive_resource(&state.pool, &id).await?;
+    Ok(ApiResponse::ok(resource))
 }
 
 pub async fn deregister(
@@ -148,7 +151,7 @@ pub async fn deregister(
     Path(id): Path<String>,
     Query(params): Query<DeleteQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    nous_core::inventory::deregister_item(&state.pool, &id, params.force).await?;
+    nous_core::resources::deregister_resource(&state.pool, &id, params.force).await?;
     Ok(crate::response::no_content())
 }
 
@@ -163,27 +166,27 @@ pub async fn search(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let artifact_type = params
+    let resource_type = params
         .artifact_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::inventory::InventoryType>())
+        .map(|s| s.parse::<nous_core::resources::ResourceType>())
         .transpose()?;
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::inventory::InventoryStatus>())
+        .map(|s| s.parse::<nous_core::resources::ResourceStatus>())
         .transpose()?;
 
-    let items = nous_core::inventory::search_by_tags(
+    let resources = nous_core::resources::search_by_tags(
         &state.pool,
-        &nous_core::inventory::SearchItemsRequest {
+        &nous_core::resources::SearchResourcesRequest {
             tags,
-            artifact_type,
+            resource_type,
             status,
             namespace: params.namespace,
             limit: params.limit,
         },
     )
     .await?;
-    Ok(ApiResponse::ok(items))
+    Ok(ApiResponse::ok(resources))
 }

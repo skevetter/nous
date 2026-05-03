@@ -71,84 +71,13 @@ impl std::str::FromStr for AgentStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ArtifactType {
-    Worktree,
-    Room,
-    Schedule,
-    Branch,
-}
-
-impl ArtifactType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Worktree => "worktree",
-            Self::Room => "room",
-            Self::Schedule => "schedule",
-            Self::Branch => "branch",
-        }
-    }
-}
-
-impl std::fmt::Display for ArtifactType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for ArtifactType {
-    type Err = NousError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "worktree" => Ok(Self::Worktree),
-            "room" => Ok(Self::Room),
-            "schedule" => Ok(Self::Schedule),
-            "branch" => Ok(Self::Branch),
-            other => Err(NousError::Validation(format!(
-                "invalid artifact type: '{other}'. Valid values: worktree, room, schedule, branch"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ArtifactStatus {
-    Active,
-    Archived,
-    Deleted,
-}
-
-impl ArtifactStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Archived => "archived",
-            Self::Deleted => "deleted",
-        }
-    }
-}
-
-impl std::fmt::Display for ArtifactStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for ArtifactStatus {
-    type Err = NousError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "active" => Ok(Self::Active),
-            "archived" => Ok(Self::Archived),
-            "deleted" => Ok(Self::Deleted),
-            other => Err(NousError::Validation(format!(
-                "invalid artifact status: '{other}'. Valid values: active, archived, deleted"
-            ))),
-        }
+/// Parse a string as an artifact type (subset of ResourceType: worktree, room, schedule, branch).
+pub fn parse_artifact_type(s: &str) -> Result<crate::resources::ResourceType, NousError> {
+    match s {
+        "worktree" | "room" | "schedule" | "branch" => s.parse(),
+        other => Err(NousError::Validation(format!(
+            "invalid artifact type: '{other}'. Valid values: worktree, room, schedule, branch"
+        ))),
     }
 }
 
@@ -282,7 +211,7 @@ pub struct ListAgentsFilter {
 #[derive(Debug, Clone)]
 pub struct RegisterArtifactRequest {
     pub agent_id: String,
-    pub artifact_type: ArtifactType,
+    pub artifact_type: crate::resources::ResourceType,
     pub name: String,
     pub path: Option<String>,
     pub namespace: Option<String>,
@@ -291,9 +220,9 @@ pub struct RegisterArtifactRequest {
 #[derive(Debug, Clone, Default)]
 pub struct ListArtifactsFilter {
     pub agent_id: Option<String>,
-    pub artifact_type: Option<ArtifactType>,
+    pub artifact_type: Option<crate::resources::ResourceType>,
     pub namespace: Option<String>,
-    pub status: Option<ArtifactStatus>,
+    pub status: Option<crate::resources::ResourceStatus>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -681,7 +610,7 @@ pub async fn register_artifact(
     db: &DatabaseConnection,
     req: RegisterArtifactRequest,
 ) -> Result<Artifact, NousError> {
-    let resource_type: crate::resources::ResourceType = req.artifact_type.as_str().parse()?;
+    let resource_type = req.artifact_type;
     let resource = crate::resources::register_resource(
         db,
         crate::resources::RegisterResourceRequest {
@@ -708,22 +637,11 @@ pub async fn list_artifacts(
     db: &DatabaseConnection,
     filter: &ListArtifactsFilter,
 ) -> Result<Vec<Artifact>, NousError> {
-    let resource_type = filter
-        .artifact_type
-        .as_ref()
-        .map(|t| t.as_str().parse::<crate::resources::ResourceType>())
-        .transpose()?;
-    let status = filter
-        .status
-        .as_ref()
-        .map(|s| s.as_str().parse::<crate::resources::ResourceStatus>())
-        .transpose()?;
-
     let resources = crate::resources::list_resources(
         db,
         &crate::resources::ListResourcesFilter {
-            resource_type,
-            status,
+            resource_type: filter.artifact_type,
+            status: filter.status,
             owner_agent_id: filter.agent_id.clone(),
             namespace: filter.namespace.clone(),
             limit: filter.limit,

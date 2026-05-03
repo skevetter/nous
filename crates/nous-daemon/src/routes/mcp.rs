@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use nous_core::agents;
-use nous_core::inventory;
 use nous_core::memory;
 use nous_core::messages::{
     get_thread, mark_read, post_message, read_messages, search_messages, unread_count,
@@ -2214,7 +2213,7 @@ pub async fn dispatch(
         "artifact_register" => {
             let agent_id = require_str(args, "agent_id")?.to_string();
             let artifact_type_str = require_str(args, "type")?;
-            let artifact_type: agents::ArtifactType = artifact_type_str.parse()?;
+            let artifact_type = agents::parse_artifact_type(artifact_type_str)?;
             let name = require_str(args, "name")?.to_string();
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
             let namespace = args
@@ -2247,7 +2246,7 @@ pub async fn dispatch(
             let artifact_type = args
                 .get("type")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<agents::ArtifactType>())
+                .map(|s| agents::parse_artifact_type(s))
                 .transpose()?;
             let namespace = args
                 .get("namespace")
@@ -2386,7 +2385,7 @@ pub async fn dispatch(
         "inventory_register" => {
             let name = require_str(args, "name")?.to_string();
             let type_str = require_str(args, "type")?;
-            let artifact_type: inventory::InventoryType = type_str.parse()?;
+            let resource_type: resources::ResourceType = type_str.parse()?;
             let owner_agent_id = args
                 .get("owner_agent_id")
                 .and_then(|v| v.as_str())
@@ -2405,31 +2404,32 @@ pub async fn dispatch(
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect()
             });
-            let item = inventory::register_item(
+            let resource = resources::register_resource(
                 &state.pool,
-                inventory::RegisterItemRequest {
+                resources::RegisterResourceRequest {
                     name,
-                    artifact_type,
+                    resource_type,
                     owner_agent_id,
                     namespace,
                     path,
                     metadata,
                     tags,
+                    ownership_policy: Some(resource_type.default_ownership_policy()),
                 },
             )
             .await?;
-            Ok(serde_json::to_value(item).unwrap())
+            Ok(serde_json::to_value(resource).unwrap())
         }
         "inventory_list" => {
-            let artifact_type = args
+            let resource_type = args
                 .get("type")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<inventory::InventoryType>())
+                .map(|s| s.parse::<resources::ResourceType>())
                 .transpose()?;
             let status = args
                 .get("status")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .map(|s| s.parse::<resources::ResourceStatus>())
                 .transpose()?;
             let owner_agent_id = args
                 .get("owner_agent_id")
@@ -2441,10 +2441,10 @@ pub async fn dispatch(
                 .map(String::from);
             let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let items = inventory::list_items(
+            let items = resources::list_resources(
                 &state.pool,
-                &inventory::ListItemsFilter {
-                    artifact_type,
+                &resources::ListResourcesFilter {
+                    resource_type,
                     status,
                     owner_agent_id,
                     namespace,
@@ -2458,7 +2458,7 @@ pub async fn dispatch(
         }
         "inventory_get" => {
             let id = require_str(args, "id")?;
-            let item = inventory::get_item_by_id(&state.pool, id).await?;
+            let item = resources::get_resource_by_id(&state.pool, id).await?;
             Ok(serde_json::to_value(item).unwrap())
         }
         "inventory_update" => {
@@ -2477,17 +2477,18 @@ pub async fn dispatch(
             let status = args
                 .get("status")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .map(|s| s.parse::<resources::ResourceStatus>())
                 .transpose()?;
-            let item = inventory::update_item(
+            let item = resources::update_resource(
                 &state.pool,
-                inventory::UpdateItemRequest {
+                resources::UpdateResourceRequest {
                     id,
                     name,
                     path,
                     metadata,
                     tags,
                     status,
+                    ownership_policy: None,
                 },
             )
             .await?;
@@ -2503,26 +2504,26 @@ pub async fn dispatch(
                         .collect()
                 })
                 .unwrap_or_default();
-            let artifact_type = args
+            let resource_type = args
                 .get("type")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<inventory::InventoryType>())
+                .map(|s| s.parse::<resources::ResourceType>())
                 .transpose()?;
             let status = args
                 .get("status")
                 .and_then(|v| v.as_str())
-                .map(|s| s.parse::<inventory::InventoryStatus>())
+                .map(|s| s.parse::<resources::ResourceStatus>())
                 .transpose()?;
             let namespace = args
                 .get("namespace")
                 .and_then(|v| v.as_str())
                 .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let items = inventory::search_by_tags(
+            let items = resources::search_by_tags(
                 &state.pool,
-                &inventory::SearchItemsRequest {
+                &resources::SearchResourcesRequest {
                     tags,
-                    artifact_type,
+                    resource_type,
                     status,
                     namespace,
                     limit,
@@ -2533,13 +2534,13 @@ pub async fn dispatch(
         }
         "inventory_archive" => {
             let id = require_str(args, "id")?;
-            let item = inventory::archive_item(&state.pool, id).await?;
+            let item = resources::archive_resource(&state.pool, id).await?;
             Ok(serde_json::to_value(item).unwrap())
         }
         "inventory_deregister" => {
             let id = require_str(args, "id")?;
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
-            inventory::deregister_item(&state.pool, id, force).await?;
+            resources::deregister_resource(&state.pool, id, force).await?;
             Ok(serde_json::json!({"deleted": true}))
         }
         // --- Unified resource tool handlers ---

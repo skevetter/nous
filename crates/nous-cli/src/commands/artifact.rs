@@ -79,7 +79,7 @@ async fn execute(
             path,
             namespace,
         } => {
-            let artifact_type: agents::ArtifactType = r#type.parse()?;
+            let artifact_type = agents::parse_artifact_type(&r#type)?;
             let artifact = agents::register_artifact(
                 pool,
                 agents::RegisterArtifactRequest {
@@ -101,7 +101,7 @@ async fn execute(
         } => {
             let type_parsed = r#type
                 .as_deref()
-                .map(|s| s.parse::<agents::ArtifactType>())
+                .map(|s| agents::parse_artifact_type(s))
                 .transpose()?;
             let list = agents::list_artifacts(
                 pool,

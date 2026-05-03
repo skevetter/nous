@@ -198,8 +198,8 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            row.0 >= 29,
-            "expected at least 29 migrations, got {}",
+            row.0 >= 33,
+            "expected at least 33 migrations, got {}",
             row.0
         );
 
@@ -228,7 +228,7 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap();
-        assert!(row.0 >= 29);
+        assert!(row.0 >= 33);
 
         pools.close().await;
     }
