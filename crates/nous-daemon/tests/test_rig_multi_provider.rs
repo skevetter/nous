@@ -64,8 +64,8 @@ async fn test_default_model_used_when_no_override() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "with no llm_client, should fail with Config error before reaching model selection: {err}"
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
+        "with no llm_client, should fail with Unavailable error before reaching model selection: {err}"
     );
 }
 
@@ -86,7 +86,7 @@ async fn test_model_override_from_metadata() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
         "with no llm_client, should fail before using model override: {err}"
     );
 }
@@ -108,7 +108,7 @@ async fn test_preamble_extraction_from_metadata() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
         "with no llm_client, preamble extraction should not change the error path: {err}"
     );
 }
@@ -127,8 +127,8 @@ async fn test_llm_client_none_returns_config_error() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
-        "expected Config error about missing LLM client, got: {err}"
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
+        "expected Unavailable error about missing LLM client, got: {err}"
     );
 }
 
@@ -144,7 +144,7 @@ async fn test_process_type_dispatch_routes_claude() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client")),
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client")),
         "claude dispatch should attempt LLM path and fail on missing client: {err}"
     );
 }
@@ -228,7 +228,7 @@ async fn test_metadata_with_both_model_and_preamble() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
         "combined model+preamble metadata should still fail on missing client: {err}"
     );
 }
@@ -252,14 +252,16 @@ async fn test_metadata_with_extra_fields_does_not_break_dispatch() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(&err, NousError::Config(msg) if msg.contains("LLM client not configured")),
+        matches!(&err, NousError::Unavailable(msg) if msg.contains("LLM client not configured")),
         "extra metadata fields should not cause a different error path: {err}"
     );
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_rig_agent_creation_with_real_credentials() {
+    if std::env::var("AWS_ACCESS_KEY_ID").is_err() {
+        return;
+    }
     use rig::client::completion::CompletionClient;
     use rig::client::ProviderClient;
 
