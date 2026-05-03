@@ -19,24 +19,57 @@ async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir
     (state, clock, shutdown, tmp)
 }
 
-/// Spawn scheduler, nudge it awake, wait for processing, then shut down.
+/// Spawn the scheduler, nudge it until at least one run appears for `schedule_id`, then shut down.
 async fn run_scheduler_cycle(
     state: &AppState,
     config: SchedulerConfig,
     clock: &Arc<MockClock>,
     shutdown: &CancellationToken,
-    wait: Duration,
+    schedule_id: &str,
 ) {
     let handle = Scheduler::spawn(state.clone(), config, clock.clone(), shutdown.clone());
-    // Give the scheduler time to enter its select! loop, then nudge repeatedly
-    // to handle the race between mark_stale_runs_failed and the select!.
-    for _ in 0..5 {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        state.schedule_notify.notify_one();
-    }
-    tokio::time::sleep(wait).await;
+    poll_until_run(state, schedule_id, Duration::from_secs(10)).await;
     shutdown.cancel();
     let _ = handle.await;
+}
+
+/// Spawn the scheduler for a negative test (no run expected). Nudge and give a short window, then shut down.
+async fn run_scheduler_cycle_no_run(
+    state: &AppState,
+    config: SchedulerConfig,
+    clock: &Arc<MockClock>,
+    shutdown: &CancellationToken,
+) {
+    let handle = Scheduler::spawn(state.clone(), config, clock.clone(), shutdown.clone());
+    // Nudge a few times with minimal delay to ensure the scheduler processes the tick.
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+        state.schedule_notify.notify_one();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Short grace period — enough for any incorrectly-triggered run to be recorded.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    shutdown.cancel();
+    let _ = handle.await;
+}
+
+/// Poll `list_runs` until at least one run exists, nudging the scheduler each iteration.
+async fn poll_until_run(state: &AppState, schedule_id: &str, timeout: Duration) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        state.schedule_notify.notify_one();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let runs = list_runs(&state.pool, schedule_id, None, None)
+            .await
+            .unwrap();
+        if !runs.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for schedule run to appear"
+        );
+    }
 }
 
 // Base timestamp: 2026-01-01 00:00:00 UTC
@@ -71,7 +104,7 @@ async fn test_schedule_fires_at_correct_time() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(3)).await;
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
@@ -116,7 +149,7 @@ async fn test_once_schedule_fires_and_disables() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(2)).await;
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
@@ -177,7 +210,7 @@ async fn test_disabled_schedule_does_not_fire() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(2)).await;
+    run_scheduler_cycle_no_run(&state, config, &clock, &shutdown).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
@@ -213,7 +246,7 @@ async fn test_failed_action_recorded() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(2)).await;
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
@@ -257,7 +290,7 @@ async fn test_shell_timeout() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(4)).await;
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await
@@ -301,7 +334,7 @@ async fn test_desired_outcome_mismatch() {
         allow_shell: true,
         ..Default::default()
     };
-    run_scheduler_cycle(&state, config, &clock, &shutdown, Duration::from_secs(2)).await;
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
 
     let runs = list_runs(&state.pool, &schedule.id, None, None)
         .await

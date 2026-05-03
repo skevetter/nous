@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn nous_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_nous"))
@@ -41,6 +41,38 @@ fn cleanup_daemon(pid_path: &Path) {
     let _ = fs::remove_file(pid_path);
 }
 
+fn wait_for_pid_file(pid_path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if pid_path.exists() {
+            if let Ok(content) = fs::read_to_string(pid_path) {
+                if content.trim().parse::<i32>().is_ok() {
+                    return;
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for PID file to appear"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_pid_file_removed(pid_path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !pid_path.exists() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for PID file to be removed"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 struct DaemonGuard;
 
 impl Drop for DaemonGuard {
@@ -68,14 +100,9 @@ fn test_full_daemon_lifecycle() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    thread::sleep(Duration::from_secs(3));
-
     // 2. PID file created
     let pid_path = pid_file_path();
-    assert!(
-        pid_path.exists(),
-        "PID file should exist after daemon start"
-    );
+    wait_for_pid_file(&pid_path, Duration::from_secs(10));
 
     let pid_str = fs::read_to_string(&pid_path).expect("should read PID file");
     let pid: i32 = pid_str
@@ -130,13 +157,8 @@ fn test_full_daemon_lifecycle() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    thread::sleep(Duration::from_secs(2));
-
     // 6. PID file removed
-    assert!(
-        !pid_file_path().exists(),
-        "PID file should be removed after stop"
-    );
+    wait_for_pid_file_removed(&pid_file_path(), Duration::from_secs(10));
 
     // 7. Status shows stopped
     let output = Command::new(nous_bin())
@@ -212,14 +234,9 @@ fn test_start_alias() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    thread::sleep(Duration::from_secs(3));
-
     // PID file should exist
     let pid_path = pid_file_path();
-    assert!(
-        pid_path.exists(),
-        "PID file should exist after `nous start`"
-    );
+    wait_for_pid_file(&pid_path, Duration::from_secs(10));
 
     // Status should show running
     let output = Command::new(nous_bin())

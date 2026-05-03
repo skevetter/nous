@@ -206,11 +206,20 @@ async fn async_shell_invoke_returns_running_then_completes() {
 
     assert_eq!(invocation.status, "running");
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    let final_inv = processes::get_invocation(&state.pool, &invocation.id)
-        .await
-        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let final_inv = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let inv = processes::get_invocation(&state.pool, &invocation.id)
+            .await
+            .unwrap();
+        if inv.status != "running" {
+            break inv;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for async invocation to complete"
+        );
+    };
     assert_eq!(final_inv.status, "completed");
     assert!(
         final_inv.result.as_deref().unwrap().contains("async-ok"),
