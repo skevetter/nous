@@ -50,6 +50,35 @@ impl Default for RateLimitConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SchedulerConfig {
+    #[serde(default = "SchedulerConfig::default_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default)]
+    pub allow_shell: bool,
+    #[serde(default = "SchedulerConfig::default_timeout_secs")]
+    pub default_timeout_secs: u64,
+}
+
+impl SchedulerConfig {
+    fn default_max_concurrent() -> usize {
+        4
+    }
+    fn default_timeout_secs() -> u64 {
+        300
+    }
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: Self::default_max_concurrent(),
+            allow_shell: false,
+            default_timeout_secs: Self::default_timeout_secs(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub data_dir: PathBuf,
@@ -60,6 +89,8 @@ pub struct Config {
     pub search: SearchConfig,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 impl Default for Config {
@@ -71,6 +102,7 @@ impl Default for Config {
             api_key: None,
             search: SearchConfig::default(),
             rate_limit: RateLimitConfig::default(),
+            scheduler: SchedulerConfig::default(),
         }
     }
 }
@@ -236,6 +268,28 @@ mod tests {
         "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.search.tokenizer, "porter unicode61");
+    }
+
+    #[test]
+    fn scheduler_config_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.scheduler.max_concurrent, 4);
+        assert!(!cfg.scheduler.allow_shell);
+        assert_eq!(cfg.scheduler.default_timeout_secs, 300);
+    }
+
+    #[test]
+    fn scheduler_config_from_toml() {
+        let toml_str = r#"
+            [scheduler]
+            allow_shell = true
+            max_concurrent = 8
+            default_timeout_secs = 600
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(cfg.scheduler.allow_shell);
+        assert_eq!(cfg.scheduler.max_concurrent, 8);
+        assert_eq!(cfg.scheduler.default_timeout_secs, 600);
     }
 
     #[test]

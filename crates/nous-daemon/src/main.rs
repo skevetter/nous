@@ -106,7 +106,11 @@ async fn main() {
 
     let scheduler_handle = Scheduler::spawn(
         state.clone(),
-        SchedulerConfig::default(),
+        SchedulerConfig {
+            max_concurrent: config.scheduler.max_concurrent,
+            allow_shell: config.scheduler.allow_shell,
+            default_timeout_secs: config.scheduler.default_timeout_secs,
+        },
         Arc::new(SystemClock),
         shutdown.clone(),
     );
