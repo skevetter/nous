@@ -43,16 +43,20 @@ pub fn app_with_options(
         .route("/health", get(routes::health::get))
         .route("/metrics", get(metrics::render));
 
-    let mut protected = protected_routes();
+    let api_routes = protected_routes();
+
+    let mut versioned = Router::new()
+        .nest("/api/v1", api_routes.clone())
+        .merge(api_routes);
 
     if let Some(key) = api_key {
-        protected = protected
+        versioned = versioned
             .layer(axum::middleware::from_fn(auth::require_api_key))
             .layer(axum::Extension(auth::ApiKey(key.into())));
     }
 
     let mut router = public
-        .merge(protected)
+        .merge(versioned)
         .with_state(state)
         .layer(axum::Extension(metrics_handle))
         .layer(axum::middleware::from_fn(metrics::track));
@@ -1273,6 +1277,52 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("http_requests_total") || text.is_empty() || text.starts_with('#'));
+    }
+
+    #[tokio::test]
+    async fn api_v1_prefix_works() {
+        let (state, _tmp) = test_state().await;
+
+        nous_core::rooms::create_room(&state.pool, "v1-room", None, None)
+            .await
+            .unwrap();
+
+        let app = app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/rooms")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["name"], "v1-room");
+    }
+
+    #[tokio::test]
+    async fn api_v1_auth_protected() {
+        let (state, _tmp) = test_state().await;
+        let app = app_with_api_key(state, Some("secret-key"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/rooms")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
