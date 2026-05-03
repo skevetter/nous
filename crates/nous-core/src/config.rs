@@ -24,6 +24,32 @@ impl Default for SearchConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "RateLimitConfig::default_requests_per_minute")]
+    pub requests_per_minute: u32,
+    #[serde(default = "RateLimitConfig::default_burst_size")]
+    pub burst_size: u32,
+}
+
+impl RateLimitConfig {
+    fn default_requests_per_minute() -> u32 {
+        100
+    }
+    fn default_burst_size() -> u32 {
+        25
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_minute: Self::default_requests_per_minute(),
+            burst_size: Self::default_burst_size(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub data_dir: PathBuf,
@@ -31,6 +57,8 @@ pub struct Config {
     pub port: u16,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 impl Default for Config {
@@ -40,6 +68,7 @@ impl Default for Config {
             host: "127.0.0.1".to_string(),
             port: 8377,
             search: SearchConfig::default(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 }

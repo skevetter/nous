@@ -3,6 +3,7 @@ pub mod embedding;
 pub mod error;
 pub mod llm_client;
 pub mod process_manager;
+pub mod rate_limit;
 pub mod response;
 pub mod routes;
 #[cfg(feature = "sandbox")]
@@ -14,9 +15,18 @@ pub mod vector_store;
 use axum::routing::{delete, get, post};
 use axum::Router;
 
+use nous_core::config::RateLimitConfig;
 use state::AppState;
 
 pub fn app(state: AppState) -> Router {
+    router(state)
+}
+
+pub fn app_with_rate_limit(state: AppState, rate_limit: &RateLimitConfig) -> Router {
+    rate_limit::apply(rate_limit, router(state))
+}
+
+fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(routes::health::get))
         .route("/rooms", post(routes::rooms::create))
