@@ -327,6 +327,69 @@ impl AgentTool for MemoryRelateTool {
     }
 }
 
+// --- MemoryUpdateTool ---
+
+#[derive(Default)]
+pub struct MemoryUpdateTool {
+    meta: OnceLock<ToolMetadata>,
+}
+
+impl MemoryUpdateTool {
+    pub fn new() -> Self {
+        Self {
+            meta: OnceLock::new(),
+        }
+    }
+
+    fn init_meta(&self) -> &ToolMetadata {
+        self.meta.get_or_init(|| ToolMetadata {
+            name: "memory_update".into(),
+            description: "Update an existing memory's content or metadata".into(),
+            category: ToolCategory::Memory,
+            version: "0.1.0".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "ID of memory to update" },
+                    "content": { "type": "string", "description": "New content" },
+                    "importance": { "type": "string", "description": "New importance level" }
+                },
+                "required": ["memory_id"]
+            }),
+            output_schema: None,
+            permissions: ToolPermissions::default(),
+            execution_policy: ExecutionPolicy {
+                timeout_secs: 10,
+                ..Default::default()
+            },
+            tags: vec!["memory".into(), "update".into()],
+        })
+    }
+}
+
+impl AgentTool for MemoryUpdateTool {
+    fn metadata(&self) -> &ToolMetadata {
+        self.init_meta()
+    }
+
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let memory_id = args
+            .get("memory_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs("'memory_id' required".into()))?;
+
+        Ok(ToolOutput {
+            content: vec![ToolContent::Text {
+                text: format!(
+                    "memory_update: would update {} for agent {}",
+                    memory_id, ctx.agent_id
+                ),
+            }],
+            metadata: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -419,5 +482,32 @@ mod tests {
         } else {
             panic!("expected text content");
         }
+    }
+
+    #[tokio::test]
+    async fn memory_update_stub() {
+        let tool = MemoryUpdateTool::new();
+        let output = tool
+            .call(
+                json!({"memory_id": "mem-123", "content": "updated content"}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+
+        if let ToolContent::Text { text } = &output.content[0] {
+            assert!(text.contains("memory_update"));
+            assert!(text.contains("mem-123"));
+        } else {
+            panic!("expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_update_validates_args() {
+        let tool = MemoryUpdateTool::new();
+        let result = tool.call(json!({"content": "no id"}), &test_ctx()).await;
+
+        assert!(result.is_err());
     }
 }
