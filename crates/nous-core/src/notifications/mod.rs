@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, Set, Statement};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
@@ -168,10 +168,7 @@ pub async fn list_subscriptions(
             let topics = m
                 .topics
                 .as_deref()
-                .and_then(|s| match serde_json::from_str(s) {
-                    Ok(val) => Some(val),
-                    Err(_) => None,
-                });
+                .and_then(|s| serde_json::from_str(s).ok());
 
             Subscription {
                 room_id: m.room_id,
@@ -289,7 +286,7 @@ pub async fn enqueue_notification(
         topics: Set(topics_json),
         mentions: Set(mentions_json),
         delivered: Set(false),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     nq_entity::Entity::insert(model).exec(db).await?;
@@ -524,9 +521,8 @@ mod tests {
 
         let metadata = serde_json::json!({"topics": ["deployment"], "mentions": ["agent-2"]});
 
-        let pool = db.get_sqlite_connection_pool();
         post_message(
-            pool,
+            &db,
             PostMessageRequest {
                 room_id: room.id.clone(),
                 sender_id: "agent-1".into(),

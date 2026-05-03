@@ -7,7 +7,7 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared(
+        let stmts = [
             "CREATE TABLE IF NOT EXISTS agents (\
              id TEXT NOT NULL PRIMARY KEY, \
              name TEXT NOT NULL, \
@@ -21,22 +21,27 @@ impl MigrationTrait for Migration {
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
              UNIQUE(name, namespace)\
-             ); \
-             CREATE INDEX IF NOT EXISTS idx_agents_namespace ON agents(namespace); \
-             CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id); \
-             CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(namespace, status); \
-             CREATE TRIGGER IF NOT EXISTS agents_au AFTER UPDATE ON agents WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE agents SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END;"
-        ).await?;
+             )",
+            "CREATE INDEX IF NOT EXISTS idx_agents_namespace ON agents(namespace)",
+            "CREATE INDEX IF NOT EXISTS idx_agents_parent ON agents(parent_agent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(namespace, status)",
+            "CREATE TRIGGER IF NOT EXISTS agents_au AFTER UPDATE ON agents WHEN NEW.updated_at = OLD.updated_at BEGIN UPDATE agents SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id; END",
+        ];
+        for sql in stmts {
+            db.execute_unprepared(sql).await?;
+        }
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared(
-            "DROP TRIGGER IF EXISTS agents_au; \
-             DROP TABLE IF EXISTS agents;",
-        )
-        .await?;
+        let stmts = [
+            "DROP TRIGGER IF EXISTS agents_au",
+            "DROP TABLE IF EXISTS agents",
+        ];
+        for sql in stmts {
+            db.execute_unprepared(sql).await?;
+        }
         Ok(())
     }
 }

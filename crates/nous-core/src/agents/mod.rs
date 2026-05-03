@@ -4,14 +4,16 @@ pub mod processes;
 pub mod sandbox;
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entities::agents as agent_entity;
 use crate::entities::agent_relationships as rel_entity;
-use crate::entities::agent_versions as ver_entity;
 use crate::entities::agent_templates as tmpl_entity;
+use crate::entities::agent_versions as ver_entity;
+use crate::entities::agents as agent_entity;
 use crate::error::NousError;
 use crate::notifications::subscribe_to_room;
 use crate::rooms;
@@ -383,8 +385,8 @@ pub async fn register_agent(
         spawn_command: Set(None),
         working_dir: Set(None),
         auto_restart: Set(false),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     agent_entity::Entity::insert(model).exec(db).await?;
@@ -395,7 +397,7 @@ pub async fn register_agent(
             child_id: Set(id.clone()),
             relationship_type: Set("parent-child".to_string()),
             namespace: Set(namespace.clone()),
-            created_at: Set(String::new()),
+            created_at: NotSet,
         };
 
         rel_entity::Entity::insert(rel_model).exec(db).await?;
@@ -894,7 +896,7 @@ pub async fn record_version(
         skill_hash: Set(req.skill_hash),
         config_hash: Set(req.config_hash),
         skills_json: Set(skills),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     ver_entity::Entity::insert(model).exec(db).await?;
@@ -1057,8 +1059,8 @@ pub async fn list_outdated_agents(
 ) -> Result<Vec<Agent>, NousError> {
     let limit = limit.unwrap_or(50).min(200) as u64;
 
-    let mut query = agent_entity::Entity::find()
-        .filter(agent_entity::Column::UpgradeAvailable.eq(true));
+    let mut query =
+        agent_entity::Entity::find().filter(agent_entity::Column::UpgradeAvailable.eq(true));
 
     if let Some(ns) = namespace {
         query = query.filter(agent_entity::Column::Namespace.eq(ns));
@@ -1103,8 +1105,8 @@ pub async fn create_template(
         template_type: Set(req.template_type),
         default_config: Set(config),
         skill_refs: Set(skills),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     tmpl_entity::Entity::insert(model).exec(db).await?;

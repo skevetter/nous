@@ -1,5 +1,5 @@
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::Serialize;
 
 use crate::entities::search_events as se_entity;
@@ -27,7 +27,7 @@ pub async fn record_search_event(
         latency_ms: Set(event.latency_ms as i32),
         workspace_id: Set(event.workspace_id.clone()),
         agent_id: Set(event.agent_id.clone()),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     se_entity::Entity::insert(model).exec(db).await?;
@@ -68,8 +68,7 @@ pub async fn get_search_stats(
         if let Some(since_val) = since {
             values.push(since_val.into());
         }
-        let stmt =
-            Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &total_sql, values);
+        let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &total_sql, values);
         let row = db.query_one(stmt).await?;
         row.map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
             .unwrap_or(0)

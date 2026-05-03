@@ -1706,7 +1706,7 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<MessageType>())
                 .transpose()
-                .map_err(|e| nous_core::error::NousError::Validation(e))?;
+                .map_err(nous_core::error::NousError::Validation)?;
             let msg = post_message(
                 &state.pool,
                 PostMessageRequest {

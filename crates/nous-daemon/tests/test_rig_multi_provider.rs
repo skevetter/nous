@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 async fn test_state() -> (AppState, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     let state = AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),

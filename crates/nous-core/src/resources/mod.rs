@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -297,8 +299,8 @@ pub async fn register_resource(
         tags: Set(tags_json),
         ownership_policy: Set(policy.as_str().to_string()),
         last_seen_at: Set(None),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
         archived_at: Set(None),
     };
 
@@ -459,7 +461,11 @@ pub async fn archive_resource(db: &DatabaseConnection, id: &str) -> Result<Resou
     get_resource_by_id(db, id).await
 }
 
-pub async fn deregister_resource(db: &DatabaseConnection, id: &str, hard: bool) -> Result<(), NousError> {
+pub async fn deregister_resource(
+    db: &DatabaseConnection,
+    id: &str,
+    hard: bool,
+) -> Result<(), NousError> {
     let existing = get_resource_by_id(db, id).await?;
 
     if hard {
@@ -724,7 +730,7 @@ mod tests {
     async fn test_pool() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
+        pools.run_migrations().await.unwrap();
         (pools.fts.clone(), tmp)
     }
 
@@ -1294,9 +1300,7 @@ mod tests {
         .await
         .unwrap();
 
-        let results = search_fts(&db, "shared", Some("ns-a"), None)
-            .await
-            .unwrap();
+        let results = search_fts(&db, "shared", Some("ns-a"), None).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].namespace, "ns-a");
     }

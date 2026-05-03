@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(RoomMessages::CreatedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")),
+                            .default(Expr::cust("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")),
                     )
                     .foreign_key(
                         ForeignKey::create()

@@ -22,7 +22,7 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(SchemaVersion::AppliedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")),
+                            .default(Expr::cust("(strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")),
                     )
                     .to_owned(),
             )

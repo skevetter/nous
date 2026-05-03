@@ -25,13 +25,13 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(Rooms::CreatedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")),
+                            .default(Expr::cust("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")),
                     )
                     .col(
                         ColumnDef::new(Rooms::UpdatedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")),
+                            .default(Expr::cust("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")),
                     )
                     .to_owned(),
             )

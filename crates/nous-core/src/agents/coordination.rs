@@ -144,9 +144,7 @@ mod tests {
     #[tokio::test]
     async fn test_post_handoff_creates_message_with_metadata() {
         let (db, _tmp) = setup().await;
-        let room = create_room(&db, "handoff-room", None, None)
-            .await
-            .unwrap();
+        let room = create_room(&db, "handoff-room", None, None).await.unwrap();
 
         let payload = HandoffPayload {
             task_id: Some("TASK-001".into()),
@@ -175,9 +173,7 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_presence_posts_to_room() {
         let (db, _tmp) = setup().await;
-        let room = create_room(&db, "presence-room", None, None)
-            .await
-            .unwrap();
+        let room = create_room(&db, "presence-room", None, None).await.unwrap();
 
         let event = PresenceEvent {
             agent_id: "agent-x".into(),

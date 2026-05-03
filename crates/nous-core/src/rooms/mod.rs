@@ -1,5 +1,5 @@
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, Set, Statement};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -60,8 +60,8 @@ pub async fn create_room(
         purpose: Set(purpose.map(String::from)),
         metadata: Set(metadata_json),
         archived: Set(false),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     let result = rooms_entity::Entity::insert(model).exec(db).await;
@@ -98,9 +98,7 @@ pub async fn list_rooms(
 }
 
 pub async fn get_room(db: &DatabaseConnection, id_or_name: &str) -> Result<Room, NousError> {
-    let model = rooms_entity::Entity::find_by_id(id_or_name)
-        .one(db)
-        .await?;
+    let model = rooms_entity::Entity::find_by_id(id_or_name).one(db).await?;
 
     if let Some(m) = model {
         return Ok(Room::from_model(m));
@@ -215,7 +213,7 @@ mod tests {
     async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
+        pools.run_migrations().await.unwrap();
         let db = pools.fts.clone();
         (db, tmp)
     }
@@ -239,9 +237,7 @@ mod tests {
         let (db, _tmp) = setup().await;
 
         let room1 = create_room(&db, "active-room", None, None).await.unwrap();
-        let room2 = create_room(&db, "archived-room", None, None)
-            .await
-            .unwrap();
+        let room2 = create_room(&db, "archived-room", None, None).await.unwrap();
         archive_room(&db, &room2.id).await.unwrap();
 
         let active = list_rooms(&db, false).await.unwrap();

@@ -3,7 +3,7 @@
 use nous_core::agents::processes::{create_process, get_process_by_id};
 use nous_core::agents::{self, AgentType, RegisterAgentRequest};
 use nous_core::db::DbPools;
-use sqlx::Row;
+use sea_orm::{ConnectionTrait, Statement, TryGetable};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -11,29 +11,22 @@ use uuid::Uuid;
 async fn migration_026_runs_on_fresh_db() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
-
-    // Verify migration 026 was applied
-    let version_exists: bool =
-        sqlx::query("SELECT EXISTS(SELECT 1 FROM schema_version WHERE version = '026')")
-            .fetch_one(&pools.fts)
-            .await
-            .unwrap()
-            .get(0);
-
-    assert!(version_exists, "migration 026 should be applied");
+    pools.run_migrations().await.unwrap();
 
     // Verify agent_processes table has sandbox columns
-    let table_info: Vec<(String, String)> = sqlx::query_as(
+    let rows = pools.fts.query_all(Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
         "SELECT name, type FROM pragma_table_info('agent_processes') WHERE name LIKE 'sandbox_%'",
-    )
-    .fetch_all(&pools.fts)
+    ))
     .await
     .unwrap();
 
-    assert_eq!(table_info.len(), 6, "should have 6 sandbox columns");
+    assert_eq!(rows.len(), 6, "should have 6 sandbox columns");
 
-    let column_names: Vec<String> = table_info.iter().map(|(name, _)| name.clone()).collect();
+    let column_names: Vec<String> = rows
+        .iter()
+        .map(|r| String::try_get_by(r, 0usize).unwrap())
+        .collect();
     assert!(column_names.contains(&"sandbox_image".to_string()));
     assert!(column_names.contains(&"sandbox_cpus".to_string()));
     assert!(column_names.contains(&"sandbox_memory_mib".to_string()));
@@ -50,7 +43,7 @@ async fn migration_026_runs_on_existing_db_with_data() {
     let pools = DbPools::connect(tmp.path()).await.unwrap();
 
     // Run migrations including 026
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     // Create test agent
     let agent = agents::register_agent(
@@ -84,32 +77,43 @@ async fn migration_026_runs_on_existing_db_with_data() {
     .unwrap();
 
     // Verify old process exists
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_processes")
-        .fetch_one(&pools.fts)
+    let count_row = pools
+        .fts
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM agent_processes",
+        ))
         .await
+        .unwrap()
         .unwrap();
+    let count: i64 = i64::try_get_by(&count_row, 0usize).unwrap();
     assert_eq!(count, 1, "should have 1 process");
 
-    // Verify old process has NULL sandbox columns
-    let row: (String, String, Option<String>) =
-        sqlx::query_as("SELECT id, process_type, sandbox_image FROM agent_processes WHERE id = ?")
-            .bind(&old_process.id)
-            .fetch_one(&pools.fts)
-            .await
-            .unwrap();
-
-    assert_eq!(row.0, old_process.id);
-    assert_eq!(row.1, "shell");
-    assert_eq!(row.2, None, "sandbox_image should be NULL for old process");
-
-    // Verify running migrations again is idempotent
-    pools.run_migrations("porter unicode61").await.unwrap();
-
-    // Verify process still exists after re-running migrations
-    let count_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_processes")
-        .fetch_one(&pools.fts)
+    // Verify old process has NULL sandbox columns via the Process struct
+    let fetched = get_process_by_id(&pools.fts, &old_process.id)
         .await
         .unwrap();
+    assert_eq!(fetched.id, old_process.id);
+    assert_eq!(fetched.process_type, "shell");
+    assert_eq!(
+        fetched.sandbox_image, None,
+        "sandbox_image should be NULL for old process"
+    );
+
+    // Verify running migrations again is idempotent
+    pools.run_migrations().await.unwrap();
+
+    // Verify process still exists after re-running migrations
+    let count_row2 = pools
+        .fts
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM agent_processes",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let count_after: i64 = i64::try_get_by(&count_row2, 0usize).unwrap();
     assert_eq!(count_after, 1, "process should still exist");
 
     pools.close().await;
@@ -119,7 +123,7 @@ async fn migration_026_runs_on_existing_db_with_data() {
 async fn process_struct_reads_and_writes_sandbox_fields() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     // Create test agent
     let agent = agents::register_agent(
@@ -139,18 +143,19 @@ async fn process_struct_reads_and_writes_sandbox_fields() {
 
     // Create process with sandbox fields
     let process_id = Uuid::now_v7().to_string();
-    sqlx::query(
-        "INSERT INTO agent_processes (id, agent_id, process_type, command, \
+    pools
+        .fts
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "INSERT INTO agent_processes (id, agent_id, process_type, command, \
          sandbox_image, sandbox_cpus, sandbox_memory_mib, sandbox_network_policy, \
          sandbox_volumes_json, sandbox_name) \
          VALUES (?, ?, 'sandbox', 'claude-code', 'ubuntu:24.04', 2, 512, 'isolated', \
          '[{\"guest_path\":\"/workspace\",\"readonly\":false}]', 'test-sandbox')",
-    )
-    .bind(&process_id)
-    .bind(&agent.id)
-    .execute(&pools.fts)
-    .await
-    .unwrap();
+            [process_id.clone().into(), agent.id.clone().into()],
+        ))
+        .await
+        .unwrap();
 
     // Read back the process via Process struct
     let process = get_process_by_id(&pools.fts, &process_id).await.unwrap();
@@ -176,7 +181,7 @@ async fn process_struct_reads_and_writes_sandbox_fields() {
 async fn existing_process_types_still_work() {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     // Create test agent
     let agent = agents::register_agent(
@@ -215,9 +220,13 @@ async fn existing_process_types_still_work() {
     assert_eq!(shell_process.sandbox_image, None);
 
     // Mark shell process as stopped to allow creating another active process
-    sqlx::query("UPDATE agent_processes SET status = 'stopped' WHERE id = ?")
-        .bind(&shell_process.id)
-        .execute(&pools.fts)
+    pools
+        .fts
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE agent_processes SET status = 'stopped' WHERE id = ?",
+            [shell_process.id.clone().into()],
+        ))
         .await
         .unwrap();
 
@@ -241,9 +250,13 @@ async fn existing_process_types_still_work() {
     assert_eq!(claude_process.sandbox_cpus, None);
 
     // Mark claude process as stopped to allow creating another active process
-    sqlx::query("UPDATE agent_processes SET status = 'stopped' WHERE id = ?")
-        .bind(&claude_process.id)
-        .execute(&pools.fts)
+    pools
+        .fts
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE agent_processes SET status = 'stopped' WHERE id = ?",
+            [claude_process.id.clone().into()],
+        ))
         .await
         .unwrap();
 
@@ -343,7 +356,7 @@ async fn create_sandbox_process_sets_correct_fields() {
 
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
 
     let agent = agents::register_agent(
         &pools.fts,

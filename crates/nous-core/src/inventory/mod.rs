@@ -268,7 +268,11 @@ pub async fn archive_item(db: &DatabaseConnection, id: &str) -> Result<Inventory
     Ok(InventoryItem::from_resource(&resource))
 }
 
-pub async fn deregister_item(db: &DatabaseConnection, id: &str, hard: bool) -> Result<(), NousError> {
+pub async fn deregister_item(
+    db: &DatabaseConnection,
+    id: &str,
+    hard: bool,
+) -> Result<(), NousError> {
     crate::resources::deregister_resource(db, id, hard).await
 }
 

@@ -158,9 +158,7 @@ pub async fn get_schedule(db: &DatabaseConnection, id: &str) -> Result<Schedule,
 
     match model {
         Some(m) => Ok(Schedule::from_model(m)),
-        None => Err(NousError::NotFound(format!(
-            "schedule '{id}' not found"
-        ))),
+        None => Err(NousError::NotFound(format!("schedule '{id}' not found"))),
     }
 }
 
@@ -349,8 +347,7 @@ pub async fn list_runs(
 ) -> Result<Vec<ScheduleRun>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
 
-    let mut sql =
-        String::from("SELECT * FROM schedule_runs WHERE schedule_id = ?");
+    let mut sql = String::from("SELECT * FROM schedule_runs WHERE schedule_id = ?");
     let mut values: Vec<sea_orm::Value> = vec![schedule_id.to_string().into()];
 
     if let Some(s) = status {
@@ -416,7 +413,9 @@ pub async fn record_run(
     .await?;
 
     // Purge runs exceeding max_runs
-    let schedule = sched_entity::Entity::find_by_id(schedule_id).one(db).await?;
+    let schedule = sched_entity::Entity::find_by_id(schedule_id)
+        .one(db)
+        .await?;
 
     if let Some(s) = schedule {
         db.execute(Statement::from_sql_and_values(
@@ -424,10 +423,7 @@ pub async fn record_run(
             "DELETE FROM schedule_runs WHERE id IN (\
              SELECT id FROM schedule_runs WHERE schedule_id = ? \
              ORDER BY started_at DESC LIMIT -1 OFFSET ?)",
-            [
-                schedule_id.to_string().into(),
-                s.max_runs.into(),
-            ],
+            [schedule_id.to_string().into(), s.max_runs.into()],
         ))
         .await?;
     }
@@ -485,8 +481,8 @@ pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Valu
             [],
         ))
         .await?;
-    let next_upcoming: Option<i64> = next_row
-        .and_then(|r| r.try_get_by::<Option<i64>, _>("val").ok().flatten());
+    let next_upcoming: Option<i64> =
+        next_row.and_then(|r| r.try_get_by::<Option<i64>, _>("val").ok().flatten());
 
     Ok(serde_json::json!({
         "total": total,

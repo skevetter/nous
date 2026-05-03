@@ -5,14 +5,18 @@ use nous_core::memory::{
 };
 use tempfile::TempDir;
 
-async fn setup() -> (sqlx::SqlitePool, nous_core::db::VecPool, TempDir) {
+async fn setup() -> (
+    nous_core::db::DatabaseConnection,
+    nous_core::db::VecPool,
+    TempDir,
+) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     (pools.fts, pools.vec, tmp)
 }
 
-async fn seed_memories(pool: &sqlx::SqlitePool) {
+async fn seed_memories(pool: &nous_core::db::DatabaseConnection) {
     memory::save_memory(
         pool,
         SaveMemoryRequest {

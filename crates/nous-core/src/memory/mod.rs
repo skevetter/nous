@@ -5,14 +5,16 @@ pub mod rerank;
 pub mod vector_store;
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::db::VecPool;
 use crate::entities::{
-    memories as mem_entity, memory_access_log as access_entity,
-    memory_relations as rel_entity, memory_sessions as session_entity,
+    memories as mem_entity, memory_access_log as access_entity, memory_relations as rel_entity,
+    memory_sessions as session_entity,
 };
 use crate::error::NousError;
 
@@ -301,7 +303,10 @@ pub struct RelateRequest {
 
 // --- Operations ---
 
-pub async fn save_memory(db: &DatabaseConnection, req: SaveMemoryRequest) -> Result<Memory, NousError> {
+pub async fn save_memory(
+    db: &DatabaseConnection,
+    req: SaveMemoryRequest,
+) -> Result<Memory, NousError> {
     if req.title.trim().is_empty() {
         return Err(NousError::Validation("memory title cannot be empty".into()));
     }
@@ -354,8 +359,8 @@ pub async fn save_memory(db: &DatabaseConnection, req: SaveMemoryRequest) -> Res
         valid_from: Set(req.valid_from),
         valid_until: Set(req.valid_until),
         archived: Set(false),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
         embedding: Set(None),
         session_id: Set(None),
     };
@@ -366,9 +371,7 @@ pub async fn save_memory(db: &DatabaseConnection, req: SaveMemoryRequest) -> Res
 }
 
 pub async fn get_memory_by_id(db: &DatabaseConnection, id: &str) -> Result<Memory, NousError> {
-    let model = mem_entity::Entity::find_by_id(id)
-        .one(db)
-        .await?;
+    let model = mem_entity::Entity::find_by_id(id).one(db).await?;
 
     let model = model.ok_or_else(|| NousError::NotFound(format!("memory '{id}' not found")))?;
     Ok(Memory::from_model(model))
@@ -520,8 +523,7 @@ pub async fn get_context(
 ) -> Result<Vec<Memory>, NousError> {
     let limit = req.limit.unwrap_or(20).min(100);
 
-    let mut query = mem_entity::Entity::find()
-        .filter(mem_entity::Column::Archived.eq(false));
+    let mut query = mem_entity::Entity::find().filter(mem_entity::Column::Archived.eq(false));
 
     if let Some(ref ws) = req.workspace_id {
         query = query.filter(mem_entity::Column::WorkspaceId.eq(ws.as_str()));
@@ -564,7 +566,7 @@ pub async fn relate_memories(
         source_id: Set(req.source_id.clone()),
         target_id: Set(req.target_id.clone()),
         relation_type: Set(req.relation_type.as_str().to_string()),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     let result = rel_entity::Entity::insert(model).exec(db).await;
@@ -591,10 +593,11 @@ pub async fn relate_memories(
     get_relation_by_id(db, &id).await
 }
 
-pub async fn get_relation_by_id(db: &DatabaseConnection, id: &str) -> Result<MemoryRelation, NousError> {
-    let model = rel_entity::Entity::find_by_id(id)
-        .one(db)
-        .await?;
+pub async fn get_relation_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<MemoryRelation, NousError> {
+    let model = rel_entity::Entity::find_by_id(id).one(db).await?;
 
     let model =
         model.ok_or_else(|| NousError::NotFound(format!("memory relation '{id}' not found")))?;
@@ -631,7 +634,7 @@ pub async fn log_access(
         memory_id: Set(memory_id.to_string()),
         access_type: Set(access_type.to_string()),
         session_id: Set(session_id.map(String::from)),
-        accessed_at: Set(String::new()),
+        accessed_at: NotSet,
     };
 
     access_entity::Entity::insert(model).exec(db).await?;
@@ -928,7 +931,7 @@ pub async fn session_start(
         id: Set(id.clone()),
         agent_id: Set(agent_id.map(String::from)),
         project: Set(project.map(String::from)),
-        started_at: Set(String::new()),
+        started_at: NotSet,
         ended_at: Set(None),
         summary: Set(None),
     };
@@ -938,7 +941,10 @@ pub async fn session_start(
     get_session_by_id(db, &id).await
 }
 
-pub async fn session_end(db: &DatabaseConnection, session_id: &str) -> Result<MemorySession, NousError> {
+pub async fn session_end(
+    db: &DatabaseConnection,
+    session_id: &str,
+) -> Result<MemorySession, NousError> {
     let session = get_session_by_id(db, session_id).await?;
     if session.ended_at.is_some() {
         return Err(NousError::Validation("session already ended".into()));
@@ -1080,11 +1086,10 @@ pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
 }
 
 async fn get_session_by_id(db: &DatabaseConnection, id: &str) -> Result<MemorySession, NousError> {
-    let model = session_entity::Entity::find_by_id(id)
-        .one(db)
-        .await?;
+    let model = session_entity::Entity::find_by_id(id).one(db).await?;
 
-    let model = model.ok_or_else(|| NousError::NotFound(format!("memory session '{id}' not found")))?;
+    let model =
+        model.ok_or_else(|| NousError::NotFound(format!("memory session '{id}' not found")))?;
     Ok(MemorySession::from_model(model))
 }
 
@@ -2264,9 +2269,7 @@ mod tests {
     async fn save_prompt_empty_fails() {
         let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&db, None, None, None, "   ")
-            .await
-            .unwrap_err();
+        let err = save_prompt(&db, None, None, None, "   ").await.unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
     }
 

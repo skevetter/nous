@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, Set, Statement};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, QuerySelect, Set, Statement,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -150,8 +152,8 @@ pub async fn create_process(
         sandbox_network_policy: Set(None),
         sandbox_volumes_json: Set(None),
         sandbox_name: Set(None),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     proc_entity::Entity::insert(model).exec(db).await?;
@@ -202,8 +204,8 @@ pub async fn create_sandbox_process(
         sandbox_network_policy: Set(sandbox_network_policy.map(String::from)),
         sandbox_volumes_json: Set(sandbox_volumes_json.map(String::from)),
         sandbox_name: Set(Some(name.to_string())),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     proc_entity::Entity::insert(model).exec(db).await?;
@@ -214,8 +216,7 @@ pub async fn create_sandbox_process(
 pub async fn get_process_by_id(db: &DatabaseConnection, id: &str) -> Result<Process, NousError> {
     let model = proc_entity::Entity::find_by_id(id).one(db).await?;
 
-    let model =
-        model.ok_or_else(|| NousError::NotFound(format!("process '{id}' not found")))?;
+    let model = model.ok_or_else(|| NousError::NotFound(format!("process '{id}' not found")))?;
     Ok(Process::from_model(model))
 }
 
@@ -379,9 +380,7 @@ pub async fn list_processes(
     Ok(models.into_iter().map(Process::from_model).collect())
 }
 
-pub async fn list_all_active_processes(
-    db: &DatabaseConnection,
-) -> Result<Vec<Process>, NousError> {
+pub async fn list_all_active_processes(db: &DatabaseConnection) -> Result<Vec<Process>, NousError> {
     let rows = db
         .query_all(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
@@ -452,7 +451,7 @@ pub async fn create_invocation(
         completed_at: Set(None),
         duration_ms: Set(None),
         metadata_json: Set(metadata.map(String::from)),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     inv_entity::Entity::insert(model).exec(db).await?;
@@ -509,8 +508,7 @@ pub async fn update_invocation(
 pub async fn get_invocation(db: &DatabaseConnection, id: &str) -> Result<Invocation, NousError> {
     let model = inv_entity::Entity::find_by_id(id).one(db).await?;
 
-    let model =
-        model.ok_or_else(|| NousError::NotFound(format!("invocation '{id}' not found")))?;
+    let model = model.ok_or_else(|| NousError::NotFound(format!("invocation '{id}' not found")))?;
     Ok(Invocation::from_model(model))
 }
 
@@ -522,8 +520,7 @@ pub async fn list_invocations(
 ) -> Result<Vec<Invocation>, NousError> {
     let limit = limit.unwrap_or(20).min(100) as u64;
 
-    let mut query = inv_entity::Entity::find()
-        .filter(inv_entity::Column::AgentId.eq(agent_id));
+    let mut query = inv_entity::Entity::find().filter(inv_entity::Column::AgentId.eq(agent_id));
 
     if let Some(status) = status_filter {
         query = query.filter(inv_entity::Column::Status.eq(status));

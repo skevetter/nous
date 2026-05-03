@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -180,7 +180,7 @@ pub async fn post_message(
         reply_to: Set(request.reply_to.clone()),
         metadata: Set(metadata_json),
         message_type: Set(msg_type),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     msg_entity::Entity::insert(model).exec(db).await?;
@@ -385,7 +385,10 @@ pub async fn get_thread(
     let stmt = Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,
         "SELECT * FROM room_messages WHERE id = ? OR reply_to = ? ORDER BY created_at ASC",
-        [req.root_message_id.clone().into(), req.root_message_id.clone().into()],
+        [
+            req.root_message_id.clone().into(),
+            req.root_message_id.clone().into(),
+        ],
     );
     let rows = db.query_all(stmt).await?;
 
@@ -468,9 +471,10 @@ pub async fn unread_count(
     db: &DatabaseConnection,
     req: UnreadCountRequest,
 ) -> Result<ChatCursor, NousError> {
-    let cursor_model = cursor_entity::Entity::find_by_id((req.room_id.clone(), req.agent_id.clone()))
-        .one(db)
-        .await?;
+    let cursor_model =
+        cursor_entity::Entity::find_by_id((req.room_id.clone(), req.agent_id.clone()))
+            .one(db)
+            .await?;
 
     let (last_read_message_id, last_read_at) = match cursor_model {
         Some(m) => (m.last_read_message_id, m.last_read_at),
@@ -528,7 +532,7 @@ mod tests {
     async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
+        pools.run_migrations().await.unwrap();
         let db = pools.fts.clone();
         (db, tmp)
     }

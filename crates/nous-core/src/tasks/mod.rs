@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -358,8 +358,8 @@ pub async fn create_task(
         assignee_id: Set(assignee_id.map(String::from)),
         labels: Set(labels_json),
         room_id: Set(effective_room_id.clone()),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
         closed_at: Set(None),
     };
 
@@ -372,7 +372,7 @@ pub async fn create_task(
         old_value: Set(None),
         new_value: Set(Some(title.to_string())),
         actor_id: Set(actor_id.map(String::from)),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     event_entity::Entity::insert(event_model).exec(db).await?;
@@ -535,7 +535,7 @@ pub async fn update_task(
                 old_value: Set(Some(existing.status.clone())),
                 new_value: Set(Some(new_status.to_string())),
                 actor_id: Set(actor_id.map(String::from)),
-                created_at: Set(String::new()),
+                created_at: NotSet,
             };
             event_entity::Entity::insert(event_model).exec(db).await?;
 
@@ -580,7 +580,7 @@ pub async fn update_task(
                 old_value: Set(Some(existing.priority.clone())),
                 new_value: Set(Some(new_priority.to_string())),
                 actor_id: Set(actor_id.map(String::from)),
-                created_at: Set(String::new()),
+                created_at: NotSet,
             };
             event_entity::Entity::insert(event_model).exec(db).await?;
 
@@ -635,7 +635,7 @@ pub async fn update_task(
                 old_value: Set(Some(old_assignee.to_string())),
                 new_value: Set(Some(new_assignee.to_string())),
                 actor_id: Set(actor_id.map(String::from)),
-                created_at: Set(String::new()),
+                created_at: NotSet,
             };
             event_entity::Entity::insert(event_model).exec(db).await?;
 
@@ -753,7 +753,7 @@ pub async fn link_tasks(
         source_id: Set(source_id.to_string()),
         target_id: Set(target_id.to_string()),
         link_type: Set(link_type.to_string()),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     link_entity::Entity::insert(model).exec(db).await?;
@@ -765,7 +765,7 @@ pub async fn link_tasks(
         old_value: Set(None),
         new_value: Set(Some(format!("{link_type}:{target_id}"))),
         actor_id: Set(actor_id.map(String::from)),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     event_entity::Entity::insert(event_model).exec(db).await?;
@@ -806,7 +806,7 @@ pub async fn unlink_tasks(
         old_value: Set(Some(format!("{link_type}:{target_id}"))),
         new_value: Set(None),
         actor_id: Set(actor_id.map(String::from)),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     event_entity::Entity::insert(event_model).exec(db).await?;
@@ -914,7 +914,7 @@ pub async fn add_note(
         old_value: Set(None),
         new_value: Set(Some(msg.id.clone())),
         actor_id: Set(Some(sender_id.to_string())),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     event_entity::Entity::insert(event_model).exec(db).await?;
@@ -1032,7 +1032,7 @@ pub async fn add_dependency(
         task_id: Set(task_id.to_string()),
         depends_on_task_id: Set(depends_on_task_id.to_string()),
         dep_type: Set(dep_type.to_string()),
-        created_at: Set(String::new()),
+        created_at: NotSet,
     };
 
     let result = dep_entity::Entity::insert(model).exec(db).await;
@@ -1047,7 +1047,10 @@ pub async fn add_dependency(
     get_dependency_by_id(db, &id).await
 }
 
-async fn get_dependency_by_id(db: &DatabaseConnection, id: &str) -> Result<TaskDependency, NousError> {
+async fn get_dependency_by_id(
+    db: &DatabaseConnection,
+    id: &str,
+) -> Result<TaskDependency, NousError> {
     let model = dep_entity::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -1146,7 +1149,8 @@ pub struct TaskTemplate {
 
 impl TaskTemplate {
     fn from_model(m: template_entity::Model) -> Self {
-        let default_labels: Vec<String> = serde_json::from_str(&m.default_labels).unwrap_or_default();
+        let default_labels: Vec<String> =
+            serde_json::from_str(&m.default_labels).unwrap_or_default();
         let checklist: Vec<String> = serde_json::from_str(&m.checklist).unwrap_or_default();
 
         Self {
@@ -1196,8 +1200,8 @@ pub async fn create_template(
         default_priority: Set(priority.to_string()),
         default_labels: Set(labels_json),
         checklist: Set(checklist_json),
-        created_at: Set(String::new()),
-        updated_at: Set(String::new()),
+        created_at: NotSet,
+        updated_at: NotSet,
     };
 
     let result = template_entity::Entity::insert(model).exec(db).await;
@@ -1321,7 +1325,10 @@ pub struct BatchError {
     pub error: String,
 }
 
-pub async fn batch_close(db: &DatabaseConnection, task_ids: &[String]) -> Result<BatchResult, NousError> {
+pub async fn batch_close(
+    db: &DatabaseConnection,
+    task_ids: &[String],
+) -> Result<BatchResult, NousError> {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
@@ -1403,7 +1410,7 @@ mod tests {
     async fn setup() -> (DatabaseConnection, TempDir) {
         let tmp = TempDir::new().unwrap();
         let pools = DbPools::connect(tmp.path()).await.unwrap();
-        pools.run_migrations("porter unicode61").await.unwrap();
+        pools.run_migrations().await.unwrap();
         let db = pools.fts.clone();
         (db, tmp)
     }

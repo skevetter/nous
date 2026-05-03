@@ -98,7 +98,7 @@ async fn check_database(data_dir: &std::path::Path) -> bool {
 
     println!("[OK] Database connectivity (memory-fts.db, memory-vec.db)");
 
-    let migration_ok = match pools.run_migrations("porter unicode61").await {
+    let migration_ok = match pools.run_migrations().await {
         Ok(()) => {
             println!("[OK] Migrations up to date");
             true
@@ -119,13 +119,22 @@ async fn check_database(data_dir: &std::path::Path) -> bool {
     migration_ok
 }
 
-async fn check_subsystem_table(pool: &sqlx::SqlitePool, table: &str) {
-    match sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
-        .fetch_one(pool)
-        .await
-    {
-        Ok(count) => {
+async fn check_subsystem_table(db: &nous_core::db::DatabaseConnection, table: &str) {
+    use sea_orm::{ConnectionTrait, Statement, TryGetable};
+    let result = db
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            format!("SELECT count(*) FROM {table}"),
+        ))
+        .await;
+
+    match result {
+        Ok(Some(row)) => {
+            let count: i64 = i64::try_get_by(&row, 0usize).unwrap_or(0);
             println!("[OK] {table} table accessible ({count} rows)");
+        }
+        Ok(None) => {
+            println!("[FAIL] {table} table not accessible: no rows returned");
         }
         Err(e) => {
             println!("[FAIL] {table} table not accessible: {e}");

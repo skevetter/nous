@@ -2,10 +2,10 @@ use nous_core::db::DbPools;
 use nous_core::schedules::{self, Clock, CronExpr, MockClock};
 use tempfile::TempDir;
 
-async fn setup() -> (sqlx::SqlitePool, TempDir) {
+async fn setup() -> (nous_core::db::DatabaseConnection, TempDir) {
     let tmp = TempDir::new().unwrap();
     let pools = DbPools::connect(tmp.path()).await.unwrap();
-    pools.run_migrations("porter unicode61").await.unwrap();
+    pools.run_migrations().await.unwrap();
     (pools.fts, tmp)
 }
 

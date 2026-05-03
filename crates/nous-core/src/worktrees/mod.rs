@@ -133,10 +133,7 @@ pub async fn insert_worktree(db: &DatabaseConnection, wt: &Worktree) -> Result<(
     Ok(())
 }
 
-pub async fn get_worktree_by_id(
-    db: &DatabaseConnection,
-    id: &str,
-) -> Result<Worktree, NousError> {
+pub async fn get_worktree_by_id(db: &DatabaseConnection, id: &str) -> Result<Worktree, NousError> {
     let model = wt_entity::Entity::find_by_id(id).one(db).await?;
 
     match model {
@@ -349,10 +346,7 @@ pub async fn get(db: &DatabaseConnection, id_or_slug: &str) -> Result<Worktree, 
     get_by_id_or_slug(db, id_or_slug).await
 }
 
-pub async fn archive(
-    db: &DatabaseConnection,
-    id_or_slug: &str,
-) -> Result<Worktree, NousError> {
+pub async fn archive(db: &DatabaseConnection, id_or_slug: &str) -> Result<Worktree, NousError> {
     let wt = get_by_id_or_slug(db, id_or_slug).await?;
 
     let output = Command::new("git")
