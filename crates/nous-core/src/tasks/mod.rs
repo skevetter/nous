@@ -402,7 +402,7 @@ pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError
     event_entity::Entity::insert(event_model).exec(db).await?;
 
     if let Some(ref rid) = effective_room_id {
-        let _ = post_task_event_to_room(PostTaskEventParams {
+        if let Err(e) = post_task_event_to_room(PostTaskEventParams {
             db,
             registry,
             task_id: &id,
@@ -412,7 +412,10 @@ pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError
             new_value: Some(title),
             actor_id,
         })
-        .await;
+        .await
+        {
+            tracing::warn!(task_id = %id, error = %e, "failed to post task created event to room");
+        }
     }
 
     let model = task_entity::Entity::find_by_id(&id)
@@ -603,7 +606,7 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
             }
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(PostTaskEventParams {
+                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
                     task_id: id,
@@ -613,7 +616,10 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
                     new_value: Some(new_status),
                     actor_id,
                 })
-                .await;
+                .await
+                {
+                    tracing::warn!(task_id = %id, error = %e, "failed to post task status_changed event to room");
+                }
             }
         }
     }
@@ -639,7 +645,7 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
             .await?;
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(PostTaskEventParams {
+                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
                     task_id: id,
@@ -649,7 +655,10 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
                     new_value: Some(new_priority),
                     actor_id,
                 })
-                .await;
+                .await
+                {
+                    tracing::warn!(task_id = %id, error = %e, "failed to post task priority_changed event to room");
+                }
             }
         }
     }
@@ -694,7 +703,7 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
             .await?;
 
             if let Some(ref rid) = existing.room_id {
-                let _ = post_task_event_to_room(PostTaskEventParams {
+                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
                     db,
                     registry,
                     task_id: id,
@@ -704,7 +713,10 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
                     new_value: Some(new_assignee),
                     actor_id,
                 })
-                .await;
+                .await
+                {
+                    tracing::warn!(task_id = %id, error = %e, "failed to post task assigned event to room");
+                }
             }
         }
     }

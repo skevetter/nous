@@ -97,7 +97,9 @@ impl NotificationRegistry {
                     .and_then(|s| serde_json::from_str(s).ok());
 
                 if should_notify_agent(&notification, &row.agent_id, sub_topics.as_deref()) {
-                    let _ = enqueue_notification(db, &row.agent_id, &notification).await;
+                    if let Err(e) = enqueue_notification(db, &row.agent_id, &notification).await {
+                        tracing::warn!(agent_id = %row.agent_id, error = %e, "failed to enqueue notification");
+                    }
                 }
             }
         }

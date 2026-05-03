@@ -2453,7 +2453,7 @@ pub async fn dispatch(
             )
             .await?;
             let latency_ms = start.elapsed().as_millis() as i64;
-            let _ = memory::analytics::record_search_event(
+            if let Err(e) = memory::analytics::record_search_event(
                 &state.pool,
                 &memory::analytics::SearchEvent {
                     query_text: query,
@@ -2464,7 +2464,10 @@ pub async fn dispatch(
                     agent_id,
                 },
             )
-            .await;
+            .await
+            {
+                tracing::debug!(error = %e, "failed to record fts search analytics");
+            }
             for mem in &results {
                 let _ = memory::log_access(&state.pool, &mem.id, "search", None).await;
             }
@@ -2753,7 +2756,7 @@ pub async fn dispatch(
             )
             .await?;
             let latency_ms = start.elapsed().as_millis() as i64;
-            let _ = memory::analytics::record_search_event(
+            if let Err(e) = memory::analytics::record_search_event(
                 &state.pool,
                 &memory::analytics::SearchEvent {
                     query_text: String::new(),
@@ -2764,7 +2767,10 @@ pub async fn dispatch(
                     agent_id: None,
                 },
             )
-            .await;
+            .await
+            {
+                tracing::debug!(error = %e, "failed to record vector search analytics");
+            }
             Ok(serde_json::to_value(results).unwrap())
         }
         "memory_chunk" => {
@@ -2865,7 +2871,7 @@ pub async fn dispatch(
                 })
                 .await?;
                 let latency_ms = start.elapsed().as_millis() as i64;
-                let _ = memory::analytics::record_search_event(
+                if let Err(e) = memory::analytics::record_search_event(
                     &state.pool,
                     &memory::analytics::SearchEvent {
                         query_text: query.to_string(),
@@ -2876,7 +2882,10 @@ pub async fn dispatch(
                         agent_id,
                     },
                 )
-                .await;
+                .await
+                {
+                    tracing::debug!(error = %e, "failed to record hybrid search analytics");
+                }
                 Ok(serde_json::to_value(results).unwrap())
             } else {
                 let fts_results = memory::search_memories(
@@ -2893,7 +2902,7 @@ pub async fn dispatch(
                 )
                 .await?;
                 let latency_ms = start.elapsed().as_millis() as i64;
-                let _ = memory::analytics::record_search_event(
+                if let Err(e) = memory::analytics::record_search_event(
                     &state.pool,
                     &memory::analytics::SearchEvent {
                         query_text: query.to_string(),
@@ -2904,7 +2913,10 @@ pub async fn dispatch(
                         agent_id,
                     },
                 )
-                .await;
+                .await
+                {
+                    tracing::debug!(error = %e, "failed to record fts5_fallback search analytics");
+                }
                 Ok(serde_json::json!({
                     "results": fts_results,
                     "_warning": "embedding unavailable, fell back to FTS5-only search"
