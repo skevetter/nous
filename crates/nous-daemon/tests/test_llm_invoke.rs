@@ -2,7 +2,7 @@ use nous_core::agents::processes;
 use nous_core::agents::{self, AgentType, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use nous_core::error::NousError;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder};
+use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::state::AppState;
@@ -21,6 +21,7 @@ async fn test_state() -> (AppState, TempDir) {
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),

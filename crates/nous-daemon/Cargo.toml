@@ -26,9 +26,12 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 microsandbox = { workspace = true, optional = true }
+rig-qdrant = { version = "0.2.5", optional = true }
 
 [features]
+default = []
 sandbox = ["microsandbox"]
+qdrant = ["dep:rig-qdrant"]
 
 [dev-dependencies]
 http-body-util = "0.1"

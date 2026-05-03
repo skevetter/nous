@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nous_core::db::DbPools;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder};
+use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::app;
 use nous_daemon::state::AppState;
@@ -24,6 +24,7 @@ async fn test_state() -> (AppState, TempDir) {
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
@@ -45,6 +46,7 @@ async fn test_state_no_embedder() -> (AppState, TempDir) {
         registry: Arc::new(NotificationRegistry::new()),
         embedder: None,
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),
@@ -2290,6 +2292,7 @@ async fn sandbox_spawn_creates_entry_in_manager() {
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),

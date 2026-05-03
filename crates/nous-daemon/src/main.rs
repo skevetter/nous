@@ -8,6 +8,7 @@ use nous_daemon::embedding::{build_embedder, resolve_embedding_config};
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
+use nous_daemon::vector_store::resolve_vector_store_config;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -30,6 +31,7 @@ async fn main() {
         .expect("failed to run migrations");
 
     let embedding_config = resolve_embedding_config(None, None, None);
+    let vector_store_config = resolve_vector_store_config(None, None, None);
     let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
         match build_embedder(&embedding_config) {
             Ok(embedder) => Some(embedder),
@@ -78,6 +80,7 @@ async fn main() {
         registry: Arc::new(NotificationRegistry::new()),
         embedder,
         embedding_config,
+        vector_store_config,
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: Arc::new(ProcessRegistry::new()),

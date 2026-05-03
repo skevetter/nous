@@ -90,6 +90,8 @@ async fn execute(
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder,
+        embedding_config: nous_core::memory::EmbeddingConfig::default(),
+        vector_store_config: nous_core::memory::VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),

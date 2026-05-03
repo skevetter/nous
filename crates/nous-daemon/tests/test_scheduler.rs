@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nous_core::db::DbPools;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder};
+use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::{create_schedule, get_schedule, list_runs, MockClock};
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
@@ -24,6 +24,7 @@ async fn setup(ts: i64) -> (AppState, Arc<MockClock>, CancellationToken, TempDir
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: shutdown.clone(),
         process_registry: Arc::new(nous_daemon::process_manager::ProcessRegistry::new()),

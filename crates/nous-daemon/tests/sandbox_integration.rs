@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nous_core::db::DbPools;
-use nous_core::memory::{EmbeddingConfig, MockEmbedder};
+use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::sandbox::SandboxManager;
@@ -24,6 +24,7 @@ async fn setup() -> (AppState, TempDir) {
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
         embedding_config: EmbeddingConfig::default(),
+        vector_store_config: VectorStoreConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
