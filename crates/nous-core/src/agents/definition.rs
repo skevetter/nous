@@ -121,8 +121,6 @@ pub enum RetrievalStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSection {
     pub name: String,
-    #[serde(rename = "type")]
-    pub r#type: String,
     pub version: String,
     pub namespace: Option<String>,
     pub description: Option<String>,
@@ -241,7 +239,6 @@ mod tests {
     const FULL_TOML: &str = r#"
 [agent]
 name       = "reviewer"
-type       = "engineer"
 version    = "1.2.0"
 namespace  = "eng"
 description = "Performs code review on feature branches"
@@ -270,7 +267,6 @@ tags    = ["review", "quality"]
         let def: AgentDefinition = toml::from_str(FULL_TOML).unwrap();
 
         assert_eq!(def.agent.name, "reviewer");
-        assert_eq!(def.agent.r#type, "engineer");
         assert_eq!(def.agent.version, "1.2.0");
         assert_eq!(def.agent.namespace.as_deref(), Some("eng"));
         assert_eq!(
@@ -308,13 +304,11 @@ tags    = ["review", "quality"]
         let toml_str = r#"
 [agent]
 name    = "basic"
-type    = "manager"
 version = "0.1.0"
 "#;
         let def: AgentDefinition = toml::from_str(toml_str).unwrap();
 
         assert_eq!(def.agent.name, "basic");
-        assert_eq!(def.agent.r#type, "manager");
         assert_eq!(def.agent.version, "0.1.0");
         assert!(def.agent.namespace.is_none());
         assert!(def.agent.description.is_none());
@@ -328,7 +322,6 @@ version = "0.1.0"
     fn test_parse_missing_required_field() {
         let toml_str = r#"
 [agent]
-type    = "engineer"
 version = "1.0.0"
 "#;
         let result: Result<AgentDefinition, _> = toml::from_str(toml_str);
@@ -379,7 +372,6 @@ version = "1.0.0"
         let toml_str = r#"
 [agent]
 name       = "code-reviewer"
-type       = "engineer"
 version    = "1.0.0"
 description = "Reviews pull requests"
 
@@ -469,7 +461,6 @@ tags    = ["review", "quality"]
         let toml_str = r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -496,7 +487,6 @@ session_tracking = true
         let toml_str = r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -517,7 +507,6 @@ version = "1.0.0"
         let toml_str = r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -540,7 +529,6 @@ scope = {shared = ["agent-1", "agent-2"]}
             r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -565,7 +553,6 @@ auto_save = ["decision", "invalid_type"]
             r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -590,7 +577,6 @@ importance_default = "critical"
             r#"
 [agent]
 name    = "mem-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [memory]
@@ -613,7 +599,6 @@ scope = {shared = []}
         let def: AgentDefinition = toml::from_str(FULL_TOML).unwrap();
         assert!(def.memory.is_none());
         assert_eq!(def.agent.name, "reviewer");
-        assert_eq!(def.agent.r#type, "engineer");
         assert_eq!(def.agent.version, "1.2.0");
         assert!(def.process.is_some());
         assert!(def.skills.is_some());
@@ -625,7 +610,6 @@ scope = {shared = []}
         let toml_str = r#"
 [agent]
 name    = "chat-agent"
-type    = "engineer"
 version = "1.0.0"
 
 [chat]
@@ -658,7 +642,6 @@ message_types = ["user", "handoff", "command"]
         let toml_str = r#"
 [agent]
 name    = "task-agent"
-type    = "manager"
 version = "1.0.0"
 
 [tasks]
@@ -685,7 +668,6 @@ labels = ["eng", "impl"]
         let toml_str = r#"
 [agent]
 name    = "minimal"
-type    = "engineer"
 version = "0.1.0"
 "#;
         let def: AgentDefinition = toml::from_str(toml_str).unwrap();
@@ -698,7 +680,6 @@ version = "0.1.0"
         let toml_str = r#"
 [agent]
 name        = "coordinator"
-type        = "manager"
 version     = "1.0.0"
 namespace   = "eng"
 description = "Coordinates engineering tasks"

@@ -1,4 +1,4 @@
-use nous_core::agents::{self, AgentType, RegisterAgentRequest};
+use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use nous_core::inventory::{
     self, InventoryStatus, InventoryType, ListItemsFilter, RegisterItemRequest, SearchItemsRequest,
@@ -22,7 +22,6 @@ async fn create_test_agent(
         pool,
         RegisterAgentRequest {
             name: name.into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: Some(namespace.into()),
             room: None,

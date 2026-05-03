@@ -1,7 +1,6 @@
 # Example: Planning agent definition
 [agent]
 name       = "planner"
-type       = "manager"
 version    = "0.3.0"
 description = "Decomposes epics into actionable tasks"
 

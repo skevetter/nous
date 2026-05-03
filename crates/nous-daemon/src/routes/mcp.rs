@@ -369,14 +369,13 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "Agent name (unique within namespace)" },
-                    "type": { "type": "string", "description": "Agent type: engineer, manager, director, senior-manager" },
                     "parent_id": { "type": "string", "description": "Parent agent ID" },
                     "namespace": { "type": "string", "description": "Namespace (defaults to 'default')" },
                     "room": { "type": "string", "description": "Room name for this agent" },
                     "metadata": { "type": "string", "description": "JSON metadata string" },
                     "status": { "type": "string", "description": "Initial status" }
                 },
-                "required": ["name", "type"]
+                "required": ["name"]
             }),
         },
         ToolSchema {
@@ -411,7 +410,6 @@ pub fn get_tool_schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "namespace": { "type": "string", "description": "Filter by namespace" },
                     "status": { "type": "string", "description": "Filter by status" },
-                    "type": { "type": "string", "description": "Filter by agent type" },
                     "limit": { "type": "integer", "description": "Max results" }
                 }
             }),
@@ -1989,8 +1987,6 @@ pub async fn dispatch(
         }
         "agent_register" => {
             let name = require_str(args, "name")?.to_string();
-            let agent_type_str = require_str(args, "type")?;
-            let agent_type: agents::AgentType = agent_type_str.parse()?;
             let parent_id = args
                 .get("parent_id")
                 .and_then(|v| v.as_str())
@@ -2013,7 +2009,6 @@ pub async fn dispatch(
                 &state.pool,
                 agents::RegisterAgentRequest {
                     name,
-                    agent_type,
                     parent_id,
                     namespace,
                     room,
@@ -2049,18 +2044,12 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.parse::<agents::AgentStatus>())
                 .transpose()?;
-            let agent_type = args
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(|s| s.parse::<agents::AgentType>())
-                .transpose()?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let list = agents::list_agents(
                 &state.pool,
                 &agents::ListAgentsFilter {
                     namespace,
                     status,
-                    agent_type,
                     limit,
                     ..Default::default()
                 },

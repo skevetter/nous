@@ -39,8 +39,8 @@ async fn setup() -> (AppState, TempDir) {
 async fn create_test_agent(pool: &DatabaseConnection, agent_id: &str) {
     pool.execute(Statement::from_sql_and_values(
         sea_orm::DatabaseBackend::Sqlite,
-        "INSERT INTO agents (id, name, agent_type, namespace, status, process_type, metadata_json, created_at, updated_at) \
-         VALUES (?, ?, 'engineer', 'default', 'active', 'sandbox', '{\"sandbox\":{\"image\":\"ubuntu:24.04\"}}', \
+        "INSERT INTO agents (id, name, namespace, status, process_type, metadata_json, created_at, updated_at) \
+         VALUES (?, ?, 'default', 'active', 'sandbox', '{\"sandbox\":{\"image\":\"ubuntu:24.04\"}}', \
          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [agent_id.into(), format!("test-agent-{}", agent_id).into()],
     ))

@@ -29,6 +29,7 @@ mod m026_sandbox_support;
 mod m027_resources;
 mod m028_resources_data_migration;
 mod m029_chat_task_integration;
+mod m030_remove_agent_type;
 
 pub struct Migrator;
 
@@ -65,6 +66,7 @@ impl MigratorTrait for Migrator {
             Box::new(m027_resources::Migration),
             Box::new(m028_resources_data_migration::Migration),
             Box::new(m029_chat_task_integration::Migration),
+            Box::new(m030_remove_agent_type::Migration),
         ]
     }
 }

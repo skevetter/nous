@@ -21,48 +21,6 @@ use crate::rooms;
 // --- Types ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentType {
-    Engineer,
-    Manager,
-    Director,
-    SeniorManager,
-}
-
-impl AgentType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Engineer => "engineer",
-            Self::Manager => "manager",
-            Self::Director => "director",
-            Self::SeniorManager => "senior-manager",
-        }
-    }
-}
-
-impl std::fmt::Display for AgentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for AgentType {
-    type Err = NousError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "engineer" => Ok(Self::Engineer),
-            "manager" => Ok(Self::Manager),
-            "director" => Ok(Self::Director),
-            "senior-manager" => Ok(Self::SeniorManager),
-            other => Err(NousError::Validation(format!(
-                "invalid agent type: '{other}'"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentStatus {
     Active,
@@ -200,7 +158,6 @@ impl std::str::FromStr for ArtifactStatus {
 pub struct Agent {
     pub id: String,
     pub name: String,
-    pub agent_type: String,
     pub parent_agent_id: Option<String>,
     pub namespace: String,
     pub status: String,
@@ -223,7 +180,6 @@ impl Agent {
         Self {
             id: m.id,
             name: m.name,
-            agent_type: m.agent_type,
             parent_agent_id: m.parent_agent_id,
             namespace: m.namespace,
             status: m.status,
@@ -246,7 +202,6 @@ impl Agent {
         Ok(Self {
             id: row.try_get_by("id")?,
             name: row.try_get_by("name")?,
-            agent_type: row.try_get_by("agent_type")?,
             parent_agent_id: row.try_get_by("parent_agent_id")?,
             namespace: row.try_get_by("namespace")?,
             status: row.try_get_by("status")?,
@@ -309,7 +264,6 @@ pub struct TreeNode {
 #[derive(Debug, Clone)]
 pub struct RegisterAgentRequest {
     pub name: String,
-    pub agent_type: AgentType,
     pub parent_id: Option<String>,
     pub namespace: Option<String>,
     pub room: Option<String>,
@@ -321,7 +275,6 @@ pub struct RegisterAgentRequest {
 pub struct ListAgentsFilter {
     pub namespace: Option<String>,
     pub status: Option<AgentStatus>,
-    pub agent_type: Option<AgentType>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -371,7 +324,6 @@ pub async fn register_agent(
     let model = agent_entity::ActiveModel {
         id: Set(id.clone()),
         name: Set(req.name.trim().to_string()),
-        agent_type: Set(req.agent_type.as_str().to_string()),
         parent_agent_id: Set(req.parent_id.clone()),
         namespace: Set(namespace.clone()),
         status: Set(status.as_str().to_string()),
@@ -467,10 +419,6 @@ pub async fn list_agents(
 
     if let Some(ref s) = filter.status {
         query = query.filter(agent_entity::Column::Status.eq(s.as_str()));
-    }
-
-    if let Some(ref t) = filter.agent_type {
-        query = query.filter(agent_entity::Column::AgentType.eq(t.as_str()));
     }
 
     let models = query
@@ -1162,7 +1110,6 @@ pub async fn instantiate_from_template(
 ) -> Result<Agent, NousError> {
     let template = get_template_by_id(db, &req.template_id).await?;
 
-    let agent_type: AgentType = template.template_type.parse()?;
     let name = req
         .name
         .unwrap_or_else(|| format!("{}-{}", template.name, &Uuid::now_v7().to_string()[..8]));
@@ -1171,7 +1118,6 @@ pub async fn instantiate_from_template(
         db,
         RegisterAgentRequest {
             name,
-            agent_type,
             parent_id: req.parent_id,
             namespace: req.namespace,
             room: None,

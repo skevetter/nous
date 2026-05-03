@@ -1030,7 +1030,6 @@ async fn e2e_agent_register_list_get_deregister() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "test-director",
-                        "type": "director",
                         "namespace": "test-ns",
                         "room": "director-room"
                     }))
@@ -1044,7 +1043,6 @@ async fn e2e_agent_register_list_get_deregister() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let agent: Value = json_body(response).await;
     assert_eq!(agent["name"], "test-director");
-    assert_eq!(agent["agent_type"], "director");
     assert_eq!(agent["namespace"], "test-ns");
     let agent_id = agent["id"].as_str().unwrap().to_string();
 
@@ -1124,7 +1122,6 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "dir-1",
-                        "type": "director",
                         "namespace": "hier"
                     }))
                     .unwrap(),
@@ -1147,7 +1144,6 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "mgr-1",
-                        "type": "manager",
                         "parent_id": dir_id,
                         "namespace": "hier"
                     }))
@@ -1171,7 +1167,6 @@ async fn e2e_agent_hierarchy_tree_children_ancestors() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "eng-1",
-                        "type": "engineer",
                         "parent_id": mgr_id,
                         "namespace": "hier"
                     }))
@@ -1248,7 +1243,6 @@ async fn e2e_agent_heartbeat() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "hb-agent".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1295,7 +1289,6 @@ async fn e2e_artifact_register_list_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "art-owner".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1381,7 +1374,6 @@ async fn mcp_agent_register_lookup_list_deregister() {
                         "name": "agent_register",
                         "arguments": {
                             "name": "mcp-eng",
-                            "type": "engineer",
                             "namespace": "mcp-ns"
                         }
                     }))
@@ -1505,7 +1497,6 @@ async fn mcp_agent_tree_children_ancestors() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-dir".into(),
-            agent_type: nous_core::agents::AgentType::Director,
             parent_id: None,
             namespace: Some("mcp-tree".into()),
             room: None,
@@ -1520,7 +1511,6 @@ async fn mcp_agent_tree_children_ancestors() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-eng".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             parent_id: Some(dir.id.clone()),
             namespace: Some("mcp-tree".into()),
             room: None,
@@ -1620,7 +1610,6 @@ async fn mcp_artifact_register_list_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-art-owner".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1914,7 +1903,6 @@ async fn mcp_agent_bulk_deregister() {
             &state.pool,
             nous_core::agents::RegisterAgentRequest {
                 name: name.into(),
-                agent_type: nous_core::agents::AgentType::Engineer,
                 parent_id: None,
                 namespace: Some("bulk-ns".into()),
                 room: None,
@@ -1976,7 +1964,6 @@ async fn mcp_artifact_update() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "art-upd-owner".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -2056,7 +2043,7 @@ async fn mcp_agent_invoke_shell_e2e() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "agent_register",
-                        "arguments": { "name": "mcp-invoke-shell", "type": "engineer" }
+                        "arguments": { "name": "mcp-invoke-shell" }
                     }))
                     .unwrap(),
                 ))
@@ -2148,7 +2135,7 @@ async fn mcp_agent_invoke_claude_no_client_returns_error() {
                 .body(Body::from(
                     serde_json::to_string(&json!({
                         "name": "agent_register",
-                        "arguments": { "name": "mcp-invoke-claude", "type": "engineer" }
+                        "arguments": { "name": "mcp-invoke-claude" }
                     }))
                     .unwrap(),
                 ))
@@ -2281,7 +2268,7 @@ async fn memory_search_hybrid_falls_back_to_fts5_when_no_embedder() {
 #[cfg(feature = "sandbox")]
 #[tokio::test]
 async fn sandbox_spawn_creates_entry_in_manager() {
-    use nous_core::agents::{self, AgentType, RegisterAgentRequest};
+    use nous_core::agents::{self, RegisterAgentRequest};
     use nous_daemon::sandbox::SandboxManager;
     use tokio::sync::Mutex;
 
@@ -2311,7 +2298,6 @@ async fn sandbox_spawn_creates_entry_in_manager() {
         &state.pool,
         RegisterAgentRequest {
             name: "sandbox-test-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -2371,7 +2357,6 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "res-owner".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             namespace: None,
             parent_id: None,
             room: None,
@@ -2544,7 +2529,6 @@ async fn mcp_resource_register_list_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-res-owner".into(),
-            agent_type: nous_core::agents::AgentType::Engineer,
             namespace: None,
             parent_id: None,
             room: None,
