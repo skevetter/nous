@@ -94,6 +94,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/memories/search", get(routes::memory::search))
         .route("/memories/relate", post(routes::memory::relate))
+        .route("/memories/decay", post(routes::memory::decay))
         .route(
             "/memories/{id}",
             get(routes::memory::get).put(routes::memory::update),
@@ -1066,5 +1067,51 @@ mod tests {
         let tasks: Vec<serde_json::Value> = serde_json::from_str(text).unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "MCP listed");
+    }
+
+    #[tokio::test]
+    async fn test_memory_decay_returns_200() {
+        let (state, _tmp) = test_state().await;
+
+        nous_core::memory::save_memory(
+            &state.pool,
+            nous_core::memory::SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: None,
+                title: "decay test".into(),
+                content: "test content".into(),
+                memory_type: nous_core::memory::MemoryType::Observation,
+                importance: Some(nous_core::memory::Importance::High),
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let app = app(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/memories/decay")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_string(&serde_json::json!({
+                            "high_days": 0,
+                            "moderate_days": 0
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["decayed"].as_i64().unwrap() >= 0);
     }
 }

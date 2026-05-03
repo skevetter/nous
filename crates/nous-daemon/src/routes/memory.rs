@@ -196,3 +196,20 @@ pub async fn list_relations(
     let relations = nous_core::memory::list_relations(&state.pool, &id).await?;
     Ok(Json(relations))
 }
+
+#[derive(Deserialize)]
+pub struct DecayBody {
+    pub high_days: Option<u32>,
+    pub moderate_days: Option<u32>,
+}
+
+pub async fn decay(
+    State(state): State<AppState>,
+    Json(body): Json<DecayBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let high_days = body.high_days.unwrap_or(30);
+    let moderate_days = body.moderate_days.unwrap_or(60);
+    let affected =
+        nous_core::memory::run_importance_decay(&state.pool, high_days, moderate_days).await?;
+    Ok(Json(serde_json::json!({ "decayed": affected })))
+}
