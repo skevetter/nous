@@ -18,8 +18,9 @@ pub struct RegisterAgentBody {
 }
 
 #[derive(Deserialize)]
-pub struct DeregisterBody {
-    pub cascade: Option<bool>,
+pub struct DeleteQuery {
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Deserialize)]
@@ -120,11 +121,10 @@ pub async fn list(
 pub async fn deregister(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(params): Query<DeregisterBody>,
+    Query(params): Query<DeleteQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let cascade = params.cascade.unwrap_or(false);
-    let result = nous_core::agents::deregister_agent(&state.pool, &id, cascade).await?;
-    Ok(ApiResponse::ok(serde_json::json!({ "result": result })))
+    nous_core::agents::deregister_agent(&state.pool, &id, params.force).await?;
+    Ok(crate::response::no_content())
 }
 
 pub async fn heartbeat(

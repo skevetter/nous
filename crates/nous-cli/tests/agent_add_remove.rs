@@ -128,7 +128,7 @@ fn agent_add_invalid_file_fails() {
 }
 
 #[test]
-fn agent_remove_by_name() {
+fn agent_delete_by_name() {
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let data_home = tmp.path().join("data");
@@ -146,20 +146,20 @@ fn agent_remove_by_name() {
     );
     assert!(output.status.success(), "register failed");
 
-    // Remove by name
-    let output = run_nous(&["agent", "remove", "removable"], config_str, data_str);
+    // Delete by name
+    let output = run_nous(&["agent", "delete", "removable"], config_str, data_str);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "agent remove failed: stdout={stdout}, stderr={stderr}"
+        "agent delete failed: stdout={stdout}, stderr={stderr}"
     );
-    assert!(stdout.contains("\"result\""));
+    assert!(stdout.contains("\"deleted\""));
 }
 
 #[test]
-fn agent_remove_by_uuid() {
+fn agent_delete_by_uuid() {
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let data_home = tmp.path().join("data");
@@ -180,20 +180,20 @@ fn agent_remove_by_uuid() {
         serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
     let agent_id = agent["id"].as_str().unwrap();
 
-    // Remove by UUID
-    let output = run_nous(&["agent", "remove", agent_id], config_str, data_str);
+    // Delete by UUID
+    let output = run_nous(&["agent", "delete", agent_id], config_str, data_str);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "agent remove by uuid failed: stdout={stdout}, stderr={stderr}"
+        "agent delete by uuid failed: stdout={stdout}, stderr={stderr}"
     );
-    assert!(stdout.contains("\"result\""));
+    assert!(stdout.contains("\"deleted\""));
 }
 
 #[test]
-fn agent_remove_cascade() {
+fn agent_delete_force() {
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let data_home = tmp.path().join("data");
@@ -229,9 +229,9 @@ fn agent_remove_cascade() {
     );
     assert!(output.status.success());
 
-    // Remove parent with cascade
+    // Delete parent with force
     let output = run_nous(
-        &["agent", "remove", "parent-cascade", "--cascade"],
+        &["agent", "delete", "parent-cascade", "--force"],
         config_str,
         data_str,
     );
@@ -240,13 +240,13 @@ fn agent_remove_cascade() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "agent remove cascade failed: stdout={stdout}, stderr={stderr}"
+        "agent delete force failed: stdout={stdout}, stderr={stderr}"
     );
-    assert!(stdout.contains("\"result\""));
+    assert!(stdout.contains("\"deleted\""));
 }
 
 #[test]
-fn agent_remove_nonexistent_fails() {
+fn agent_delete_nonexistent_fails() {
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let data_home = tmp.path().join("data");
@@ -254,7 +254,7 @@ fn agent_remove_nonexistent_fails() {
     fs::create_dir_all(&data_home).unwrap();
 
     let output = run_nous(
-        &["agent", "remove", "nonexistent-agent-xyz"],
+        &["agent", "delete", "nonexistent-agent-xyz"],
         config_home.to_str().unwrap(),
         data_home.to_str().unwrap(),
     );
@@ -294,9 +294,9 @@ version = "1.0.0"
         serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
     assert_eq!(agent["name"].as_str().unwrap(), "roundtrip-agent");
 
-    // Remove
+    // Delete
     let output = run_nous(
-        &["agent", "remove", "roundtrip-agent"],
+        &["agent", "delete", "roundtrip-agent"],
         config_str,
         data_str,
     );

@@ -50,8 +50,9 @@ pub struct SearchQuery {
 }
 
 #[derive(Deserialize)]
-pub struct DeregisterQuery {
-    pub hard: Option<bool>,
+pub struct DeleteQuery {
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn register(
@@ -145,15 +146,10 @@ pub async fn archive(
 pub async fn deregister(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(params): Query<DeregisterQuery>,
+    Query(params): Query<DeleteQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let hard = params.hard.unwrap_or(false);
-    nous_core::inventory::deregister_item(&state.pool, &id, hard).await?;
-    if hard {
-        Ok(crate::response::no_content().into_response())
-    } else {
-        Ok(ApiResponse::ok(serde_json::json!({"ok": true})).into_response())
-    }
+    nous_core::inventory::deregister_item(&state.pool, &id, params.force).await?;
+    Ok(crate::response::no_content())
 }
 
 pub async fn search(
