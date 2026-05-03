@@ -287,13 +287,6 @@ impl<M: rig::embeddings::EmbeddingModel> Embedder for RigEmbedderAdapter<M> {
     }
 }
 
-pub trait AsyncEmbedder: Send + Sync {
-    fn embed_async(
-        &self,
-        texts: &[&str],
-    ) -> impl std::future::Future<Output = Result<Vec<Vec<f32>>, NousError>> + Send;
-    fn dimension(&self) -> usize;
-}
 
 #[cfg(test)]
 mod tests {

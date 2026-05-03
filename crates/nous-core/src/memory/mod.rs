@@ -20,7 +20,7 @@ use crate::error::NousError;
 
 pub use chunk::{Chunk, Chunker};
 pub use embed::{
-    AsyncEmbedder, Embedder, EmbeddingConfig, EmbeddingProvider, MockEmbedder, OnnxEmbeddingModel,
+    Embedder, EmbeddingConfig, EmbeddingProvider, MockEmbedder, OnnxEmbeddingModel,
     RigEmbedderAdapter,
 };
 pub use rerank::rerank_rrf;

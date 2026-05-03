@@ -5,8 +5,6 @@ pub mod agent_templates;
 pub mod agent_versions;
 pub mod agent_workspace_access;
 pub mod agents;
-pub mod artifacts;
-pub mod inventory;
 pub mod memories;
 pub mod memory_access_log;
 pub mod memory_relations;

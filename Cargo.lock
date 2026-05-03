@@ -3966,6 +3966,7 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "sqlx",
  "temp-env",
  "tempfile",
  "tokio",

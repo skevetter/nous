@@ -3,25 +3,8 @@ use std::path::PathBuf;
 
 use crate::error::NousError;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct SearchConfig {
-    #[serde(default = "SearchConfig::default_tokenizer")]
-    pub tokenizer: String,
-}
-
-impl SearchConfig {
-    fn default_tokenizer() -> String {
-        "porter unicode61".to_string()
-    }
-}
-
-impl Default for SearchConfig {
-    fn default() -> Self {
-        Self {
-            tokenizer: Self::default_tokenizer(),
-        }
-    }
-}
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SearchConfig {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitConfig {
@@ -213,30 +196,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn search_config_default_tokenizer() {
-        let cfg = Config::default();
-        assert_eq!(cfg.search.tokenizer, "porter unicode61");
-    }
-
-    #[test]
-    fn search_config_custom_tokenizer() {
-        let toml_str = r#"
-            [search]
-            tokenizer = "trigram"
-        "#;
-        let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.search.tokenizer, "trigram");
-    }
-
-    #[test]
-    fn search_config_missing_uses_default() {
-        let toml_str = r#"
-            port = 9000
-        "#;
-        let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.search.tokenizer, "porter unicode61");
-    }
 
     #[test]
     fn api_key_from_config_file() {
