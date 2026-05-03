@@ -3892,6 +3892,7 @@ dependencies = [
  "serde_json",
  "sqlite-vec",
  "sqlx",
+ "temp-env",
  "tempfile",
  "thiserror 2.0.18",
  "tokenizers",

@@ -31,10 +31,8 @@ fn prefix_to_tool_prefix(prefix: &str) -> &str {
         "task" => "task_",
         "memory" => "memory_",
         "agent" => "agent_",
-        "artifact" => "artifact_",
         "worktree" => "worktree_",
         "schedule" => "schedule_",
-        "inventory" => "inventory_",
         other => other,
     }
 }
@@ -263,10 +261,8 @@ mod tests {
         assert_eq!(prefix_to_tool_prefix("task"), "task_");
         assert_eq!(prefix_to_tool_prefix("memory"), "memory_");
         assert_eq!(prefix_to_tool_prefix("agent"), "agent_");
-        assert_eq!(prefix_to_tool_prefix("artifact"), "artifact_");
         assert_eq!(prefix_to_tool_prefix("worktree"), "worktree_");
         assert_eq!(prefix_to_tool_prefix("schedule"), "schedule_");
-        assert_eq!(prefix_to_tool_prefix("inventory"), "inventory_");
     }
 
     #[test]

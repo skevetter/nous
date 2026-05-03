@@ -120,14 +120,6 @@ fn protected_routes() -> Router<AppState> {
         .route("/templates/{id}", get(routes::agents::get_template))
         .route("/templates/instantiate", post(routes::agents::instantiate))
         .route(
-            "/artifacts",
-            post(routes::agents::register_artifact).get(routes::agents::list_artifacts),
-        )
-        .route(
-            "/artifacts/{id}",
-            delete(routes::agents::deregister_artifact),
-        )
-        .route(
             "/memories",
             post(routes::memory::save).get(routes::memory::context),
         )
@@ -142,18 +134,6 @@ fn protected_routes() -> Router<AppState> {
             "/memories/{id}/relations",
             get(routes::memory::list_relations),
         )
-        .route(
-            "/inventory",
-            post(routes::inventory::register).get(routes::inventory::list),
-        )
-        .route("/inventory/search", get(routes::inventory::search))
-        .route(
-            "/inventory/{id}",
-            get(routes::inventory::get)
-                .put(routes::inventory::update)
-                .delete(routes::inventory::deregister),
-        )
-        .route("/inventory/{id}/archive", patch(routes::inventory::archive))
         .route(
             "/resources",
             post(routes::resources::register).get(routes::resources::list),
@@ -521,7 +501,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 120);
+        assert_eq!(tools.len(), 109);
     }
 
     #[tokio::test]

@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 mod commands;
 
 use commands::agent::AgentCommands;
-use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
 use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
@@ -34,17 +33,12 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommands,
     },
-    /// Artifact registry operations
-    Artifact {
-        #[command(subcommand)]
-        command: ArtifactCommands,
-    },
     /// Chat room operations
     Chat {
         #[command(subcommand)]
         command: ChatCommands,
     },
-    /// Unified resource management (replaces artifact + inventory)
+    /// Resource management
     Resource {
         #[command(subcommand)]
         command: ResourceCommands,
@@ -158,9 +152,6 @@ async fn main() {
         }
         Commands::Agent { command } => {
             commands::agent::run(command, port).await;
-        }
-        Commands::Artifact { command } => {
-            commands::artifact::run(command, port).await;
         }
         Commands::Chat { command } => {
             commands::chat::run(command, port).await;

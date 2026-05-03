@@ -71,16 +71,6 @@ impl std::str::FromStr for AgentStatus {
     }
 }
 
-/// Parse a string as an artifact type (subset of ResourceType: worktree, room, schedule, branch).
-pub fn parse_artifact_type(s: &str) -> Result<crate::resources::ResourceType, NousError> {
-    match s {
-        "worktree" | "room" | "schedule" | "branch" => s.parse(),
-        other => Err(NousError::Validation(format!(
-            "invalid artifact type: '{other}'. Valid values: worktree, room, schedule, branch"
-        ))),
-    }
-}
-
 // --- Domain objects ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,37 +141,6 @@ impl Agent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Artifact {
-    pub id: String,
-    pub agent_id: String,
-    pub artifact_type: String,
-    pub name: String,
-    pub path: Option<String>,
-    pub status: String,
-    pub namespace: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub last_seen_at: Option<String>,
-}
-
-impl Artifact {
-    fn from_resource(r: &crate::resources::Resource) -> Self {
-        Self {
-            id: r.id.clone(),
-            agent_id: r.owner_agent_id.clone().unwrap_or_default(),
-            artifact_type: r.resource_type.clone(),
-            name: r.name.clone(),
-            path: r.path.clone(),
-            status: r.status.clone(),
-            namespace: r.namespace.clone(),
-            created_at: r.created_at.clone(),
-            updated_at: r.updated_at.clone(),
-            last_seen_at: r.last_seen_at.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeNode {
     #[serde(flatten)]
     pub agent: Agent,
@@ -204,25 +163,6 @@ pub struct RegisterAgentRequest {
 pub struct ListAgentsFilter {
     pub namespace: Option<String>,
     pub status: Option<AgentStatus>,
-    pub limit: Option<u32>,
-    pub offset: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RegisterArtifactRequest {
-    pub agent_id: String,
-    pub artifact_type: crate::resources::ResourceType,
-    pub name: String,
-    pub path: Option<String>,
-    pub namespace: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ListArtifactsFilter {
-    pub agent_id: Option<String>,
-    pub artifact_type: Option<crate::resources::ResourceType>,
-    pub namespace: Option<String>,
-    pub status: Option<crate::resources::ResourceStatus>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -628,81 +568,6 @@ pub async fn search_agents(
         .map(Agent::from_query_result)
         .collect::<Result<Vec<_>, _>>()
         .map_err(NousError::SeaOrm)
-}
-
-// --- Artifact operations (delegating to resources module) ---
-
-pub async fn register_artifact(
-    db: &DatabaseConnection,
-    req: RegisterArtifactRequest,
-) -> Result<Artifact, NousError> {
-    let resource_type = req.artifact_type;
-    let resource = crate::resources::register_resource(
-        db,
-        crate::resources::RegisterResourceRequest {
-            name: req.name,
-            resource_type,
-            owner_agent_id: Some(req.agent_id.clone()),
-            namespace: req.namespace,
-            path: req.path,
-            metadata: None,
-            tags: None,
-            ownership_policy: Some(resource_type.default_ownership_policy()),
-        },
-    )
-    .await?;
-    Ok(Artifact::from_resource(&resource))
-}
-
-pub async fn get_artifact_by_id(db: &DatabaseConnection, id: &str) -> Result<Artifact, NousError> {
-    let resource = crate::resources::get_resource_by_id(db, id).await?;
-    Ok(Artifact::from_resource(&resource))
-}
-
-pub async fn list_artifacts(
-    db: &DatabaseConnection,
-    filter: &ListArtifactsFilter,
-) -> Result<Vec<Artifact>, NousError> {
-    let resources = crate::resources::list_resources(
-        db,
-        &crate::resources::ListResourcesFilter {
-            resource_type: filter.artifact_type,
-            status: filter.status,
-            owner_agent_id: filter.agent_id.clone(),
-            namespace: filter.namespace.clone(),
-            limit: filter.limit,
-            offset: filter.offset,
-            ..Default::default()
-        },
-    )
-    .await?;
-    Ok(resources.iter().map(Artifact::from_resource).collect())
-}
-
-pub async fn deregister_artifact(db: &DatabaseConnection, id: &str) -> Result<(), NousError> {
-    crate::resources::deregister_resource(db, id, true).await
-}
-
-pub async fn update_artifact(
-    db: &DatabaseConnection,
-    id: &str,
-    name: Option<&str>,
-    path: Option<&str>,
-) -> Result<Artifact, NousError> {
-    let resource = crate::resources::update_resource(
-        db,
-        crate::resources::UpdateResourceRequest {
-            id: id.to_string(),
-            name: name.map(String::from),
-            path: path.map(String::from),
-            metadata: None,
-            tags: None,
-            status: None,
-            ownership_policy: None,
-        },
-    )
-    .await?;
-    Ok(Artifact::from_resource(&resource))
 }
 
 // --- P7: Agent lifecycle, versioning, templates ---
