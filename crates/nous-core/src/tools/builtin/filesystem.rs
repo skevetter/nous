@@ -8,28 +8,70 @@ use crate::tools::{
     ToolContext, ToolError, ToolMetadata, ToolOutput, ToolPermissions,
 };
 
-fn check_read_permission(path: &std::path::Path, ctx: &ToolContext) -> Result<(), ToolError> {
-    if let Some(ref allowed) = ctx.permissions.allowed_paths {
-        if !allowed.iter().any(|p| path.starts_with(p)) {
-            return Err(ToolError::PermissionDenied(format!(
-                "read access denied for '{}'",
-                path.display()
-            )));
+fn canonicalize_path(path: &std::path::Path) -> Result<PathBuf, ToolError> {
+    if path.exists() {
+        std::fs::canonicalize(path)
+            .map_err(|e| ToolError::InvalidArgs(format!("cannot resolve path '{}': {e}", path.display())))
+    } else {
+        let mut current = path.to_path_buf();
+        let mut tail = Vec::new();
+        loop {
+            if current.exists() {
+                let base = std::fs::canonicalize(&current).map_err(|e| {
+                    ToolError::InvalidArgs(format!("cannot resolve path '{}': {e}", current.display()))
+                })?;
+                let mut result = base;
+                for component in tail.into_iter().rev() {
+                    result = result.join(component);
+                }
+                return Ok(result);
+            }
+            match current.file_name() {
+                Some(name) => {
+                    tail.push(name.to_os_string());
+                    current = current
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .ok_or_else(|| {
+                            ToolError::InvalidArgs(format!("invalid path '{}'", path.display()))
+                        })?
+                        .to_path_buf();
+                }
+                None => {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "invalid path '{}'",
+                        path.display()
+                    )));
+                }
+            }
         }
     }
-    Ok(())
 }
 
-fn check_write_permission(path: &std::path::Path, ctx: &ToolContext) -> Result<(), ToolError> {
+fn check_read_permission(path: &std::path::Path, ctx: &ToolContext) -> Result<PathBuf, ToolError> {
+    let canonical = canonicalize_path(path)?;
     if let Some(ref allowed) = ctx.permissions.allowed_paths {
-        if !allowed.iter().any(|p| path.starts_with(p)) {
+        if !allowed.iter().any(|p| canonical.starts_with(p)) {
             return Err(ToolError::PermissionDenied(format!(
-                "write access denied for '{}'",
-                path.display()
+                "read access denied for '{}'",
+                canonical.display()
             )));
         }
     }
-    Ok(())
+    Ok(canonical)
+}
+
+fn check_write_permission(path: &std::path::Path, ctx: &ToolContext) -> Result<PathBuf, ToolError> {
+    let canonical = canonicalize_path(path)?;
+    if let Some(ref allowed) = ctx.permissions.allowed_paths {
+        if !allowed.iter().any(|p| canonical.starts_with(p)) {
+            return Err(ToolError::PermissionDenied(format!(
+                "write access denied for '{}'",
+                canonical.display()
+            )));
+        }
+    }
+    Ok(canonical)
 }
 
 // --- FsReadTool ---
@@ -91,8 +133,7 @@ impl AgentTool for FsReadTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_read_permission(&path, ctx)?;
+        let path = check_read_permission(&path, ctx)?;
 
         let content = tokio::fs::read_to_string(&path)
             .await
@@ -176,8 +217,7 @@ impl AgentTool for FsWriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'content' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_write_permission(&path, ctx)?;
+        let path = check_write_permission(&path, ctx)?;
 
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -270,12 +310,13 @@ impl AgentTool for FsEditTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let path = PathBuf::from(path);
+        let path = check_write_permission(&path, ctx)?;
 
-        check_write_permission(&path, ctx)?;
-
-        let content = tokio::fs::read_to_string(&path)
+        let bytes = tokio::fs::read(&path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("{}: {}", path.display(), e)))?;
+        let content = String::from_utf8(bytes)
+            .map_err(|_| ToolError::InvalidArgs("file is not valid UTF-8".into()))?;
 
         if !content.contains(old_string) {
             return Err(ToolError::InvalidArgs(
@@ -362,8 +403,7 @@ impl AgentTool for FsListTool {
             .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
         let pattern = args.get("pattern").and_then(|v| v.as_str());
         let path = PathBuf::from(path);
-
-        check_read_permission(&path, ctx)?;
+        let path = check_read_permission(&path, ctx)?;
 
         if let Some(pat) = pattern {
             let full_pattern = path.join(pat).to_string_lossy().to_string();
@@ -468,8 +508,7 @@ impl AgentTool for FsSearchTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'pattern' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_read_permission(&path, ctx)?;
+        let path = check_read_permission(&path, ctx)?;
 
         let re = regex::Regex::new(pattern)
             .map_err(|e| ToolError::InvalidArgs(format!("invalid regex: {e}")))?;
@@ -555,8 +594,7 @@ impl AgentTool for FsStatTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_read_permission(&path, ctx)?;
+        let path = check_read_permission(&path, ctx)?;
 
         let metadata = tokio::fs::metadata(&path)
             .await
@@ -648,8 +686,7 @@ impl AgentTool for FsMkdirTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_write_permission(&path, ctx)?;
+        let path = check_write_permission(&path, ctx)?;
 
         tokio::fs::create_dir_all(&path)
             .await
@@ -722,8 +759,7 @@ impl AgentTool for FsDeleteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'path' required".into()))?;
         let path = PathBuf::from(path);
-
-        check_write_permission(&path, ctx)?;
+        let path = check_write_permission(&path, ctx)?;
 
         let metadata = tokio::fs::metadata(&path)
             .await
