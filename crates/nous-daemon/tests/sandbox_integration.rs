@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nous_core::db::DbPools;
-use nous_core::memory::MockEmbedder;
+use nous_core::memory::{EmbeddingConfig, MockEmbedder};
 use nous_core::notifications::NotificationRegistry;
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::sandbox::SandboxManager;
@@ -23,6 +23,7 @@ async fn setup() -> (AppState, TempDir) {
         vec_pool: pools.vec.clone(),
         registry: Arc::new(NotificationRegistry::new()),
         embedder: Some(Arc::new(MockEmbedder::new())),
+        embedding_config: EmbeddingConfig::default(),
         schedule_notify: Arc::new(Notify::new()),
         shutdown: CancellationToken::new(),
         process_registry: Arc::new(ProcessRegistry::new()),
@@ -194,8 +195,7 @@ async fn test_unreachable_sandbox_marked_crashed() {
     create_test_agent(&state.pool, agent_id).await;
 
     let sandbox_name = "sandbox-unreachable-test";
-    let process_id =
-        insert_sandbox_process(&state.pool, agent_id, "running", sandbox_name).await;
+    let process_id = insert_sandbox_process(&state.pool, agent_id, "running", sandbox_name).await;
 
     // Do NOT register sandbox_name as live — reconnect should return Ok(false)
     let sandbox_mgr = state.sandbox_manager.as_ref().unwrap();

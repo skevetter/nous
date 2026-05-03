@@ -136,7 +136,10 @@ impl SandboxManager {
         info!(agent_id, sandbox_name, "attempting sandbox reconnect");
 
         if !self.is_sandbox_alive(sandbox_name) {
-            info!(agent_id, sandbox_name, "sandbox not alive, cannot reconnect");
+            info!(
+                agent_id,
+                sandbox_name, "sandbox not alive, cannot reconnect"
+            );
             return Ok(false);
         }
 

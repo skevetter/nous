@@ -8,12 +8,12 @@ use serde_json::Value;
 use nous_core::agents;
 use nous_core::inventory;
 use nous_core::memory;
-use nous_core::resources;
 use nous_core::messages::{
     post_message, read_messages, search_messages, PostMessageRequest, ReadMessagesRequest,
     SearchMessagesRequest,
 };
 use nous_core::notifications::{room_wait, subscribe_to_room, unsubscribe_from_room};
+use nous_core::resources;
 use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 use nous_core::schedules;
 use nous_core::tasks;
@@ -2447,41 +2447,85 @@ pub async fn dispatch(
             let name = require_str(args, "name")?.to_string();
             let type_str = require_str(args, "type")?;
             let resource_type: resources::ResourceType = type_str.parse()?;
-            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
+            let owner_agent_id = args
+                .get("owner_agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
-            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let metadata = args
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             });
-            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let ownership_policy = args
+                .get("ownership_policy")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .transpose()?;
             let resource = resources::register_resource(
                 &state.pool,
                 resources::RegisterResourceRequest {
-                    name, resource_type, owner_agent_id, namespace, path, metadata, tags, ownership_policy,
+                    name,
+                    resource_type,
+                    owner_agent_id,
+                    namespace,
+                    path,
+                    metadata,
+                    tags,
+                    ownership_policy,
                 },
-            ).await?;
+            )
+            .await?;
             Ok(serde_json::to_value(resource).unwrap())
         }
         "resource_list" => {
-            let resource_type = args.get("type").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::ResourceType>()).transpose()?;
-            let status = args.get("status").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
-            let owner_agent_id = args.get("owner_agent_id").and_then(|v| v.as_str()).map(String::from);
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let resource_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>())
+                .transpose()?;
+            let owner_agent_id = args
+                .get("owner_agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
-            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let ownership_policy = args
+                .get("ownership_policy")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .transpose()?;
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let items = resources::list_resources(
                 &state.pool,
                 &resources::ListResourcesFilter {
-                    resource_type, status, owner_agent_id, namespace, orphaned, ownership_policy, limit,
+                    resource_type,
+                    status,
+                    owner_agent_id,
+                    namespace,
+                    orphaned,
+                    ownership_policy,
+                    limit,
                     ..Default::default()
                 },
-            ).await?;
+            )
+            .await?;
             Ok(serde_json::to_value(items).unwrap())
         }
         "resource_get" => {
@@ -2493,34 +2537,76 @@ pub async fn dispatch(
             let id = require_str(args, "id")?.to_string();
             let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
             let path = args.get("path").and_then(|v| v.as_str()).map(String::from);
-            let metadata = args.get("metadata").and_then(|v| v.as_str()).map(String::from);
+            let metadata = args
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let tags = args.get("tags").and_then(|v| v.as_array()).map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             });
-            let status = args.get("status").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
-            let ownership_policy = args.get("ownership_policy").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::OwnershipPolicy>()).transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>())
+                .transpose()?;
+            let ownership_policy = args
+                .get("ownership_policy")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .transpose()?;
             let resource = resources::update_resource(
                 &state.pool,
-                resources::UpdateResourceRequest { id, name, path, metadata, tags, status, ownership_policy },
-            ).await?;
+                resources::UpdateResourceRequest {
+                    id,
+                    name,
+                    path,
+                    metadata,
+                    tags,
+                    status,
+                    ownership_policy,
+                },
+            )
+            .await?;
             Ok(serde_json::to_value(resource).unwrap())
         }
         "resource_search" => {
-            let tags: Vec<String> = args.get("tags").and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            let tags: Vec<String> = args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let resource_type = args.get("type").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::ResourceType>()).transpose()?;
-            let status = args.get("status").and_then(|v| v.as_str())
-                .map(|s| s.parse::<resources::ResourceStatus>()).transpose()?;
-            let namespace = args.get("namespace").and_then(|v| v.as_str()).map(String::from);
+            let resource_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceType>())
+                .transpose()?;
+            let status = args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.parse::<resources::ResourceStatus>())
+                .transpose()?;
+            let namespace = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let items = resources::search_by_tags(
                 &state.pool,
-                &resources::SearchResourcesRequest { tags, resource_type, status, namespace, limit },
-            ).await?;
+                &resources::SearchResourcesRequest {
+                    tags,
+                    resource_type,
+                    status,
+                    namespace,
+                    limit,
+                },
+            )
+            .await?;
             Ok(serde_json::to_value(items).unwrap())
         }
         "resource_archive" => {
