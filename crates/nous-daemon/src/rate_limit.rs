@@ -12,7 +12,7 @@ pub fn apply(config: &RateLimitConfig, router: Router) -> Router {
             .per_nanosecond(period.as_nanos() as u64)
             .burst_size(config.burst_size)
             .finish()
-            .unwrap(),
+            .expect("invalid rate-limit config: burst_size must be > 0 and period must be > 0ns"),
     );
     router.layer(tower_governor::GovernorLayer::<PeerIpKeyExtractor, _, _>::new(governor_config))
 }
