@@ -36,7 +36,6 @@ fn agent_add_full_definition() {
         &toml_path,
         r#"[agent]
 name = "test-reviewer"
-type = "engineer"
 version = "1.0.0"
 namespace = "testns"
 
@@ -72,7 +71,6 @@ tags = ["test"]
 
     let agent: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(agent["name"].as_str().unwrap(), "test-reviewer");
-    assert_eq!(agent["agent_type"].as_str().unwrap(), "engineer");
     assert_eq!(agent["namespace"].as_str().unwrap(), "testns");
 }
 
@@ -89,7 +87,6 @@ fn agent_add_minimal_definition() {
         &toml_path,
         r#"[agent]
 name = "minimal-agent"
-type = "manager"
 version = "0.1.0"
 "#,
     )
@@ -110,7 +107,6 @@ version = "0.1.0"
 
     let agent: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(agent["name"].as_str().unwrap(), "minimal-agent");
-    assert_eq!(agent["agent_type"].as_str().unwrap(), "manager");
     assert_eq!(agent["status"].as_str().unwrap(), "idle");
 }
 
@@ -144,14 +140,7 @@ fn agent_remove_by_name() {
 
     // First register an agent
     let output = run_nous(
-        &[
-            "agent",
-            "register",
-            "--name",
-            "removable",
-            "--type",
-            "engineer",
-        ],
+        &["agent", "register", "--name", "removable"],
         config_str,
         data_str,
     );
@@ -182,14 +171,7 @@ fn agent_remove_by_uuid() {
 
     // Register an agent to get its ID
     let output = run_nous(
-        &[
-            "agent",
-            "register",
-            "--name",
-            "removable-uuid",
-            "--type",
-            "engineer",
-        ],
+        &["agent", "register", "--name", "removable-uuid"],
         config_str,
         data_str,
     );
@@ -223,14 +205,7 @@ fn agent_remove_cascade() {
 
     // Register parent
     let output = run_nous(
-        &[
-            "agent",
-            "register",
-            "--name",
-            "parent-cascade",
-            "--type",
-            "manager",
-        ],
+        &["agent", "register", "--name", "parent-cascade"],
         config_str,
         data_str,
     );
@@ -246,8 +221,6 @@ fn agent_remove_cascade() {
             "register",
             "--name",
             "child-cascade",
-            "--type",
-            "engineer",
             "--parent",
             parent_id,
         ],
@@ -305,7 +278,6 @@ fn agent_add_then_remove_roundtrip() {
         &toml_path,
         r#"[agent]
 name = "roundtrip-agent"
-type = "engineer"
 version = "1.0.0"
 "#,
     )

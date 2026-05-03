@@ -10,8 +10,6 @@ use crate::state::AppState;
 #[derive(Deserialize)]
 pub struct RegisterAgentBody {
     pub name: String,
-    #[serde(rename = "type")]
-    pub agent_type: String,
     pub parent_id: Option<String>,
     pub namespace: Option<String>,
     pub room: Option<String>,
@@ -28,8 +26,6 @@ pub struct DeregisterBody {
 pub struct ListAgentsQuery {
     pub namespace: Option<String>,
     pub status: Option<String>,
-    #[serde(rename = "type")]
-    pub agent_type: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -67,7 +63,6 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterAgentBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let agent_type: nous_core::agents::AgentType = body.agent_type.parse()?;
     let agent_status = body
         .status
         .as_deref()
@@ -78,7 +73,6 @@ pub async fn register(
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: body.name,
-            agent_type,
             parent_id: body.parent_id,
             namespace: body.namespace,
             room: body.room,
@@ -108,18 +102,12 @@ pub async fn list(
         .as_deref()
         .map(|s| s.parse::<nous_core::agents::AgentStatus>())
         .transpose()?;
-    let agent_type = params
-        .agent_type
-        .as_deref()
-        .map(|s| s.parse::<nous_core::agents::AgentType>())
-        .transpose()?;
 
     let agents = nous_core::agents::list_agents(
         &state.pool,
         &nous_core::agents::ListAgentsFilter {
             namespace: params.namespace,
             status,
-            agent_type,
             limit: params.limit,
             offset: params.offset,
         },

@@ -1,5 +1,5 @@
 use nous_core::agents::coordination::{post_handoff, HandoffPayload};
-use nous_core::agents::{self, AgentType, RegisterAgentRequest};
+use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use nous_core::messages::{read_messages, MessageType, ReadMessagesRequest};
 use nous_core::notifications::list_subscriptions;
@@ -129,7 +129,6 @@ async fn test_agent_handoff_e2e() {
         pool,
         RegisterAgentRequest {
             name: "handoff-manager".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: Some("handoff-ns".into()),
             room: Some(room.name.clone()),
@@ -144,7 +143,6 @@ async fn test_agent_handoff_e2e() {
         pool,
         RegisterAgentRequest {
             name: "handoff-engineer".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(_manager.id.clone()),
             namespace: Some("handoff-ns".into()),
             room: None,
@@ -198,7 +196,6 @@ async fn test_coordination_room_auto_create() {
         pool,
         RegisterAgentRequest {
             name: "coord-parent".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: Some("coord-ns".into()),
             room: None,
@@ -213,7 +210,6 @@ async fn test_coordination_room_auto_create() {
         pool,
         RegisterAgentRequest {
             name: "coord-child".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(parent.id.clone()),
             namespace: Some("coord-ns".into()),
             room: None,
@@ -244,7 +240,6 @@ async fn test_coordination_room_auto_create() {
         pool,
         RegisterAgentRequest {
             name: "coord-child-2".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(parent.id.clone()),
             namespace: Some("coord-ns".into()),
             room: None,

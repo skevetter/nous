@@ -1,5 +1,5 @@
 use nous_core::agents::processes;
-use nous_core::agents::{self, AgentType, RegisterAgentRequest};
+use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use nous_core::error::NousError;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
@@ -42,7 +42,6 @@ async fn register_agent_with_process_type(
         &state.pool,
         RegisterAgentRequest {
             name: name.into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,

@@ -1,7 +1,6 @@
 # Example: Code review agent definition
 [agent]
 name       = "reviewer"
-type       = "engineer"
 version    = "1.2.0"
 namespace  = "eng"
 description = "Performs code review on feature branches"

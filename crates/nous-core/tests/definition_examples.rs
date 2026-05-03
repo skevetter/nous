@@ -18,7 +18,6 @@ fn parse_reviewer_example() {
     let def = load_definition(&path).expect("failed to parse reviewer.toml");
 
     assert_eq!(def.agent.name, "reviewer");
-    assert_eq!(def.agent.r#type, "engineer");
     assert_eq!(def.agent.version, "1.2.0");
     assert_eq!(def.agent.namespace.as_deref(), Some("eng"));
     assert_eq!(
@@ -57,7 +56,6 @@ fn parse_planner_example() {
     let def = load_definition(&path).expect("failed to parse planner.toml");
 
     assert_eq!(def.agent.name, "planner");
-    assert_eq!(def.agent.r#type, "manager");
     assert_eq!(def.agent.version, "0.3.0");
     assert!(def.agent.namespace.is_none());
     assert_eq!(

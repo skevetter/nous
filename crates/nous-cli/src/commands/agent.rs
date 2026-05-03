@@ -30,9 +30,6 @@ pub enum AgentCommands {
         /// Agent name (must be unique within namespace)
         #[arg(long)]
         name: String,
-        /// Agent type: engineer, manager, director, senior-manager
-        #[arg(long, rename_all = "kebab-case")]
-        r#type: String,
         /// Parent agent ID
         #[arg(long)]
         parent: Option<String>,
@@ -90,9 +87,6 @@ pub enum AgentCommands {
         /// Filter by status
         #[arg(long)]
         status: Option<String>,
-        /// Filter by agent type
-        #[arg(long, rename_all = "kebab-case")]
-        r#type: Option<String>,
         /// Filter by namespace
         #[arg(long)]
         namespace: Option<String>,
@@ -408,12 +402,10 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
             let def = agents::definition::load_definition(&path)?;
 
-            let agent_type: agents::AgentType = def.agent.r#type.parse()?;
             let agent = agents::register_agent(
                 pool,
                 agents::RegisterAgentRequest {
                     name: def.agent.name,
-                    agent_type,
                     parent_id: None,
                     namespace: def.agent.namespace,
                     room: None,
@@ -510,14 +502,12 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         }
         AgentCommands::Register {
             name,
-            r#type,
             parent,
             namespace,
             room,
             metadata,
             status,
         } => {
-            let agent_type: agents::AgentType = r#type.parse()?;
             let agent_status = status
                 .as_deref()
                 .map(|s| s.parse::<agents::AgentStatus>())
@@ -526,7 +516,6 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 pool,
                 agents::RegisterAgentRequest {
                     name,
-                    agent_type,
                     parent_id: parent,
                     namespace,
                     room,
@@ -573,7 +562,6 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         }
         AgentCommands::List {
             status,
-            r#type,
             namespace,
             limit,
         } => {
@@ -581,16 +569,11 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 .as_deref()
                 .map(|s| s.parse::<agents::AgentStatus>())
                 .transpose()?;
-            let type_parsed = r#type
-                .as_deref()
-                .map(|s| s.parse::<agents::AgentType>())
-                .transpose()?;
             let list = agents::list_agents(
                 pool,
                 &agents::ListAgentsFilter {
                     namespace,
                     status: status_parsed,
-                    agent_type: type_parsed,
                     limit: Some(limit),
                     ..Default::default()
                 },

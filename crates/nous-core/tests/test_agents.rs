@@ -1,6 +1,6 @@
 use nous_core::agents::processes;
 use nous_core::agents::{
-    self, AgentStatus, AgentType, ArtifactType, CreateTemplateRequest, InstantiateRequest,
+    self, AgentStatus, ArtifactType, CreateTemplateRequest, InstantiateRequest,
     ListAgentsFilter, ListArtifactsFilter, RecordVersionRequest, RegisterAgentRequest,
     RegisterArtifactRequest,
 };
@@ -23,7 +23,6 @@ async fn test_register_agent() {
         pool,
         RegisterAgentRequest {
             name: "test-director".into(),
-            agent_type: AgentType::Director,
             parent_id: None,
             namespace: Some("test-ns".into()),
             room: Some("test-room".into()),
@@ -35,7 +34,6 @@ async fn test_register_agent() {
     .unwrap();
 
     assert_eq!(agent.name, "test-director");
-    assert_eq!(agent.agent_type, "director");
     assert_eq!(agent.namespace, "test-ns");
     assert_eq!(agent.status, "active");
     assert_eq!(agent.room.as_deref(), Some("test-room"));
@@ -53,7 +51,6 @@ async fn test_register_agent_with_parent() {
         pool,
         RegisterAgentRequest {
             name: "director".into(),
-            agent_type: AgentType::Director,
             parent_id: None,
             namespace: Some("ns1".into()),
             room: None,
@@ -68,7 +65,6 @@ async fn test_register_agent_with_parent() {
         pool,
         RegisterAgentRequest {
             name: "manager".into(),
-            agent_type: AgentType::Manager,
             parent_id: Some(director.id.clone()),
             namespace: Some("ns1".into()),
             room: None,
@@ -96,7 +92,6 @@ async fn test_register_agent_cross_namespace_parent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "parent".into(),
-            agent_type: AgentType::Director,
             parent_id: None,
             namespace: Some("ns-a".into()),
             room: None,
@@ -111,7 +106,6 @@ async fn test_register_agent_cross_namespace_parent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "child".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(parent.id.clone()),
             namespace: Some("ns-b".into()),
             room: None,
@@ -137,7 +131,6 @@ async fn test_lookup_agent() {
         pool,
         RegisterAgentRequest {
             name: "lookup-me".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -168,7 +161,6 @@ async fn test_list_agents_with_filters() {
         pool,
         RegisterAgentRequest {
             name: "eng-1".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: Some("ns".into()),
             room: None,
@@ -183,7 +175,6 @@ async fn test_list_agents_with_filters() {
         pool,
         RegisterAgentRequest {
             name: "mgr-1".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: Some("ns".into()),
             room: None,
@@ -205,18 +196,18 @@ async fn test_list_agents_with_filters() {
     .unwrap();
     assert_eq!(all.len(), 2);
 
-    let engineers = agents::list_agents(
+    // Filter by status
+    let active = agents::list_agents(
         pool,
         &ListAgentsFilter {
             namespace: Some("ns".into()),
-            agent_type: Some(AgentType::Engineer),
+            status: Some(AgentStatus::Active),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    assert_eq!(engineers.len(), 1);
-    assert_eq!(engineers[0].name, "eng-1");
+    assert_eq!(active.len(), 2);
 
     pools.close().await;
 }
@@ -230,7 +221,6 @@ async fn test_deregister_agent_no_children() {
         pool,
         RegisterAgentRequest {
             name: "solo".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -261,7 +251,6 @@ async fn test_deregister_agent_with_children_no_cascade_fails() {
         pool,
         RegisterAgentRequest {
             name: "parent".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: None,
             room: None,
@@ -276,7 +265,6 @@ async fn test_deregister_agent_with_children_no_cascade_fails() {
         pool,
         RegisterAgentRequest {
             name: "child".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(parent.id.clone()),
             namespace: None,
             room: None,
@@ -303,7 +291,6 @@ async fn test_deregister_agent_cascade() {
         pool,
         RegisterAgentRequest {
             name: "cascade-parent".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: None,
             room: None,
@@ -318,7 +305,6 @@ async fn test_deregister_agent_cascade() {
         pool,
         RegisterAgentRequest {
             name: "cascade-child".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(parent.id.clone()),
             namespace: None,
             room: None,
@@ -349,7 +335,6 @@ async fn test_heartbeat() {
         pool,
         RegisterAgentRequest {
             name: "heartbeat-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -382,7 +367,6 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "dir".into(),
-            agent_type: AgentType::Director,
             parent_id: None,
             namespace: Some("tree-ns".into()),
             room: None,
@@ -397,7 +381,6 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "mgr".into(),
-            agent_type: AgentType::Manager,
             parent_id: Some(director.id.clone()),
             namespace: Some("tree-ns".into()),
             room: None,
@@ -412,7 +395,6 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "eng".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(manager.id.clone()),
             namespace: Some("tree-ns".into()),
             room: None,
@@ -448,7 +430,6 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "root".into(),
-            agent_type: AgentType::Director,
             parent_id: None,
             namespace: Some("tree".into()),
             room: None,
@@ -463,7 +444,6 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "leaf-a".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(root.id.clone()),
             namespace: Some("tree".into()),
             room: None,
@@ -478,7 +458,6 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "leaf-b".into(),
-            agent_type: AgentType::Engineer,
             parent_id: Some(root.id.clone()),
             namespace: Some("tree".into()),
             room: None,
@@ -506,7 +485,6 @@ async fn test_search_agents() {
         pool,
         RegisterAgentRequest {
             name: "alpha-engineer".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: Some("search-ns".into()),
             room: None,
@@ -521,7 +499,6 @@ async fn test_search_agents() {
         pool,
         RegisterAgentRequest {
             name: "beta-manager".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: Some("search-ns".into()),
             room: None,
@@ -555,7 +532,6 @@ async fn test_register_artifact() {
         pool,
         RegisterAgentRequest {
             name: "artifact-owner".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -597,7 +573,6 @@ async fn test_list_artifacts() {
         pool,
         RegisterAgentRequest {
             name: "art-lister".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -670,7 +645,6 @@ async fn test_deregister_artifact() {
         pool,
         RegisterAgentRequest {
             name: "art-remover".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -713,7 +687,6 @@ async fn test_artifacts_cascade_on_agent_delete() {
         pool,
         RegisterAgentRequest {
             name: "cascade-art".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -756,7 +729,6 @@ async fn test_unique_name_namespace_constraint() {
         pool,
         RegisterAgentRequest {
             name: "unique-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: Some("uniq".into()),
             room: None,
@@ -771,7 +743,6 @@ async fn test_unique_name_namespace_constraint() {
         pool,
         RegisterAgentRequest {
             name: "unique-agent".into(),
-            agent_type: AgentType::Manager,
             parent_id: None,
             namespace: Some("uniq".into()),
             room: None,
@@ -795,7 +766,6 @@ async fn test_update_agent_status() {
         pool,
         RegisterAgentRequest {
             name: "status-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -825,7 +795,6 @@ async fn test_record_and_list_versions() {
         pool,
         RegisterAgentRequest {
             name: "versioned-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -888,7 +857,6 @@ async fn test_inspect_agent() {
         pool,
         RegisterAgentRequest {
             name: "inspectable".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -934,7 +902,6 @@ async fn test_rollback_agent() {
         pool,
         RegisterAgentRequest {
             name: "rollback-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -992,7 +959,6 @@ async fn test_rollback_wrong_agent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "agent-a".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1007,7 +973,6 @@ async fn test_rollback_wrong_agent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "agent-b".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1046,7 +1011,6 @@ async fn test_upgrade_available_flag() {
         pool,
         RegisterAgentRequest {
             name: "upgrade-agent".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1197,7 +1161,6 @@ async fn test_instantiate_from_template() {
     .unwrap();
 
     assert_eq!(agent.name, "my-worker-1");
-    assert_eq!(agent.agent_type, "engineer");
     assert_eq!(agent.template_id.as_deref(), Some(template.id.as_str()));
 
     let meta: serde_json::Value =
@@ -1253,7 +1216,6 @@ async fn test_versions_cascade_on_agent_delete() {
         pool,
         RegisterAgentRequest {
             name: "cascade-v".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1295,7 +1257,6 @@ async fn test_agent_new_fields_default() {
         pool,
         RegisterAgentRequest {
             name: "default-fields".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1322,7 +1283,6 @@ async fn test_process_type_claude_round_trip() {
         pool,
         RegisterAgentRequest {
             name: "claude-rt".into(),
-            agent_type: AgentType::Engineer,
             parent_id: None,
             namespace: None,
             room: None,

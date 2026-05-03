@@ -307,16 +307,15 @@ use registry::DynTool;
 pub async fn resolve_agent_tools(
     registry: &registry::ToolRegistry,
     agent_def: &AgentDefinition,
-    agent_type: &str,
 ) -> Vec<DynTool> {
     let allowed_names: HashSet<String> = if let Some(ref tools_section) = agent_def.tools {
         if let Some(ref allow) = tools_section.allow {
             allow.iter().cloned().collect()
         } else {
-            default_tools_for_type(agent_type)
+            default_tools()
         }
     } else {
-        default_tools_for_type(agent_type)
+        default_tools()
     };
 
     let denied_names: HashSet<String> = agent_def
@@ -337,53 +336,37 @@ pub async fn resolve_agent_tools(
     resolved
 }
 
-pub fn default_tools_for_type(agent_type: &str) -> HashSet<String> {
-    match agent_type {
-        "engineer" => [
-            "fs_read",
-            "fs_write",
-            "fs_edit",
-            "fs_list",
-            "fs_search",
-            "fs_stat",
-            "fs_mkdir",
-            "shell_exec",
-            "shell_exec_background",
-            "shell_read_output",
-            "code_grep",
-            "code_glob",
-            "code_symbols",
-            "memory_save",
-            "memory_search",
-            "memory_search_hybrid",
-            "memory_get_context",
-            "room_post",
-            "room_read",
-            "room_wait",
-            "task_update",
-            "http_fetch",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
-        "manager" | "director" | "senior_manager" => [
-            "memory_save",
-            "memory_search",
-            "memory_search_hybrid",
-            "memory_get_context",
-            "memory_relate",
-            "room_post",
-            "room_read",
-            "room_create",
-            "room_wait",
-            "task_create",
-            "task_update",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
-        _ => HashSet::new(),
-    }
+pub fn default_tools() -> HashSet<String> {
+    [
+        "fs_read",
+        "fs_write",
+        "fs_edit",
+        "fs_list",
+        "fs_search",
+        "fs_stat",
+        "fs_mkdir",
+        "shell_exec",
+        "shell_exec_background",
+        "shell_read_output",
+        "code_grep",
+        "code_glob",
+        "code_symbols",
+        "memory_save",
+        "memory_search",
+        "memory_search_hybrid",
+        "memory_get_context",
+        "memory_relate",
+        "room_post",
+        "room_read",
+        "room_create",
+        "room_wait",
+        "task_create",
+        "task_update",
+        "http_fetch",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 #[cfg(test)]
@@ -393,11 +376,10 @@ mod resolve_tests {
     use crate::tools::builtin::register_builtin_tools;
     use crate::tools::registry::ToolRegistry;
 
-    fn minimal_agent_def(agent_type: &str) -> AgentDefinition {
+    fn minimal_agent_def() -> AgentDefinition {
         AgentDefinition {
             agent: AgentSection {
                 name: "test".into(),
-                r#type: agent_type.into(),
                 version: "1.0.0".into(),
                 namespace: None,
                 description: None,
@@ -413,48 +395,26 @@ mod resolve_tests {
     }
 
     #[test]
-    fn default_tools_engineer_has_filesystem_and_shell() {
-        let tools = default_tools_for_type("engineer");
+    fn default_tools_has_all_capabilities() {
+        let tools = default_tools();
         assert!(tools.contains("fs_read"));
         assert!(tools.contains("fs_write"));
         assert!(tools.contains("shell_exec"));
         assert!(tools.contains("code_grep"));
         assert!(tools.contains("memory_save"));
-        assert!(!tools.contains("task_create"));
-    }
-
-    #[test]
-    fn default_tools_manager_has_memory_and_comms_only() {
-        let tools = default_tools_for_type("manager");
-        assert!(tools.contains("memory_save"));
-        assert!(tools.contains("room_post"));
         assert!(tools.contains("task_create"));
-        assert!(!tools.contains("fs_read"));
-        assert!(!tools.contains("shell_exec"));
-        assert!(!tools.contains("code_grep"));
-    }
-
-    #[test]
-    fn default_tools_engineer_vs_manager_differ() {
-        let eng = default_tools_for_type("engineer");
-        let mgr = default_tools_for_type("manager");
-        assert_ne!(eng, mgr);
-        assert!(eng.len() > mgr.len());
-    }
-
-    #[test]
-    fn default_tools_unknown_type_is_empty() {
-        let tools = default_tools_for_type("unknown");
-        assert!(tools.is_empty());
+        assert!(tools.contains("room_post"));
+        assert!(tools.contains("room_create"));
+        assert!(tools.contains("memory_relate"));
     }
 
     #[tokio::test]
-    async fn resolve_engineer_gets_filesystem_tools() {
+    async fn resolve_default_gets_all_tools() {
         let registry = ToolRegistry::new();
         register_builtin_tools(&registry).await;
 
-        let def = minimal_agent_def("engineer");
-        let tools = resolve_agent_tools(&registry, &def, "engineer").await;
+        let def = minimal_agent_def();
+        let tools = resolve_agent_tools(&registry, &def).await;
 
         let names: HashSet<String> = tools
             .iter()
@@ -463,25 +423,9 @@ mod resolve_tests {
         assert!(names.contains("fs_read"));
         assert!(names.contains("shell_exec"));
         assert!(names.contains("code_grep"));
-    }
-
-    #[tokio::test]
-    async fn resolve_manager_gets_only_memory_comms_task() {
-        let registry = ToolRegistry::new();
-        register_builtin_tools(&registry).await;
-
-        let def = minimal_agent_def("manager");
-        let tools = resolve_agent_tools(&registry, &def, "manager").await;
-
-        let names: HashSet<String> = tools
-            .iter()
-            .map(|t| t.metadata_dyn().name.clone())
-            .collect();
         assert!(names.contains("memory_save"));
         assert!(names.contains("room_post"));
         assert!(names.contains("task_create"));
-        assert!(!names.contains("fs_read"));
-        assert!(!names.contains("shell_exec"));
     }
 
     #[tokio::test]
@@ -489,7 +433,7 @@ mod resolve_tests {
         let registry = ToolRegistry::new();
         register_builtin_tools(&registry).await;
 
-        let mut def = minimal_agent_def("engineer");
+        let mut def = minimal_agent_def();
         def.tools = Some(ToolsSection {
             allow: Some(vec!["fs_read".into(), "fs_write".into()]),
             deny: None,
@@ -498,7 +442,7 @@ mod resolve_tests {
             execution: None,
         });
 
-        let tools = resolve_agent_tools(&registry, &def, "engineer").await;
+        let tools = resolve_agent_tools(&registry, &def).await;
         let names: HashSet<String> = tools
             .iter()
             .map(|t| t.metadata_dyn().name.clone())
@@ -513,7 +457,7 @@ mod resolve_tests {
         let registry = ToolRegistry::new();
         register_builtin_tools(&registry).await;
 
-        let mut def = minimal_agent_def("engineer");
+        let mut def = minimal_agent_def();
         def.tools = Some(ToolsSection {
             allow: Some(vec![
                 "fs_read".into(),
@@ -526,7 +470,7 @@ mod resolve_tests {
             execution: None,
         });
 
-        let tools = resolve_agent_tools(&registry, &def, "engineer").await;
+        let tools = resolve_agent_tools(&registry, &def).await;
         let names: HashSet<String> = tools
             .iter()
             .map(|t| t.metadata_dyn().name.clone())
