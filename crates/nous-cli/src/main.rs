@@ -7,10 +7,12 @@ use commands::artifact::ArtifactCommands;
 use commands::chat::ChatCommands;
 use commands::memory::MemoryCommands;
 use commands::model::ModelCommands;
+use commands::notifications::NotificationCommands;
 use commands::resource::ResourceCommands;
 use commands::schedule::ScheduleCommands;
 use commands::skill::SkillCommands;
 use commands::task::TaskCommands;
+use commands::tool::ToolCommands;
 use commands::worktree::WorktreeCommands;
 
 #[derive(Parser)]
@@ -71,6 +73,16 @@ enum Commands {
     Skill {
         #[command(subcommand)]
         command: SkillCommands,
+    },
+    /// Tool registry operations (list and invoke MCP tools)
+    Tool {
+        #[command(subcommand)]
+        command: ToolCommands,
+    },
+    /// Notification management (subscriptions and testing)
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationCommands,
     },
     /// Git worktree operations
     Worktree {
@@ -170,6 +182,12 @@ async fn main() {
         }
         Commands::Skill { command } => {
             commands::skill::run(command, port).await;
+        }
+        Commands::Tool { command } => {
+            commands::tool::run(command, port).await;
+        }
+        Commands::Notifications { command } => {
+            commands::notifications::run(command, port).await;
         }
         Commands::Worktree { command } => {
             commands::worktree::run(command, port).await;
