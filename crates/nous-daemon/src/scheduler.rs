@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use nous_core::error::NousError;
+use nous_core::net::validate_url;
 use nous_core::schedules::{
     advance_next_run_at, list_due_schedules, mark_stale_runs_failed, record_run, update_schedule,
     Clock, RecordRunParams, Schedule, UpdateScheduleParams,
@@ -376,6 +377,8 @@ struct HttpPayload {
 async fn dispatch_http(payload: &str) -> Result<String, NousError> {
     let parsed: HttpPayload = serde_json::from_str(payload)
         .map_err(|e| NousError::Validation(format!("invalid http payload: {e}")))?;
+
+    validate_url(&parsed.url)?;
 
     let client = reqwest::Client::new();
     let method: reqwest::Method = parsed

@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
+use crate::net::validate_url;
 use crate::tools::{
     AgentTool, ExecutionPolicy, NetworkPermission, RiskLevel, ToolCategory, ToolContent,
     ToolContext, ToolError, ToolMetadata, ToolOutput, ToolPermissions,
@@ -66,6 +67,9 @@ impl AgentTool for HttpRequestTool {
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'url' required".into()))?;
+
+        validate_url(url).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+
         let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
 
         let client = reqwest::Client::new();
@@ -183,6 +187,9 @@ impl AgentTool for HttpFetchTool {
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'url' required".into()))?;
+
+        validate_url(url).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+
         let max_bytes = args
             .get("max_bytes")
             .and_then(|v| v.as_u64())
