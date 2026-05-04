@@ -45,8 +45,6 @@ pub struct SpawnParams<'a> {
     pub working_dir: Option<&'a str>,
     pub env: Option<serde_json::Value>,
     pub timeout_secs: Option<i64>,
-    pub restart_policy: &'a str,
-    pub max_restarts: i32,
 }
 
 pub struct MonitorProcessParams {
@@ -55,11 +53,6 @@ pub struct MonitorProcessParams {
     pub agent_id: String,
     pub cancel: CancellationToken,
     pub timeout_secs: Option<i64>,
-    pub restart_policy: String,
-    pub max_restarts: i32,
-    pub command: String,
-    pub working_dir: Option<String>,
-    pub env: Option<serde_json::Value>,
 }
 
 impl ProcessRegistry {
@@ -78,8 +71,6 @@ impl ProcessRegistry {
             working_dir,
             env,
             timeout_secs,
-            restart_policy,
-            max_restarts,
         } = params;
         // Check if already running
         {
@@ -93,9 +84,7 @@ impl ProcessRegistry {
 
         #[cfg(feature = "sandbox")]
         if process_type == "sandbox" {
-            return self
-                .spawn_sandbox(state, agent_id, timeout_secs, restart_policy)
-                .await;
+            return self.spawn_sandbox(state, agent_id, timeout_secs).await;
         }
 
         let env_json = env
@@ -111,8 +100,6 @@ impl ProcessRegistry {
             working_dir,
             env_json: env_json.as_deref(),
             timeout_secs,
-            restart_policy: Some(restart_policy),
-            max_restarts: Some(max_restarts),
         })
         .await?;
 
@@ -172,11 +159,6 @@ impl ProcessRegistry {
         let process_id = process.id.clone();
         let agent_id_owned = agent_id.to_string();
         let timeout = timeout_secs;
-        let restart_p = restart_policy.to_string();
-        let max_r = max_restarts;
-        let command_owned = command.to_string();
-        let working_dir_owned = working_dir.map(String::from);
-        let env_owned = env.clone();
 
         // Store handle first
         {
@@ -188,20 +170,14 @@ impl ProcessRegistry {
         let state_clone = state.clone();
         let monitor_agent_id = agent_id.to_string();
         tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(
-                Self::monitor_process(MonitorProcessParams {
+            let result =
+                std::panic::AssertUnwindSafe(Self::monitor_process(MonitorProcessParams {
                     state: state_clone,
                     process_id,
                     agent_id: agent_id_owned,
                     cancel,
                     timeout_secs: timeout,
-                    restart_policy: restart_p,
-                    max_restarts: max_r,
-                    command: command_owned,
-                    working_dir: working_dir_owned,
-                    env: env_owned,
-                }),
-            );
+                }));
             if let Err(panic_info) = futures::FutureExt::catch_unwind(result).await {
                 let msg = panic_info
                     .downcast_ref::<&str>()
@@ -225,7 +201,6 @@ impl ProcessRegistry {
         state: &AppState,
         agent_id: &str,
         timeout_secs: Option<i64>,
-        restart_policy: &str,
     ) -> Result<Process, NousError> {
         let sandbox_mgr = state.sandbox_manager().ok_or_else(|| {
             NousError::Config("sandbox feature enabled but SandboxManager not initialized".into())
@@ -249,7 +224,6 @@ impl ProcessRegistry {
             sandbox_volumes_json: volumes_json.as_deref(),
             sandbox_name: None,
             timeout_secs,
-            restart_policy: Some(restart_policy),
         })
         .await?;
 
@@ -441,11 +415,6 @@ impl ProcessRegistry {
             agent_id,
             cancel,
             timeout_secs,
-            restart_policy,
-            max_restarts,
-            command: _command,
-            working_dir: _working_dir,
-            env: _env,
         } = params;
         // Wait for process exit or cancellation
         let timeout_duration = timeout_secs.map(|s| Duration::from_secs(s as u64));
@@ -503,35 +472,6 @@ impl ProcessRegistry {
             {
                 tracing::warn!(process_id = %process_id, error = %e, "failed to update process exit status");
             }
-
-            // Check restart policy
-            if status == "crashed" {
-                let should_restart = match restart_policy.as_str() {
-                    "always" => true,
-                    "on-failure" => exit_code != Some(0),
-                    _ => false,
-                };
-
-                if should_restart {
-                    if let Ok(proc) = processes::get_process_by_id(&state.pool, &process_id).await {
-                        if proc.restart_count < max_restarts {
-                            if let Err(e) =
-                                processes::increment_restart_count(&state.pool, &process_id).await
-                            {
-                                tracing::warn!(process_id = %process_id, error = %e, "failed to increment restart count");
-                            }
-                            tracing::info!(
-                                agent_id = %agent_id,
-                                restart_count = proc.restart_count + 1,
-                                "restarting crashed agent process"
-                            );
-                            // Note: actual restart would require re-calling spawn, which
-                            // needs the registry reference. For now we log the intent.
-                            // The process_manager.restart() method should be used externally.
-                        }
-                    }
-                }
-            }
         }
 
         // Remove from handles
@@ -576,15 +516,9 @@ impl ProcessRegistry {
         let is_sandbox = handle.child.is_none();
 
         // Update status to stopping
-        if let Err(e) = processes::update_process_status(
-            &state.pool,
-            &process_id,
-            "stopping",
-            None,
-            None,
-            None,
-        )
-        .await
+        if let Err(e) =
+            processes::update_process_status(&state.pool, &process_id, "stopping", None, None, None)
+                .await
         {
             tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to stopping");
         }
@@ -667,38 +601,26 @@ impl ProcessRegistry {
             handles.get(agent_id).map(|h| h.process_id.clone())
         };
 
-        let (
-            old_command,
-            old_working_dir,
-            old_process_type,
-            old_env,
-            old_timeout,
-            old_policy,
-            old_max_restarts,
-        ) = if let Some(ref pid) = current {
-            let proc = processes::get_process_by_id(&state.pool, pid).await?;
-            (
-                proc.command,
-                proc.working_dir,
-                proc.process_type,
-                proc.env_json,
-                proc.timeout_secs,
-                proc.restart_policy,
-                proc.max_restarts,
-            )
-        } else {
-            // No running process, check agent config
-            let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
-            (
-                agent.spawn_command.unwrap_or_default(),
-                agent.working_dir,
-                agent.process_type.unwrap_or_else(|| "shell".to_string()),
-                Some("{}".to_string()),
-                None,
-                "never".to_string(),
-                3,
-            )
-        };
+        let (old_command, old_working_dir, old_process_type, old_env, old_timeout) =
+            if let Some(ref pid) = current {
+                let proc = processes::get_process_by_id(&state.pool, pid).await?;
+                (
+                    proc.command,
+                    proc.working_dir,
+                    proc.process_type,
+                    proc.env_json,
+                    proc.timeout_secs,
+                )
+            } else {
+                let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+                (
+                    agent.spawn_command.unwrap_or_default(),
+                    agent.working_dir,
+                    agent.process_type.unwrap_or_else(|| "shell".to_string()),
+                    Some("{}".to_string()),
+                    None,
+                )
+            };
 
         // Stop if running
         if current.is_some() {
@@ -719,8 +641,6 @@ impl ProcessRegistry {
             working_dir: wd,
             env,
             timeout_secs: old_timeout,
-            restart_policy: &old_policy,
-            max_restarts: old_max_restarts,
         })
         .await
     }

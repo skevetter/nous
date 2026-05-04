@@ -26,9 +26,6 @@ pub struct Process {
     pub stopped_at: Option<String>,
     pub last_output: Option<String>,
     pub max_output_bytes: i64,
-    pub restart_policy: String,
-    pub restart_count: i32,
-    pub max_restarts: i32,
     pub timeout_secs: Option<i64>,
     pub sandbox_image: Option<String>,
     pub sandbox_cpus: Option<i64>,
@@ -56,9 +53,6 @@ impl Process {
             stopped_at: m.stopped_at,
             last_output: m.last_output,
             max_output_bytes: m.max_output_bytes as i64,
-            restart_policy: m.restart_policy,
-            restart_count: m.restart_count,
-            max_restarts: m.max_restarts,
             timeout_secs: m.timeout_secs.map(|v| v as i64),
             sandbox_image: m.sandbox_image,
             sandbox_cpus: m.sandbox_cpus.map(|v| v as i64),
@@ -117,8 +111,6 @@ pub struct CreateProcessParams<'a> {
     pub working_dir: Option<&'a str>,
     pub env_json: Option<&'a str>,
     pub timeout_secs: Option<i64>,
-    pub restart_policy: Option<&'a str>,
-    pub max_restarts: Option<i32>,
 }
 
 pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, NousError> {
@@ -130,15 +122,11 @@ pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, 
         working_dir,
         env_json,
         timeout_secs,
-        restart_policy,
-        max_restarts,
     } = params;
     // Verify agent exists
     super::get_agent_by_id(db, agent_id).await?;
 
     let id = Uuid::now_v7().to_string();
-    let policy = restart_policy.unwrap_or("never");
-    let max_r = max_restarts.unwrap_or(3);
 
     let model = proc_entity::ActiveModel {
         id: Set(id.clone()),
@@ -148,8 +136,6 @@ pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, 
         working_dir: Set(working_dir.map(String::from)),
         env_json: Set(Some(env_json.unwrap_or("{}").to_string())),
         timeout_secs: Set(timeout_secs.map(|v| v as i32)),
-        restart_policy: Set(policy.to_string()),
-        max_restarts: Set(max_r),
         status: Set("pending".to_string()),
         pid: Set(None),
         exit_code: Set(None),
@@ -157,7 +143,6 @@ pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, 
         stopped_at: Set(None),
         last_output: Set(None),
         max_output_bytes: Set(1048576),
-        restart_count: Set(0),
         sandbox_image: Set(None),
         sandbox_cpus: Set(None),
         sandbox_memory_mib: Set(None),
@@ -183,7 +168,6 @@ pub struct CreateSandboxProcessParams<'a> {
     pub sandbox_volumes_json: Option<&'a str>,
     pub sandbox_name: Option<&'a str>,
     pub timeout_secs: Option<i64>,
-    pub restart_policy: Option<&'a str>,
 }
 
 pub async fn create_sandbox_process(
@@ -199,12 +183,10 @@ pub async fn create_sandbox_process(
         sandbox_volumes_json,
         sandbox_name,
         timeout_secs,
-        restart_policy,
     } = params;
     super::get_agent_by_id(db, agent_id).await?;
 
     let id = Uuid::now_v7().to_string();
-    let policy = restart_policy.unwrap_or("never");
     let name = sandbox_name.unwrap_or(agent_id);
 
     let model = proc_entity::ActiveModel {
@@ -215,8 +197,6 @@ pub async fn create_sandbox_process(
         working_dir: Set(None),
         env_json: Set(None),
         timeout_secs: Set(timeout_secs.map(|v| v as i32)),
-        restart_policy: Set(policy.to_string()),
-        max_restarts: Set(3),
         status: Set("pending".to_string()),
         pid: Set(None),
         exit_code: Set(None),
@@ -224,7 +204,6 @@ pub async fn create_sandbox_process(
         stopped_at: Set(None),
         last_output: Set(None),
         max_output_bytes: Set(1048576),
-        restart_count: Set(0),
         sandbox_image: Set(Some(sandbox_image.to_string())),
         sandbox_cpus: Set(sandbox_cpus.map(|v| v as i32)),
         sandbox_memory_mib: Set(sandbox_memory_mib.map(|v| v as i32)),
@@ -274,9 +253,6 @@ pub async fn get_active_process(
             stopped_at: row.try_get_by("stopped_at")?,
             last_output: row.try_get_by("last_output")?,
             max_output_bytes: row.try_get_by("max_output_bytes")?,
-            restart_policy: row.try_get_by("restart_policy")?,
-            restart_count: row.try_get_by("restart_count")?,
-            max_restarts: row.try_get_by("max_restarts")?,
             timeout_secs: row.try_get_by("timeout_secs")?,
             sandbox_image: row.try_get_by("sandbox_image")?,
             sandbox_cpus: row.try_get_by("sandbox_cpus")?,
@@ -378,19 +354,6 @@ pub async fn update_process_status(
     get_process_by_id(db, process_id).await
 }
 
-pub async fn increment_restart_count(
-    db: &DatabaseConnection,
-    process_id: &str,
-) -> Result<(), NousError> {
-    db.execute(Statement::from_sql_and_values(
-        sea_orm::DbBackend::Sqlite,
-        "UPDATE agent_processes SET restart_count = restart_count + 1 WHERE id = ?",
-        [process_id.into()],
-    ))
-    .await?;
-    Ok(())
-}
-
 pub async fn list_processes(
     db: &DatabaseConnection,
     agent_id: &str,
@@ -432,9 +395,6 @@ pub async fn list_all_active_processes(db: &DatabaseConnection) -> Result<Vec<Pr
             stopped_at: row.try_get_by("stopped_at")?,
             last_output: row.try_get_by("last_output")?,
             max_output_bytes: row.try_get_by("max_output_bytes")?,
-            restart_policy: row.try_get_by("restart_policy")?,
-            restart_count: row.try_get_by("restart_count")?,
-            max_restarts: row.try_get_by("max_restarts")?,
             timeout_secs: row.try_get_by("timeout_secs")?,
             sandbox_image: row.try_get_by("sandbox_image")?,
             sandbox_cpus: row.try_get_by("sandbox_cpus")?,

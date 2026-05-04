@@ -154,7 +154,6 @@ type         = "claude"          # claude | shell | http
 spawn_command = "claude --model claude-sonnet-4-6"
 working_dir  = "~"
 auto_restart = false
-restart_policy = "on-failure"   # never | on-failure | always
 
 [skills]
 refs = [

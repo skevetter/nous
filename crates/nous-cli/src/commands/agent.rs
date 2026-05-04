@@ -238,9 +238,6 @@ pub enum AgentCommands {
         /// Timeout in seconds
         #[arg(long)]
         timeout: Option<i64>,
-        /// Restart policy: never, on-failure, always
-        #[arg(long, default_value = "never")]
-        restart: String,
         /// OCI image for the sandbox (e.g. python:3.12). Requires --type sandbox
         #[arg(long)]
         sandbox_image: Option<String>,
@@ -746,7 +743,6 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             r#type,
             working_dir,
             timeout,
-            restart,
             sandbox_image,
             sandbox_cpus,
             sandbox_memory,
@@ -793,7 +789,6 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                         sandbox_volumes_json: volumes_json.as_deref(),
                         sandbox_name: None,
                         timeout_secs: timeout,
-                        restart_policy: Some(&restart),
                     },
                 )
                 .await?;
@@ -810,8 +805,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 } else {
                     r#type
                 };
-                let process = agents::processes::create_process(
-                    agents::processes::CreateProcessParams {
+                let process =
+                    agents::processes::create_process(agents::processes::CreateProcessParams {
                         db: pool,
                         agent_id: &id,
                         process_type: &pt,
@@ -819,11 +814,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                         working_dir: working_dir.as_deref().or(agent.working_dir.as_deref()),
                         env_json: None,
                         timeout_secs: timeout,
-                        restart_policy: Some(&restart),
-                        max_restarts: None,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 println!("{}", serde_json::to_string_pretty(&process)?);
             }
         }
@@ -867,8 +859,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 .or(agent.spawn_command)
                 .ok_or("command is required (not set on agent config either)")?;
             let pt = agent.process_type.unwrap_or_else(|| "shell".to_string());
-            let process = agents::processes::create_process(
-                agents::processes::CreateProcessParams {
+            let process =
+                agents::processes::create_process(agents::processes::CreateProcessParams {
                     db: pool,
                     agent_id: &id,
                     process_type: &pt,
@@ -876,11 +868,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                     working_dir: agent.working_dir.as_deref(),
                     env_json: None,
                     timeout_secs: None,
-                    restart_policy: Some("never"),
-                    max_restarts: None,
-                },
-            )
-            .await?;
+                })
+                .await?;
             println!("{}", serde_json::to_string_pretty(&process)?);
         }
         AgentCommands::Invoke {

@@ -133,7 +133,6 @@ pub struct ProcessSection {
     pub spawn_command: Option<String>,
     pub working_dir: Option<String>,
     pub auto_restart: Option<bool>,
-    pub restart_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,7 +247,6 @@ type         = "claude"
 spawn_command = "claude --model claude-sonnet-4-6"
 working_dir  = "~"
 auto_restart = false
-restart_policy = "on-failure"
 
 [skills]
 refs = [
@@ -282,7 +280,6 @@ tags    = ["review", "quality"]
         );
         assert_eq!(process.working_dir.as_deref(), Some("~"));
         assert_eq!(process.auto_restart, Some(false));
-        assert_eq!(process.restart_policy.as_deref(), Some("on-failure"));
 
         let skills = def.skills.unwrap();
         assert_eq!(skills.refs, vec!["code-review", "git-workflow"]);

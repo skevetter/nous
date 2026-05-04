@@ -70,8 +70,6 @@ async fn migration_026_runs_on_existing_db_with_data() {
         working_dir: Some("/tmp"),
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -208,8 +206,6 @@ async fn existing_process_types_still_work() {
         working_dir: Some("/tmp"),
         env_json: Some(r#"{"PATH":"/usr/bin"}"#),
         timeout_secs: Some(30),
-        restart_policy: Some("never"),
-        max_restarts: Some(0),
     })
     .await
     .unwrap();
@@ -239,8 +235,6 @@ async fn existing_process_types_still_work() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -269,8 +263,6 @@ async fn existing_process_types_still_work() {
         working_dir: None,
         env_json: None,
         timeout_secs: Some(60),
-        restart_policy: Some("on-failure"),
-        max_restarts: Some(3),
     })
     .await
     .unwrap();
@@ -278,8 +270,6 @@ async fn existing_process_types_still_work() {
     assert_eq!(http_process.process_type, "http");
     assert_eq!(http_process.command, "http://localhost:8080");
     assert_eq!(http_process.timeout_secs, Some(60));
-    assert_eq!(http_process.restart_policy, "on-failure");
-    assert_eq!(http_process.max_restarts, 3);
     assert_eq!(http_process.sandbox_memory_mib, None);
 
     // Verify all three processes can be retrieved
@@ -380,10 +370,11 @@ async fn create_sandbox_process_sets_correct_fields() {
         sandbox_cpus: Some(4),
         sandbox_memory_mib: Some(1024),
         sandbox_network_policy: Some("public-only"),
-        sandbox_volumes_json: Some(r#"[{"guest_path":"/app","host_path":"/host/app","readonly":true}]"#),
+        sandbox_volumes_json: Some(
+            r#"[{"guest_path":"/app","host_path":"/host/app","readonly":true}]"#,
+        ),
         sandbox_name: Some("my-sandbox"),
         timeout_secs: Some(3600),
-        restart_policy: Some("on-failure"),
     })
     .await
     .unwrap();
@@ -403,7 +394,6 @@ async fn create_sandbox_process_sets_correct_fields() {
     assert_eq!(process.sandbox_name, Some("my-sandbox".to_string()));
     assert_eq!(process.status, "pending");
     assert_eq!(process.command, "sandbox:python:3.12");
-    assert_eq!(process.restart_policy, "on-failure");
     assert_eq!(process.timeout_secs, Some(3600));
 
     pools.close().await;

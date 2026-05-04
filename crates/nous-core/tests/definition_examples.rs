@@ -33,7 +33,6 @@ fn parse_reviewer_example() {
     );
     assert_eq!(process.working_dir.as_deref(), Some("~"));
     assert_eq!(process.auto_restart, Some(false));
-    assert_eq!(process.restart_policy.as_deref(), Some("on-failure"));
 
     let skills = def.skills.expect("reviewer should have [skills]");
     assert_eq!(skills.refs, vec!["code-review", "git-workflow"]);
@@ -71,7 +70,6 @@ fn parse_planner_example() {
     );
     assert!(process.working_dir.is_none());
     assert!(process.auto_restart.is_none());
-    assert!(process.restart_policy.is_none());
 
     let skills = def.skills.expect("planner should have [skills]");
     assert_eq!(skills.refs, vec!["planning"]);

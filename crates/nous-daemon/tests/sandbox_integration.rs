@@ -57,9 +57,8 @@ async fn insert_sandbox_process(
     pool.execute(Statement::from_sql_and_values(
         sea_orm::DatabaseBackend::Sqlite,
         "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
-         max_output_bytes, restart_policy, restart_count, max_restarts, \
-         sandbox_image, sandbox_name, created_at, updated_at) \
-         VALUES (?, ?, 'sandbox', '', ?, 65536, 'never', 0, 3, \
+         max_output_bytes, sandbox_image, sandbox_name, created_at, updated_at) \
+         VALUES (?, ?, 'sandbox', '', ?, 65536, \
          'ubuntu:24.04', ?, \
          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [
@@ -104,8 +103,6 @@ async fn test_sandbox_spawn_and_stop() {
             working_dir: None,
             env: None,
             timeout_secs: None,
-            restart_policy: "never",
-            max_restarts: 3,
         })
         .await
         .unwrap();
@@ -175,9 +172,8 @@ async fn test_missing_sandbox_name_skipped() {
             .execute(Statement::from_sql_and_values(
                 sea_orm::DatabaseBackend::Sqlite,
                 "INSERT INTO agent_processes (id, agent_id, process_type, command, status, \
-             max_output_bytes, restart_policy, restart_count, max_restarts, \
-             sandbox_image, sandbox_name, created_at, updated_at) \
-             VALUES (?, ?, 'sandbox', '', 'running', 65536, 'never', 0, 3, \
+             max_output_bytes, sandbox_image, sandbox_name, created_at, updated_at) \
+             VALUES (?, ?, 'sandbox', '', 'running', 65536, \
              'ubuntu:24.04', NULL, \
              strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
                 [id.clone().into(), crash_agent.into()],
@@ -258,8 +254,6 @@ async fn test_sandbox_spawn_does_not_affect_shell() {
             working_dir: None,
             env: None,
             timeout_secs: Some(5),
-            restart_policy: "never",
-            max_restarts: 3,
         })
         .await
         .unwrap();
