@@ -4,7 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::SystemClock;
-use nous_daemon::embedding::{build_embedder, resolve_embedding_config};
+use nous_daemon::embedding::{build_embedder, resolve_embedding_config, validate_embedding_dimensions};
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
@@ -31,6 +31,8 @@ async fn main() {
         .expect("failed to run migrations");
 
     let embedding_config = resolve_embedding_config(None, None, None);
+    validate_embedding_dimensions(&embedding_config, &pools.vec)
+        .expect("embedding dimension mismatch — see error above");
     let vector_store_config = resolve_vector_store_config(None, None, None);
     let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
         match build_embedder(&embedding_config) {

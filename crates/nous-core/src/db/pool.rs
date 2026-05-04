@@ -125,6 +125,45 @@ const VEC_MIGRATIONS: &[Migration] = &[
     },
 ];
 
+/// Returns the dimension of the `embedding` column in the `memory_embeddings` vec0 table,
+/// or `None` if the table does not yet exist (fresh DB, pre-migration).
+pub fn read_vec_dimension(vec_pool: &VecPool) -> Result<Option<usize>, NousError> {
+    let conn = vec_pool
+        .lock()
+        .map_err(|e| NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_embeddings')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| NousError::Internal(format!("failed to check memory_embeddings table: {e}")))?;
+
+    if !table_exists {
+        return Ok(None);
+    }
+
+    // vec0 exposes column metadata via vec_column_distance_metric / vec_each; the simplest
+    // approach is to parse the CREATE TABLE SQL from sqlite_master.
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_embeddings'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| NousError::Internal(format!("failed to read memory_embeddings DDL: {e}")))?;
+
+    // Extract the dimension from patterns like `float[1024]` or `float[ 1024 ]`.
+    let dim = sql
+        .split("float[")
+        .nth(1)
+        .and_then(|s| s.split(']').next())
+        .and_then(|s| s.trim().parse::<usize>().ok());
+
+    Ok(dim)
+}
+
 fn run_vec_migrations(vec_pool: &VecPool) -> Result<(), NousError> {
     let conn = vec_pool
         .lock()
