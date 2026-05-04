@@ -157,7 +157,13 @@ async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Dur
 
     match next_iso {
         Some(iso) => {
-            let ts = nous_core::schedules::iso_to_ts(&iso);
+            let ts = match nous_core::schedules::iso_to_ts(&iso) {
+                Ok(ts) => ts,
+                Err(e) => {
+                    tracing::error!("failed to parse next_run_at ISO timestamp: {e}");
+                    return Duration::from_secs(60);
+                }
+            };
             let now = clock.now_utc();
             let diff = ts - now;
             if diff <= 0 {

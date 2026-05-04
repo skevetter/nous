@@ -12,21 +12,21 @@ use crate::entities::schedule_runs as run_entity;
 use crate::entities::schedules as sched_entity;
 use crate::error::NousError;
 
-pub fn ts_to_iso(ts: i64) -> String {
+pub fn ts_to_iso(ts: i64) -> Result<String, NousError> {
     Utc.timestamp_opt(ts, 0)
         .single()
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-        .unwrap_or_else(|| Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        .ok_or_else(|| NousError::Validation(format!("invalid timestamp: {ts}")))
 }
 
-pub fn iso_to_ts(iso: &str) -> i64 {
+pub fn iso_to_ts(iso: &str) -> Result<i64, NousError> {
     DateTime::parse_from_rfc3339(iso)
         .map(|dt| dt.timestamp())
         .or_else(|_| {
             chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.fZ")
                 .map(|ndt| ndt.and_utc().timestamp())
         })
-        .unwrap_or_else(|_| Utc::now().timestamp())
+        .map_err(|_| NousError::Validation(format!("invalid ISO timestamp: {iso}")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,12 +73,12 @@ impl Schedule {
         }
     }
 
-    pub fn trigger_at_ts(&self) -> Option<i64> {
-        self.trigger_at.as_deref().map(iso_to_ts)
+    pub fn trigger_at_ts(&self) -> Result<Option<i64>, NousError> {
+        self.trigger_at.as_deref().map(iso_to_ts).transpose()
     }
 
-    pub fn next_run_at_ts(&self) -> Option<i64> {
-        self.next_run_at.as_deref().map(iso_to_ts)
+    pub fn next_run_at_ts(&self) -> Result<Option<i64>, NousError> {
+        self.next_run_at.as_deref().map(iso_to_ts).transpose()
     }
 }
 
@@ -168,14 +168,16 @@ pub async fn create_schedule(params: CreateScheduleParams<'_>) -> Result<Schedul
     let max_output_bytes = max_output_bytes.unwrap_or(65536);
     let max_runs = max_runs.unwrap_or(100);
 
-    let next_run_at = compute_next_run(cron_expr, trigger_at, clock.now_utc()).map(ts_to_iso);
-    let now_iso = ts_to_iso(clock.now_utc());
+    let next_run_at = compute_next_run(cron_expr, trigger_at, clock.now_utc())
+        .map(ts_to_iso)
+        .transpose()?;
+    let now_iso = ts_to_iso(clock.now_utc())?;
 
     let model = sched_entity::ActiveModel {
         id: Set(id.clone()),
         name: Set(name.to_string()),
         cron_expr: Set(cron_expr.to_string()),
-        trigger_at: Set(trigger_at.map(ts_to_iso)),
+        trigger_at: Set(trigger_at.map(ts_to_iso).transpose()?),
         timezone: Set(timezone.to_string()),
         enabled: Set(true),
         action_type: Set(action_type.to_string()),
@@ -294,7 +296,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     let final_cron = cron_expr.unwrap_or(&existing.cron_expr);
     let final_trigger_at = match trigger_at {
         Some(t) => t,
-        None => existing.trigger_at_ts(),
+        None => existing.trigger_at_ts()?,
     };
     let final_enabled = enabled.unwrap_or(existing.enabled);
 
@@ -312,7 +314,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     if let Some(t) = trigger_at {
         if let Some(ts) = t {
             sets.push("trigger_at = ?".to_string());
-            values.push(ts_to_iso(ts).into());
+            values.push(ts_to_iso(ts)?.into());
         } else {
             sets.push("trigger_at = NULL".to_string());
         }
@@ -362,7 +364,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
         let next = compute_next_run(final_cron, final_trigger_at, clock.now_utc());
         if let Some(n) = next {
             sets.push("next_run_at = ?".to_string());
-            values.push(ts_to_iso(n).into());
+            values.push(ts_to_iso(n)?.into());
         } else {
             sets.push("next_run_at = NULL".to_string());
         }
@@ -460,8 +462,8 @@ pub async fn record_run(params: RecordRunParams<'_>) -> Result<ScheduleRun, Nous
     let id = Uuid::now_v7().to_string();
     let duration_ms = (finished_at - started_at) * 1000;
 
-    let started_at_iso = ts_to_iso(started_at);
-    let finished_at_iso = ts_to_iso(finished_at);
+    let started_at_iso = ts_to_iso(started_at)?;
+    let finished_at_iso = ts_to_iso(finished_at)?;
 
     let model = run_entity::ActiveModel {
         id: Set(id.clone()),
@@ -568,7 +570,7 @@ pub async fn list_due_schedules(
     db: &DatabaseConnection,
     now: i64,
 ) -> Result<Vec<Schedule>, NousError> {
-    let now_iso = ts_to_iso(now);
+    let now_iso = ts_to_iso(now)?;
     let models = sched_entity::Entity::find()
         .filter(sched_entity::Column::Enabled.eq(true))
         .filter(sched_entity::Column::NextRunAt.lte(now_iso))
@@ -586,7 +588,7 @@ pub async fn advance_next_run_at(
     let schedule = get_schedule(db, id).await?;
 
     if schedule.cron_expr.starts_with("@once") {
-        if let Some(trigger_ts) = schedule.trigger_at_ts() {
+        if let Some(trigger_ts) = schedule.trigger_at_ts()? {
             if trigger_ts <= clock.now_utc() {
                 return Ok(None);
             }
@@ -600,8 +602,8 @@ pub async fn advance_next_run_at(
 
     match next {
         Some(ts) => {
-            let next_iso = ts_to_iso(ts);
-            let now_iso = ts_to_iso(clock.now_utc());
+            let next_iso = ts_to_iso(ts)?;
+            let now_iso = ts_to_iso(clock.now_utc())?;
             db.execute(Statement::from_sql_and_values(
                 sea_orm::DbBackend::Sqlite,
                 "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
@@ -639,4 +641,39 @@ fn compute_next_run(cron_expr: &str, trigger_at: Option<i64>, now: i64) -> Optio
 
     let parsed = CronExpr::parse(cron_expr).ok()?;
     parsed.next_run(now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iso_to_ts_valid_rfc3339() {
+        let result = iso_to_ts("2024-01-01T00:00:00Z");
+        assert_eq!(result.unwrap(), 1704067200);
+    }
+
+    #[test]
+    fn test_iso_to_ts_valid_naive() {
+        let result = iso_to_ts("2024-01-01T00:00:00.000Z");
+        assert_eq!(result.unwrap(), 1704067200);
+    }
+
+    #[test]
+    fn test_iso_to_ts_invalid() {
+        let result = iso_to_ts("not-a-date");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ts_to_iso_valid() {
+        let result = ts_to_iso(1704067200);
+        assert_eq!(result.unwrap(), "2024-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn test_ts_to_iso_invalid() {
+        let result = ts_to_iso(i64::MAX);
+        assert!(result.is_err());
+    }
 }
