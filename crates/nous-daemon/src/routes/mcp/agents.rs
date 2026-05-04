@@ -6,7 +6,7 @@ use nous_core::messages::{post_message, MessageType, PostMessageRequest};
 use crate::process_manager::{InvokeParams, RestartParams, SpawnParams, StopParams};
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     let mut all = agent_lifecycle_schemas();
@@ -682,7 +682,7 @@ async fn handle_register(
         },
     )
     .await?;
-    Ok(serde_json::to_value(agent).unwrap())
+    to_json(agent)
 }
 
 async fn handle_deregister(
@@ -705,7 +705,7 @@ async fn handle_lookup(
     let name = require_str(args, "name")?;
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let agent = agents::lookup_agent(&state.pool, name, namespace).await?;
-    Ok(serde_json::to_value(agent).unwrap())
+    to_json(agent)
 }
 
 async fn handle_list(
@@ -732,7 +732,7 @@ async fn handle_list(
         },
     )
     .await?;
-    Ok(serde_json::to_value(list).unwrap())
+    to_json(list)
 }
 
 async fn handle_list_children(
@@ -742,7 +742,7 @@ async fn handle_list_children(
     let id = require_str(args, "id")?;
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let children = agents::list_children(&state.pool, id, namespace).await?;
-    Ok(serde_json::to_value(children).unwrap())
+    to_json(children)
 }
 
 async fn handle_list_ancestors(
@@ -752,7 +752,7 @@ async fn handle_list_ancestors(
     let id = require_str(args, "id")?;
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let ancestors = agents::list_ancestors(&state.pool, id, namespace).await?;
-    Ok(serde_json::to_value(ancestors).unwrap())
+    to_json(ancestors)
 }
 
 async fn handle_tree(
@@ -762,7 +762,7 @@ async fn handle_tree(
     let root_id = args.get("root_id").and_then(|v| v.as_str());
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let tree = agents::get_tree(&state.pool, root_id, namespace).await?;
-    Ok(serde_json::to_value(tree).unwrap())
+    to_json(tree)
 }
 
 async fn handle_heartbeat(
@@ -787,7 +787,7 @@ async fn handle_search(
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let results = agents::search_agents(&state.pool, query, namespace, limit).await?;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn handle_stale(
@@ -800,7 +800,7 @@ async fn handle_stale(
         .unwrap_or(900);
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let stale_agents = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
-    Ok(serde_json::to_value(stale_agents).unwrap())
+    to_json(stale_agents)
 }
 
 async fn handle_inspect(
@@ -809,7 +809,7 @@ async fn handle_inspect(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let inspection = agents::inspect_agent(&state.pool, id).await?;
-    Ok(serde_json::to_value(inspection).unwrap())
+    to_json(inspection)
 }
 
 async fn handle_versions(
@@ -819,7 +819,7 @@ async fn handle_versions(
     let agent_id = require_str(args, "agent_id")?;
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let versions = agents::list_versions(&state.pool, agent_id, limit).await?;
-    Ok(serde_json::to_value(versions).unwrap())
+    to_json(versions)
 }
 
 async fn handle_record_version(
@@ -843,7 +843,7 @@ async fn handle_record_version(
         },
     )
     .await?;
-    Ok(serde_json::to_value(version).unwrap())
+    to_json(version)
 }
 
 async fn handle_rollback(
@@ -853,7 +853,7 @@ async fn handle_rollback(
     let agent_id = require_str(args, "agent_id")?;
     let version_id = require_str(args, "version_id")?;
     let version = agents::rollback_agent(&state.pool, agent_id, version_id).await?;
-    Ok(serde_json::to_value(version).unwrap())
+    to_json(version)
 }
 
 async fn handle_notify_upgrade(
@@ -872,7 +872,7 @@ async fn handle_outdated(
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let outdated = agents::list_outdated_agents(&state.pool, namespace, limit).await?;
-    Ok(serde_json::to_value(outdated).unwrap())
+    to_json(outdated)
 }
 
 async fn handle_template_create(
@@ -899,7 +899,7 @@ async fn handle_template_create(
         },
     )
     .await?;
-    Ok(serde_json::to_value(template).unwrap())
+    to_json(template)
 }
 
 async fn handle_template_list(
@@ -909,7 +909,7 @@ async fn handle_template_list(
     let template_type = args.get("type").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let templates = agents::list_templates(&state.pool, template_type, limit).await?;
-    Ok(serde_json::to_value(templates).unwrap())
+    to_json(templates)
 }
 
 async fn handle_template_get(
@@ -918,7 +918,7 @@ async fn handle_template_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let template = agents::get_template_by_id(&state.pool, id).await?;
-    Ok(serde_json::to_value(template).unwrap())
+    to_json(template)
 }
 
 async fn handle_instantiate(
@@ -950,7 +950,7 @@ async fn handle_instantiate(
         },
     )
     .await?;
-    Ok(serde_json::to_value(agent).unwrap())
+    to_json(agent)
 }
 
 async fn handle_bulk_deregister(
@@ -992,7 +992,7 @@ async fn handle_update_status(
     let status_str = require_str(args, "status")?;
     let status: agents::AgentStatus = status_str.parse()?;
     let agent = agents::update_agent_status(&state.pool, id, status).await?;
-    Ok(serde_json::to_value(agent).unwrap())
+    to_json(agent)
 }
 
 async fn handle_spawn(
@@ -1034,7 +1034,7 @@ async fn handle_spawn(
             timeout_secs,
         })
         .await?;
-    Ok(serde_json::to_value(process).unwrap())
+    to_json(process)
 }
 
 async fn handle_stop(
@@ -1051,7 +1051,7 @@ async fn handle_stop(
         .process_registry
         .stop(StopParams { state, agent_id, force, grace_secs })
         .await?;
-    Ok(serde_json::to_value(process).unwrap())
+    to_json(process)
 }
 
 async fn handle_restart(
@@ -1065,7 +1065,7 @@ async fn handle_restart(
         .process_registry
         .restart(RestartParams { state, agent_id, command, working_dir })
         .await?;
-    Ok(serde_json::to_value(process).unwrap())
+    to_json(process)
 }
 
 async fn handle_invoke(
@@ -1081,7 +1081,7 @@ async fn handle_invoke(
         .process_registry
         .invoke(InvokeParams { state, agent_id, prompt, timeout_secs, metadata, is_async })
         .await?;
-    Ok(serde_json::to_value(invocation).unwrap())
+    to_json(invocation)
 }
 
 async fn handle_invoke_result(
@@ -1090,7 +1090,7 @@ async fn handle_invoke_result(
 ) -> Result<Value, nous_core::error::NousError> {
     let invocation_id = require_str(args, "invocation_id")?;
     let invocation = agents::processes::get_invocation(&state.pool, invocation_id).await?;
-    Ok(serde_json::to_value(invocation).unwrap())
+    to_json(invocation)
 }
 
 async fn handle_invocations(
@@ -1102,7 +1102,7 @@ async fn handle_invocations(
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let invocations =
         agents::processes::list_invocations(&state.pool, agent_id, status, limit).await?;
-    Ok(serde_json::to_value(invocations).unwrap())
+    to_json(invocations)
 }
 
 async fn handle_process_status(
@@ -1128,7 +1128,7 @@ async fn handle_logs(
     let agent_id = require_str(args, "agent_id")?;
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let processes = agents::processes::list_processes(&state.pool, agent_id, limit).await?;
-    Ok(serde_json::to_value(processes).unwrap())
+    to_json(processes)
 }
 
 async fn handle_update(
@@ -1153,7 +1153,7 @@ async fn handle_update(
         },
     )
     .await?;
-    Ok(serde_json::to_value(agent).unwrap())
+    to_json(agent)
 }
 
 async fn handle_presence(
@@ -1190,7 +1190,7 @@ async fn handle_presence(
         Some(&state.registry),
     )
     .await?;
-    Ok(serde_json::to_value(msg).unwrap())
+    to_json(msg)
 }
 
 async fn handle_handoff(
@@ -1239,5 +1239,5 @@ async fn handle_handoff(
         },
     )
     .await?;
-    Ok(serde_json::to_value(msg).unwrap())
+    to_json(msg)
 }

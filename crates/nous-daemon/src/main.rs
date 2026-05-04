@@ -113,7 +113,7 @@ async fn main() {
     let embedding_config = resolve_embedding_config(None, None, None);
     validate_embedding_dimensions(&embedding_config, &pools.vec)
         .expect("embedding dimension mismatch — see error above");
-    let vector_store_config = resolve_vector_store_config(None, None, None);
+    let vector_store_config = resolve_vector_store_config(None);
     let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
         match build_embedder(&embedding_config) {
             Ok(embedder) => Some(embedder),

@@ -5,7 +5,7 @@ use nous_core::memory::store::{SavePromptRequest, SessionSummaryRequest};
 
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     let mut all = memory_core_schemas();
@@ -348,7 +348,7 @@ async fn dispatch_session_memory(
         "memory_session_end" => Some(handle_session_end(args, state).await),
         "memory_session_summary" => Some(handle_session_summary(args, state).await),
         "memory_save_prompt" => Some(handle_save_prompt(args, state).await),
-        "memory_current_project" => Some(Ok(handle_current_project(args))),
+        "memory_current_project" => Some(handle_current_project(args)),
         _ => None,
     }
 }
@@ -401,7 +401,7 @@ async fn handle_save(
         },
     )
     .await?;
-    Ok(serde_json::to_value(mem).unwrap())
+    to_json(mem)
 }
 
 struct SearchAnalyticsParams {
@@ -500,7 +500,7 @@ async fn handle_search(
     )
     .await;
     log_access_for_results(&state.pool, &results, "search").await;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn handle_get(
@@ -510,7 +510,7 @@ async fn handle_get(
     let id = require_str(args, "id")?;
     let mem = memory::get_memory_by_id(&state.pool, id).await?;
     let _ = memory::log_access(&state.pool, &mem.id, "get", None).await;
-    Ok(serde_json::to_value(mem).unwrap())
+    to_json(mem)
 }
 
 async fn handle_update(
@@ -555,7 +555,7 @@ async fn handle_update(
         },
     )
     .await?;
-    Ok(serde_json::to_value(mem).unwrap())
+    to_json(mem)
 }
 
 async fn handle_relate(
@@ -575,7 +575,7 @@ async fn handle_relate(
         },
     )
     .await?;
-    Ok(serde_json::to_value(rel).unwrap())
+    to_json(rel)
 }
 
 async fn handle_context(
@@ -606,7 +606,7 @@ async fn handle_context(
     )
     .await?;
     log_access_for_results(&state.pool, &results, "context").await;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn handle_relations(
@@ -615,7 +615,7 @@ async fn handle_relations(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let relations = memory::list_relations(&state.pool, id).await?;
-    Ok(serde_json::to_value(relations).unwrap())
+    to_json(relations)
 }
 
 async fn handle_store_embedding(
@@ -691,7 +691,7 @@ async fn handle_search_similar(
         },
     )
     .await;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn handle_chunk(
@@ -796,7 +796,7 @@ async fn search_hybrid_with_embedding(
         },
     )
     .await;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn search_hybrid_fts_fallback(
@@ -944,7 +944,7 @@ async fn handle_search_stats(
 ) -> Result<Value, nous_core::error::NousError> {
     let since = args.get("since").and_then(|v| v.as_str());
     let search_stats = memory::analytics::get_search_stats(&state.pool, since).await?;
-    Ok(serde_json::to_value(search_stats).unwrap())
+    to_json(search_stats)
 }
 
 async fn handle_session_start(
@@ -954,7 +954,7 @@ async fn handle_session_start(
     let agent_id = args.get("agent_id").and_then(|v| v.as_str());
     let project = args.get("project").and_then(|v| v.as_str());
     let session = memory::session_start(&state.pool, agent_id, project).await?;
-    Ok(serde_json::to_value(session).unwrap())
+    to_json(session)
 }
 
 async fn handle_session_end(
@@ -963,7 +963,7 @@ async fn handle_session_end(
 ) -> Result<Value, nous_core::error::NousError> {
     let session_id = require_str(args, "session_id")?;
     let session = memory::session_end(&state.pool, session_id).await?;
-    Ok(serde_json::to_value(session).unwrap())
+    to_json(session)
 }
 
 async fn handle_session_summary(
@@ -984,7 +984,7 @@ async fn handle_session_summary(
         },
     )
     .await?;
-    Ok(serde_json::to_value(session).unwrap())
+    to_json(session)
 }
 
 async fn handle_save_prompt(
@@ -1005,13 +1005,13 @@ async fn handle_save_prompt(
         },
     )
     .await?;
-    Ok(serde_json::to_value(mem).unwrap())
+    to_json(mem)
 }
 
-fn handle_current_project(args: &Value) -> Value {
+fn handle_current_project(args: &Value) -> Result<Value, nous_core::error::NousError> {
     let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
     match memory::detect_current_project(cwd) {
-        Some(project) => serde_json::to_value(project).unwrap(),
-        None => serde_json::json!({"detected": false, "message": "no project marker found"}),
+        Some(project) => to_json(project),
+        None => Ok(serde_json::json!({"detected": false, "message": "no project marker found"})),
     }
 }

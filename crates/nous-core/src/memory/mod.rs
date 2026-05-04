@@ -17,4 +17,4 @@ pub use rerank::rerank_rrf;
 pub use search::*;
 pub use store::*;
 pub use types::*;
-pub use vector_store::{QdrantConfig, VectorStoreBackend, VectorStoreConfig};
+pub use vector_store::{VectorStoreBackend, VectorStoreConfig};

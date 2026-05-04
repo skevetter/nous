@@ -86,6 +86,13 @@ pub async fn call_tool(
     }
 }
 
+pub(super) fn to_json<T: serde::Serialize>(
+    v: T,
+) -> Result<serde_json::Value, nous_core::error::NousError> {
+    serde_json::to_value(v)
+        .map_err(|e| nous_core::error::NousError::Internal(e.to_string()))
+}
+
 pub(crate) fn require_str<'a>(
     args: &'a Value,
     field: &str,

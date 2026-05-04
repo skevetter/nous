@@ -1,7 +1,5 @@
-#[cfg(feature = "tool-framework")]
 use std::future::Future;
 use std::path::PathBuf;
-#[cfg(feature = "tool-framework")]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,15 +9,10 @@ use serde_json::Value;
 
 use crate::error::NousError;
 
-#[cfg(feature = "tool-framework")]
 pub mod builtin;
-#[cfg(feature = "tool-framework")]
 pub mod custom;
-#[cfg(feature = "tool-framework")]
 pub mod execution;
-#[cfg(feature = "tool-framework")]
 pub mod permissions;
-#[cfg(feature = "tool-framework")]
 pub mod registry;
 pub mod services;
 
@@ -49,7 +42,6 @@ pub enum ToolCategory {
     Custom,
 }
 
-#[cfg(feature = "tool-framework")]
 pub trait AgentTool: Send + Sync + 'static {
     fn metadata(&self) -> &ToolMetadata;
 
@@ -60,7 +52,6 @@ pub trait AgentTool: Send + Sync + 'static {
     ) -> impl Future<Output = Result<ToolOutput, ToolError>> + Send;
 }
 
-#[cfg(feature = "tool-framework")]
 pub trait AgentToolDyn: Send + Sync + 'static {
     fn metadata_dyn(&self) -> &ToolMetadata;
     fn call_dyn<'a>(
@@ -70,7 +61,6 @@ pub trait AgentToolDyn: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
 }
 
-#[cfg(feature = "tool-framework")]
 impl<T: AgentTool> AgentToolDyn for T {
     fn metadata_dyn(&self) -> &ToolMetadata {
         self.metadata()
@@ -324,7 +314,6 @@ impl Default for ExecutionPolicy {
     }
 }
 
-#[cfg(feature = "tool-framework")]
 mod framework {
     use std::collections::HashSet;
 
@@ -398,10 +387,9 @@ mod framework {
     }
 }
 
-#[cfg(feature = "tool-framework")]
 pub use framework::{default_tools, resolve_agent_tools};
 
-#[cfg(all(test, feature = "tool-framework"))]
+#[cfg(test)]
 mod resolve_tests {
     use std::collections::HashSet;
 

@@ -4,7 +4,7 @@ use nous_core::rooms::{create_room, delete_room, get_room, list_rooms};
 
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     vec![
@@ -103,7 +103,7 @@ async fn handle_room_create(
     let purpose = args.get("purpose").and_then(|v| v.as_str());
     let metadata = args.get("metadata").filter(|v| !v.is_null());
     let room = create_room(&state.pool, name, purpose, metadata).await?;
-    Ok(serde_json::to_value(room).unwrap())
+    to_json(room)
 }
 
 async fn handle_room_list(
@@ -115,7 +115,7 @@ async fn handle_room_list(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let rooms = list_rooms(&state.pool, include_archived).await?;
-    Ok(serde_json::to_value(rooms).unwrap())
+    to_json(rooms)
 }
 
 async fn handle_room_get(
@@ -124,7 +124,7 @@ async fn handle_room_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let room = get_room(&state.pool, id).await?;
-    Ok(serde_json::to_value(room).unwrap())
+    to_json(room)
 }
 
 async fn handle_room_delete(
@@ -143,7 +143,7 @@ async fn handle_room_unarchive(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let room = nous_core::rooms::unarchive_room(&state.pool, id).await?;
-    Ok(serde_json::to_value(room).unwrap())
+    to_json(room)
 }
 
 async fn handle_room_inspect(
@@ -152,5 +152,5 @@ async fn handle_room_inspect(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let room_stats = nous_core::rooms::inspect_room(&state.pool, id).await?;
-    Ok(serde_json::to_value(room_stats).unwrap())
+    to_json(room_stats)
 }

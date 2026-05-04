@@ -3,9 +3,6 @@ use std::path::PathBuf;
 
 use crate::error::NousError;
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct SearchConfig {}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitConfig {
     #[serde(default = "RateLimitConfig::default_requests_per_minute")]
@@ -72,8 +69,6 @@ pub struct Config {
     pub port: u16,
     pub api_key: Option<String>,
     #[serde(default)]
-    pub search: SearchConfig,
-    #[serde(default)]
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
@@ -86,7 +81,6 @@ impl Default for Config {
             host: "127.0.0.1".to_string(),
             port: 8377,
             api_key: None,
-            search: SearchConfig::default(),
             rate_limit: RateLimitConfig::default(),
             scheduler: SchedulerConfig::default(),
         }

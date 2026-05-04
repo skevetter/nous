@@ -11,7 +11,7 @@ use nous_core::notifications::{
 
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     let mut all = room_messaging_schemas();
@@ -233,7 +233,7 @@ async fn handle_post_message(
         Some(&state.registry),
     )
     .await?;
-    Ok(serde_json::to_value(msg).unwrap())
+    to_json(msg)
 }
 
 async fn handle_read_messages(
@@ -257,7 +257,7 @@ async fn handle_read_messages(
         },
     )
     .await?;
-    Ok(serde_json::to_value(messages).unwrap())
+    to_json(messages)
 }
 
 async fn handle_search(
@@ -279,7 +279,7 @@ async fn handle_search(
         },
     )
     .await?;
-    Ok(serde_json::to_value(results).unwrap())
+    to_json(results)
 }
 
 async fn handle_wait(
@@ -308,7 +308,7 @@ async fn handle_wait(
     } else {
         room_wait(&state.registry, room_id, timeout_ms, topics.as_deref()).await?
     };
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
 
 async fn handle_subscribe(
@@ -345,7 +345,7 @@ async fn handle_mentions(
     let agent_id = require_str(args, "agent_id")?;
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let messages = list_mentions(&state.pool, room_id, agent_id, limit).await?;
-    Ok(serde_json::to_value(messages).unwrap())
+    to_json(messages)
 }
 
 async fn handle_thread_view(
@@ -362,7 +362,7 @@ async fn handle_thread_view(
         },
     )
     .await?;
-    Ok(serde_json::to_value(thread).unwrap())
+    to_json(thread)
 }
 
 async fn handle_mark_read(
@@ -381,7 +381,7 @@ async fn handle_mark_read(
         },
     )
     .await?;
-    Ok(serde_json::to_value(cursor).unwrap())
+    to_json(cursor)
 }
 
 async fn handle_unread_count(
@@ -391,5 +391,5 @@ async fn handle_unread_count(
     let room_id = require_str(args, "room_id")?.to_string();
     let agent_id = require_str(args, "agent_id")?.to_string();
     let cursor = unread_count(&state.pool, UnreadCountRequest { room_id, agent_id }).await?;
-    Ok(serde_json::to_value(cursor).unwrap())
+    to_json(cursor)
 }
