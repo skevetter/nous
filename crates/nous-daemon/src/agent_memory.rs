@@ -57,18 +57,14 @@ impl NousMemoryIndex {
         }
     }
 
-    fn scope_workspace_id(&self) -> Option<&str> {
-        match &self.scope {
-            MemoryScope::Workspace | MemoryScope::Shared(_) => Some(&self.workspace_id),
-            MemoryScope::Agent | MemoryScope::Session => Some(&self.workspace_id),
-        }
+    fn scope_workspace_id(&self) -> &str {
+        &self.workspace_id
     }
 
     fn scope_agent_id(&self) -> Option<&str> {
         match &self.scope {
             MemoryScope::Workspace | MemoryScope::Shared(_) => None,
-            MemoryScope::Agent => self.agent_id.as_deref(),
-            MemoryScope::Session => self.agent_id.as_deref(),
+            MemoryScope::Agent | MemoryScope::Session => self.agent_id.as_deref(),
         }
     }
 
@@ -81,7 +77,7 @@ impl NousMemoryIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SimilarMemory>, NousError> {
-        let ws = self.scope_workspace_id();
+        let ws = Some(self.scope_workspace_id());
         let agent = self.scope_agent_id();
         let mt = self.first_memory_type();
 
@@ -124,9 +120,13 @@ impl NousMemoryIndex {
                 Ok(memories
                     .into_iter()
                     .enumerate()
-                    .map(|(rank, m)| SimilarMemory {
-                        memory: m,
-                        score: 1.0 / (1.0 + rank as f32),
+                    .map(|(rank, m)| {
+                        // rank fits in u16 (result lists are small); u16→f32 is lossless
+                        let rank_f = f32::from(u16::try_from(rank).unwrap_or(u16::MAX));
+                        SimilarMemory {
+                            memory: m,
+                            score: 1.0 / (1.0 + rank_f),
+                        }
                     })
                     .collect())
             }
@@ -202,7 +202,7 @@ impl VectorStoreIndex for NousMemoryIndex {
                 "importance": sm.memory.importance,
             });
             let item: T = serde_json::from_value(doc)?;
-            out.push((sm.score as f64, sm.memory.id, item));
+            out.push((f64::from(sm.score), sm.memory.id, item));
         }
         Ok(out)
     }
@@ -224,7 +224,7 @@ impl VectorStoreIndex for NousMemoryIndex {
         }
         Ok(results
             .into_iter()
-            .map(|sm| (sm.score as f64, sm.memory.id))
+            .map(|sm| (f64::from(sm.score), sm.memory.id))
             .collect())
     }
 }
@@ -238,12 +238,12 @@ pub struct ParsedMemoryBlock {
     pub content: String,
 }
 
-/// Parse MEMORY[...]...END_MEMORY blocks from agent completion text.
+/// Parse MEMORY[...]...`END_MEMORY` blocks from agent completion text.
 ///
 /// Format:
 ///   MEMORY[type=decision, importance=high, title="Use RRF for hybrid search"]
 ///   Content goes here...
-///   END_MEMORY
+///   `END_MEMORY`
 pub fn parse_memory_blocks(text: &str) -> Vec<ParsedMemoryBlock> {
     let mut blocks = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
@@ -306,7 +306,7 @@ fn parse_header(line: &str) -> Option<(MemoryType, String, String)> {
         let value;
         if remaining.starts_with('"') {
             let close_quote = remaining[1..].find('"')?;
-            value = &remaining[1..close_quote + 1];
+            value = &remaining[1..=close_quote];
             remaining = &remaining[close_quote + 2..];
         } else {
             let end_pos = remaining.find(',').unwrap_or(remaining.len());
@@ -331,7 +331,7 @@ fn parse_header(line: &str) -> Option<(MemoryType, String, String)> {
     Some((mem_type?, importance, title?))
 }
 
-/// Extract memories from agent response and save them based on auto_save config.
+/// Extract memories from agent response and save them based on `auto_save` config.
 /// Only saves memories whose type is in `allowed_types`.
 pub async fn extract_and_save_memories(
     response: &str,
@@ -435,7 +435,7 @@ mod tests {
                 MemoryScope::Workspace,
                 RetrievalStrategy::Fts,
             );
-            assert_eq!(ws_index.scope_workspace_id(), Some("test-workspace"));
+            assert_eq!(ws_index.scope_workspace_id(), "test-workspace");
             assert_eq!(ws_index.scope_agent_id(), None);
 
             let agent_index = make_index(
@@ -444,7 +444,7 @@ mod tests {
                 MemoryScope::Agent,
                 RetrievalStrategy::Fts,
             );
-            assert_eq!(agent_index.scope_workspace_id(), Some("test-workspace"));
+            assert_eq!(agent_index.scope_workspace_id(), "test-workspace");
             assert_eq!(agent_index.scope_agent_id(), Some("test-agent"));
 
             let session_index = make_index(
@@ -453,7 +453,7 @@ mod tests {
                 MemoryScope::Session,
                 RetrievalStrategy::Fts,
             );
-            assert_eq!(session_index.scope_workspace_id(), Some("test-workspace"));
+            assert_eq!(session_index.scope_workspace_id(), "test-workspace");
             assert_eq!(session_index.scope_agent_id(), Some("test-agent"));
 
             let shared_index = make_index(
@@ -462,7 +462,7 @@ mod tests {
                 MemoryScope::Shared(vec!["a".into(), "b".into()]),
                 RetrievalStrategy::Fts,
             );
-            assert_eq!(shared_index.scope_workspace_id(), Some("test-workspace"));
+            assert_eq!(shared_index.scope_workspace_id(), "test-workspace");
             assert_eq!(shared_index.scope_agent_id(), None);
         });
     }

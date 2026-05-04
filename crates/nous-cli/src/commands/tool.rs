@@ -8,7 +8,7 @@ pub enum ToolCommands {
     List,
     /// Invoke an MCP tool by name
     Invoke {
-        /// Tool name (e.g. "room_create")
+        /// Tool name (e.g. "`room_create`")
         name: String,
         /// JSON arguments string (e.g. '{"name": "my-room"}')
         args: String,

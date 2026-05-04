@@ -74,9 +74,11 @@ impl CronExpr {
 
         let minutes = Self::parse_field(fields[0], 0, 59)?;
         let hours = Self::parse_field(fields[1], 0, 23)?;
-        let (days_of_month, dom_is_wildcard) = Self::parse_field_with_wildcard(fields[2], 1, 31)?;
+        let (days_of_month, month_day_is_wildcard) =
+            Self::parse_field_with_wildcard(fields[2], 1, 31)?;
         let months = Self::parse_field(fields[3], 1, 12)?;
-        let (days_of_week, dow_is_wildcard) = Self::parse_field_with_wildcard(fields[4], 0, 6)?;
+        let (days_of_week, week_day_is_wildcard) =
+            Self::parse_field_with_wildcard(fields[4], 0, 6)?;
 
         Ok(Self {
             minutes,
@@ -84,8 +86,8 @@ impl CronExpr {
             days_of_month,
             months,
             days_of_week,
-            dom_is_wildcard,
-            dow_is_wildcard,
+            dom_is_wildcard: month_day_is_wildcard,
+            dow_is_wildcard: week_day_is_wildcard,
         })
     }
 

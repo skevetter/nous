@@ -93,7 +93,7 @@ pub enum MemoryCommands {
         /// Target memory ID
         #[arg(long)]
         target: String,
-        /// Relation type: supersedes, conflicts_with, related, compatible, scoped, not_conflict
+        /// Relation type: supersedes, `conflicts_with`, related, compatible, scoped, `not_conflict`
         #[arg(long, rename_all = "kebab-case")]
         r#type: String,
     },
@@ -228,11 +228,11 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
         } => {
             let memory_type = r#type
                 .as_deref()
-                .map(|s| s.parse::<memory::MemoryType>())
+                .map(str::parse::<memory::MemoryType>)
                 .transpose()?;
             let importance_parsed = importance
                 .as_deref()
-                .map(|s| s.parse::<memory::Importance>())
+                .map(str::parse::<memory::Importance>)
                 .transpose()?;
             let results = memory::search_memories(
                 pool,
@@ -263,7 +263,7 @@ async fn execute(cmd: MemoryCommands, port: Option<u16>) -> Result<(), Box<dyn s
         } => {
             let importance_parsed = importance
                 .as_deref()
-                .map(|s| s.parse::<memory::Importance>())
+                .map(str::parse::<memory::Importance>)
                 .transpose()?;
             let mem = memory::update_memory(
                 pool,

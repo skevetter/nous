@@ -172,7 +172,7 @@ async fn main() {
             commands::schedule::run(command, port).await;
         }
         Commands::Skill { command } => {
-            commands::skill::run(command, port).await;
+            commands::skill::run(&command, port);
         }
         Commands::Tool { command } => {
             commands::tool::run(command, port).await;
@@ -208,13 +208,13 @@ async fn main() {
             commands::serve::run(model, region, profile, port, true, false).await;
         }
         Commands::Reload => {
-            commands::reload::run().await;
+            commands::reload::run();
         }
         Commands::Status => {
-            commands::status::run().await;
+            commands::status::run();
         }
         Commands::Stop => {
-            commands::stop::run().await;
+            commands::stop::run();
         }
     }
 }

@@ -58,7 +58,7 @@ pub async fn list(
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::worktrees::WorktreeStatus>())
+        .map(str::parse::<nous_core::worktrees::WorktreeStatus>)
         .transpose()?;
 
     let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM worktrees");

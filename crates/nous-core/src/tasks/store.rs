@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write as _;
 
 use sea_orm::entity::prelude::*;
 use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
@@ -172,9 +173,10 @@ pub async fn list_tasks(params: ListTasksParams<'_>) -> Result<Vec<Task>, NousEr
         sql.push_str(&conditions.join(" AND "));
     }
 
-    sql.push_str(&format!(" ORDER BY {order_clause} LIMIT ? OFFSET ?"));
-    values.push((limit as i32).into());
-    values.push((offset as i32).into());
+    let _ = write!(sql, " ORDER BY {order_clause} LIMIT ? OFFSET ?");
+    // limit and offset are capped by caller; safe to cast to i32
+    values.push(limit.cast_signed().into());
+    values.push(offset.cast_signed().into());
 
     let rows = db
         .query_all(Statement::from_sql_and_values(
@@ -595,25 +597,22 @@ pub async fn add_note(
         .await?
         .ok_or_else(|| NousError::NotFound(format!("task '{task_id}' not found")))?;
 
-    let room_id = match task_model.room_id {
-        Some(rid) => rid,
-        None => {
-            let room_name = format!("task-{task_id}");
-            let room = rooms::create_room(
-                db,
-                &room_name,
-                Some(&format!("Auto-created discussion room for task {task_id}")),
-                None,
-            )
-            .await?;
-            db.execute(Statement::from_sql_and_values(
-                sea_orm::DbBackend::Sqlite,
-                "UPDATE tasks SET room_id = ? WHERE id = ?",
-                [room.id.clone().into(), task_id.into()],
-            ))
-            .await?;
-            room.id
-        }
+    let room_id = if let Some(rid) = task_model.room_id { rid } else {
+        let room_name = format!("task-{task_id}");
+        let room = rooms::create_room(
+            db,
+            &room_name,
+            Some(&format!("Auto-created discussion room for task {task_id}")),
+            None,
+        )
+        .await?;
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE tasks SET room_id = ? WHERE id = ?",
+            [room.id.clone().into(), task_id.into()],
+        ))
+        .await?;
+        room.id
     };
 
     let metadata = serde_json::json!({
@@ -660,7 +659,7 @@ pub async fn task_history(
         .query_all(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
             "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
-            [task_id.into(), (limit as i32).into()],
+            [task_id.into(), limit.cast_signed().into()],
         ))
         .await?;
 
@@ -882,7 +881,7 @@ pub async fn list_templates(
         .query_all(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
             "SELECT * FROM task_templates ORDER BY created_at DESC LIMIT ?",
-            [(limit as i32).into()],
+            [limit.cast_signed().into()],
         ))
         .await?;
 
@@ -894,10 +893,10 @@ pub async fn list_templates(
     Ok(templates)
 }
 
-pub async fn create_from_template(
+pub async fn create_from_template<S: ::std::hash::BuildHasher>(
     db: &DatabaseConnection,
     template_id: &str,
-    title_vars: Option<&HashMap<String, String>>,
+    title_vars: Option<&HashMap<String, String, S>>,
     overrides_description: Option<&str>,
     overrides_assignee: Option<&str>,
     overrides_labels: Option<&[String]>,
@@ -912,7 +911,7 @@ pub async fn create_from_template(
     }
 
     let labels = overrides_labels
-        .map(|l| l.to_vec())
+        .map(<[std::string::String]>::to_vec)
         .unwrap_or(template.default_labels);
 
     let description = if let Some(desc_override) = overrides_description {

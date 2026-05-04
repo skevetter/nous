@@ -277,7 +277,7 @@ pub async fn dispatch(
         "memory_store_embedding" => Some(handle_store_embedding(args, state).await),
         "memory_search_similar" => Some(handle_search_similar(args, state).await),
         "memory_chunk" => Some(handle_chunk(args, state).await),
-        "memory_embed" => Some(handle_embed(args, state).await),
+        "memory_embed" => Some(handle_embed(args, state)),
         "memory_search_hybrid" => Some(handle_search_hybrid(args, state).await),
         "memory_store_with_embedding" => Some(handle_store_with_embedding(args, state).await),
         "memory_search_stats" => Some(handle_search_stats(args, state).await),
@@ -285,7 +285,7 @@ pub async fn dispatch(
         "memory_session_end" => Some(handle_session_end(args, state).await),
         "memory_session_summary" => Some(handle_session_summary(args, state).await),
         "memory_save_prompt" => Some(handle_save_prompt(args, state).await),
-        "memory_current_project" => Some(handle_current_project(args).await),
+        "memory_current_project" => Some(Ok(handle_current_project(args))),
         _ => None,
     }
 }
@@ -301,7 +301,7 @@ async fn handle_save(
     let importance = args
         .get("importance")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<memory::Importance>())
+        .map(str::parse::<memory::Importance>)
         .transpose()?;
     let agent_id = args
         .get("agent_id")
@@ -357,18 +357,18 @@ async fn handle_search(
     let memory_type = args
         .get("type")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<memory::MemoryType>())
+        .map(str::parse::<memory::MemoryType>)
         .transpose()?;
     let importance = args
         .get("importance")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<memory::Importance>())
+        .map(str::parse::<memory::Importance>)
         .transpose()?;
     let include_archived = args
         .get("include_archived")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let start = std::time::Instant::now();
     let results = memory::search_memories(
         &state.pool,
@@ -389,7 +389,7 @@ async fn handle_search(
         &memory::analytics::SearchEvent {
             query_text: query,
             search_type: "fts".to_string(),
-            result_count: results.len() as i64,
+            result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
             latency_ms,
             workspace_id,
             agent_id,
@@ -428,7 +428,7 @@ async fn handle_update(
     let importance = args
         .get("importance")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<memory::Importance>())
+        .map(str::parse::<memory::Importance>)
         .transpose()?;
     let topic_key = args
         .get("topic_key")
@@ -442,7 +442,7 @@ async fn handle_update(
         .get("valid_until")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let archived = args.get("archived").and_then(|v| v.as_bool());
+    let archived = args.get("archived").and_then(serde_json::Value::as_bool);
     let mem = memory::update_memory(
         &state.pool,
         memory::UpdateMemoryRequest {
@@ -496,7 +496,7 @@ async fn handle_context(
         .get("topic_key")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let results = memory::get_context(
         &state.pool,
         &memory::ContextRequest {
@@ -565,13 +565,12 @@ async fn handle_search_similar(
     }
     let limit = args
         .get("limit")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .unwrap_or(10);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(10, |v| v as u32);
     let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
     let threshold = args
         .get("threshold")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .map(|f| f as f32);
     let start = std::time::Instant::now();
     let results = memory::search_similar(
@@ -589,7 +588,7 @@ async fn handle_search_similar(
         &memory::analytics::SearchEvent {
             query_text: String::new(),
             search_type: "vector".to_string(),
-            result_count: results.len() as i64,
+            result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
             latency_ms,
             workspace_id: workspace_id.map(String::from),
             agent_id: None,
@@ -609,14 +608,12 @@ async fn handle_chunk(
     let memory_id = require_str(args, "memory_id")?;
     let chunk_size = args
         .get("chunk_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(256);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(256, |v| v as usize);
     let overlap = args
         .get("overlap")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(64);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(64, |v| v as usize);
 
     let mem = memory::get_memory_by_id(&state.pool, memory_id).await?;
     let chunker = memory::Chunker::new(chunk_size, overlap);
@@ -630,7 +627,7 @@ async fn handle_chunk(
     }))
 }
 
-async fn handle_embed(
+fn handle_embed(
     args: &Value,
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
@@ -667,9 +664,8 @@ async fn handle_search_hybrid(
     let query = require_str(args, "query")?;
     let limit = args
         .get("limit")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(10);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(10, |v| v as usize);
     let workspace_id = args
         .get("workspace_id")
         .and_then(|v| v.as_str())
@@ -709,7 +705,7 @@ async fn handle_search_hybrid(
             &memory::analytics::SearchEvent {
                 query_text: query.to_string(),
                 search_type: "hybrid".to_string(),
-                result_count: results.len() as i64,
+                result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
                 latency_ms,
                 workspace_id,
                 agent_id,
@@ -740,7 +736,7 @@ async fn handle_search_hybrid(
             &memory::analytics::SearchEvent {
                 query_text: query.to_string(),
                 search_type: "fts5_fallback".to_string(),
-                result_count: fts_results.len() as i64,
+                result_count: i64::try_from(fts_results.len()).unwrap_or(i64::MAX),
                 latency_ms,
                 workspace_id,
                 agent_id,
@@ -764,14 +760,12 @@ async fn handle_store_with_embedding(
     let memory_id = require_str(args, "memory_id")?;
     let chunk_size = args
         .get("chunk_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(256);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(256, |v| v as usize);
     let overlap = args
         .get("overlap")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .unwrap_or(64);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(64, |v| v as usize);
 
     let embedder = state.embedder.as_ref().ok_or_else(|| {
         nous_core::error::NousError::Internal(
@@ -810,8 +804,8 @@ async fn handle_search_stats(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let since = args.get("since").and_then(|v| v.as_str());
-    let stats = memory::analytics::get_search_stats(&state.pool, since).await?;
-    Ok(serde_json::to_value(stats).unwrap())
+    let search_stats = memory::analytics::get_search_stats(&state.pool, since).await?;
+    Ok(serde_json::to_value(search_stats).unwrap())
 }
 
 async fn handle_session_start(
@@ -859,10 +853,10 @@ async fn handle_save_prompt(
     Ok(serde_json::to_value(mem).unwrap())
 }
 
-async fn handle_current_project(args: &Value) -> Result<Value, nous_core::error::NousError> {
+fn handle_current_project(args: &Value) -> Value {
     let cwd = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
     match memory::detect_current_project(cwd) {
-        Some(project) => Ok(serde_json::to_value(project).unwrap()),
-        None => Ok(serde_json::json!({"detected": false, "message": "no project marker found"})),
+        Some(project) => serde_json::to_value(project).unwrap(),
+        None => serde_json::json!({"detected": false, "message": "no project marker found"}),
     }
 }

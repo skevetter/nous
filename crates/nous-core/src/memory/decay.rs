@@ -8,10 +8,10 @@ pub async fn run_importance_decay(
     moderate_to_low_days: u32,
 ) -> Result<u64, NousError> {
     let now = chrono::Utc::now();
-    let high_cutoff = (now - chrono::Duration::days(high_to_moderate_days as i64))
+    let high_cutoff = (now - chrono::Duration::days(i64::from(high_to_moderate_days)))
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
-    let moderate_cutoff = (now - chrono::Duration::days(moderate_to_low_days as i64))
+    let moderate_cutoff = (now - chrono::Duration::days(i64::from(moderate_to_low_days)))
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
     let grace_cutoff = (now - chrono::Duration::hours(24))

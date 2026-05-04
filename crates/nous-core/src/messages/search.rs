@@ -27,7 +27,7 @@ pub async fn search_messages(
             vec![
                 sanitized.clone().into(),
                 room_id.clone().into(),
-                (limit as i64).into(),
+                i64::from(limit).into(),
             ],
         )
     } else {
@@ -37,7 +37,7 @@ pub async fn search_messages(
              WHERE room_messages_fts MATCH ? \
              ORDER BY fts.rank \
              LIMIT ?",
-            vec![sanitized.into(), (limit as i64).into()],
+            vec![sanitized.into(), i64::from(limit).into()],
         )
     };
 

@@ -35,7 +35,7 @@ impl DaemonToolServices {
     }
 }
 
-fn map_err(e: crate::error::NousError) -> ToolError {
+fn map_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed(e.to_string())
 }
 
@@ -106,7 +106,7 @@ impl ToolServices for DaemonToolServices {
             &memory::analytics::SearchEvent {
                 query_text: query,
                 search_type: "fts".to_string(),
-                result_count: results.len() as i64,
+                result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
                 latency_ms,
                 workspace_id,
                 agent_id,
@@ -154,7 +154,7 @@ impl ToolServices for DaemonToolServices {
                 &memory::analytics::SearchEvent {
                     query_text: query,
                     search_type: "hybrid".to_string(),
-                    result_count: results.len() as i64,
+                    result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
                     latency_ms,
                     workspace_id: None,
                     agent_id,
@@ -183,7 +183,7 @@ impl ToolServices for DaemonToolServices {
                 &memory::analytics::SearchEvent {
                     query_text: query,
                     search_type: "fts5_fallback".to_string(),
-                    result_count: fts_results.len() as i64,
+                    result_count: i64::try_from(fts_results.len()).unwrap_or(i64::MAX),
                     latency_ms,
                     workspace_id: None,
                     agent_id,

@@ -127,7 +127,7 @@ pub enum ResourceCommands {
         #[arg(long)]
         force: bool,
     },
-    /// Update last_seen_at timestamp (liveness heartbeat)
+    /// Update `last_seen_at` timestamp (liveness heartbeat)
     Heartbeat {
         /// Resource ID
         id: String,
@@ -177,7 +177,7 @@ async fn execute(
             let resource_type: resources::ResourceType = r#type.parse()?;
             let ownership_policy = policy
                 .as_deref()
-                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .map(str::parse::<resources::OwnershipPolicy>)
                 .transpose()?;
             let tags_vec = tags.map(|t| {
                 t.split(',')
@@ -213,15 +213,15 @@ async fn execute(
         } => {
             let type_parsed = r#type
                 .as_deref()
-                .map(|s| s.parse::<resources::ResourceType>())
+                .map(str::parse::<resources::ResourceType>)
                 .transpose()?;
             let status_parsed = status
                 .as_deref()
-                .map(|s| s.parse::<resources::ResourceStatus>())
+                .map(str::parse::<resources::ResourceStatus>)
                 .transpose()?;
             let policy_parsed = policy
                 .as_deref()
-                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .map(str::parse::<resources::OwnershipPolicy>)
                 .transpose()?;
             let items = resources::list_resources(
                 pool,
@@ -260,7 +260,7 @@ async fn execute(
             });
             let ownership_policy = policy
                 .as_deref()
-                .map(|s| s.parse::<resources::OwnershipPolicy>())
+                .map(str::parse::<resources::OwnershipPolicy>)
                 .transpose()?;
             let resource = resources::update_resource(
                 pool,
@@ -286,11 +286,11 @@ async fn execute(
         } => {
             let type_parsed = r#type
                 .as_deref()
-                .map(|s| s.parse::<resources::ResourceType>())
+                .map(str::parse::<resources::ResourceType>)
                 .transpose()?;
             let status_parsed = status
                 .as_deref()
-                .map(|s| s.parse::<resources::ResourceStatus>())
+                .map(str::parse::<resources::ResourceStatus>)
                 .transpose()?;
             let items = resources::search_by_tags(
                 pool,

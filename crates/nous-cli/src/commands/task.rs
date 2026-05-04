@@ -121,7 +121,7 @@ pub enum DependsCommands {
         task_id: String,
         /// Depends on task ID
         depends_on: String,
-        /// Dependency type: blocked_by, blocks, waiting_on
+        /// Dependency type: `blocked_by`, blocks, `waiting_on`
         #[arg(long, default_value = "blocked_by")]
         dep_type: String,
     },
@@ -357,7 +357,7 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
                 println!("{}", serde_json::to_string_pretty(&tmpl)?);
             }
             TemplateCommands::Use { template, assignee } => {
-                let task = tasks::create_from_template(
+                let task = tasks::create_from_template::<std::collections::hash_map::RandomState>(
                     pool,
                     &template,
                     None,

@@ -68,7 +68,7 @@ pub async fn save(
     let importance = body
         .importance
         .as_deref()
-        .map(|s| s.parse::<nous_core::memory::Importance>())
+        .map(str::parse::<nous_core::memory::Importance>)
         .transpose()?;
 
     let mem = nous_core::memory::save_memory(
@@ -105,7 +105,7 @@ pub async fn update(
     let importance = body
         .importance
         .as_deref()
-        .map(|s| s.parse::<nous_core::memory::Importance>())
+        .map(str::parse::<nous_core::memory::Importance>)
         .transpose()?;
 
     let mem = nous_core::memory::update_memory(
@@ -132,12 +132,12 @@ pub async fn search(
     let memory_type = params
         .memory_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::memory::MemoryType>())
+        .map(str::parse::<nous_core::memory::MemoryType>)
         .transpose()?;
     let importance = params
         .importance
         .as_deref()
-        .map(|s| s.parse::<nous_core::memory::Importance>())
+        .map(str::parse::<nous_core::memory::Importance>)
         .transpose()?;
 
     let results = nous_core::memory::search_memories(

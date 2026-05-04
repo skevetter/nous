@@ -36,7 +36,7 @@ pub async fn post_message(
     }
 
     let id = Uuid::now_v7().to_string();
-    let metadata_json = request.metadata.as_ref().map(|m| m.to_string());
+    let metadata_json = request.metadata.as_ref().map(std::string::ToString::to_string);
     let msg_type = request.message_type.unwrap_or_default().to_string();
 
     let model = msg_entity::ActiveModel {
@@ -59,7 +59,7 @@ pub async fn post_message(
     );
 
     if let Some(registry) = registry {
-        let (topics, mentions) = extract_topics_mentions(&request.metadata);
+        let (topics, mentions) = extract_topics_mentions(request.metadata.as_ref());
         registry
             .notify(Notification {
                 room_id: message.room_id.clone(),
@@ -75,7 +75,7 @@ pub async fn post_message(
     Ok(message)
 }
 
-fn extract_topics_mentions(metadata: &Option<serde_json::Value>) -> (Vec<String>, Vec<String>) {
+fn extract_topics_mentions(metadata: Option<&serde_json::Value>) -> (Vec<String>, Vec<String>) {
     let Some(meta) = metadata else {
         return (vec![], vec![]);
     };
@@ -134,7 +134,7 @@ pub async fn read_messages(
     }
 
     sql.push_str(" ORDER BY created_at ASC LIMIT ?");
-    binds.push((limit as i64).into());
+    binds.push(i64::from(limit).into());
 
     let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &sql, binds);
     let rows = db.query_all(stmt).await?;
@@ -152,12 +152,12 @@ pub async fn list_mentions(
     limit: Option<u32>,
 ) -> Result<Vec<Message>, NousError> {
     let limit = limit.unwrap_or(50).min(200);
-    let pattern = format!("%@{}%", agent_id);
+    let pattern = format!("%@{agent_id}%");
 
     let stmt = Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,
         "SELECT * FROM room_messages WHERE room_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
-        [room_id.into(), pattern.into(), (limit as i64).into()],
+        [room_id.into(), pattern.into(), i64::from(limit).into()],
     );
     let rows = db.query_all(stmt).await?;
 
@@ -244,8 +244,7 @@ pub async fn mark_read(
         .await?;
 
     let unread: i64 = unread_row
-        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
     Ok(ChatCursor {
         room_id: req.room_id,
@@ -265,29 +264,25 @@ pub async fn unread_count(
             .one(db)
             .await?;
 
-    let (last_read_message_id, last_read_at) = match cursor_model {
-        Some(m) => (m.last_read_message_id, m.last_read_at),
-        None => {
-            let count_row = db
-                .query_one(Statement::from_sql_and_values(
-                    sea_orm::DbBackend::Sqlite,
-                    "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ?",
-                    [req.room_id.clone().into()],
-                ))
-                .await?;
+    let (last_read_message_id, last_read_at) = if let Some(m) = cursor_model { (m.last_read_message_id, m.last_read_at) } else {
+        let count_row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ?",
+                [req.room_id.clone().into()],
+            ))
+            .await?;
 
-            let count: i64 = count_row
-                .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-                .unwrap_or(0);
+        let count: i64 = count_row
+            .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
-            return Ok(ChatCursor {
-                room_id: req.room_id,
-                agent_id: req.agent_id,
-                last_read_message_id: String::new(),
-                last_read_at: String::new(),
-                unread_count: count,
-            });
-        }
+        return Ok(ChatCursor {
+            room_id: req.room_id,
+            agent_id: req.agent_id,
+            last_read_message_id: String::new(),
+            last_read_at: String::new(),
+            unread_count: count,
+        });
     };
 
     let unread_row = db
@@ -299,8 +294,7 @@ pub async fn unread_count(
         .await?;
 
     let unread: i64 = unread_row
-        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
     Ok(ChatCursor {
         room_id: req.room_id,

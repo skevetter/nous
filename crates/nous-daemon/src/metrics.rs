@@ -23,9 +23,7 @@ pub fn setup() -> PrometheusHandle {
 pub async fn track(request: Request, next: Next) -> Response {
     let path = request
         .extensions()
-        .get::<MatchedPath>()
-        .map(|p| p.as_str().to_owned())
-        .unwrap_or_else(|| request.uri().path().to_owned());
+        .get::<MatchedPath>().map_or_else(|| request.uri().path().to_owned(), |p| p.as_str().to_owned());
     let method = request.method().to_string();
 
     let start = Instant::now();

@@ -1,5 +1,5 @@
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
+use sea_orm::{ActiveValue, ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::Serialize;
 
 use crate::entities::search_events as se_entity;
@@ -20,7 +20,7 @@ pub async fn record_search_event(
     event: &SearchEvent,
 ) -> Result<(), NousError> {
     let model = se_entity::ActiveModel {
-        id: Default::default(),
+        id: ActiveValue::default(),
         query_text: Set(event.query_text.clone()),
         search_type: Set(event.search_type.clone()),
         result_count: Set(event.result_count as i32),
@@ -70,8 +70,7 @@ pub async fn get_search_stats(
         }
         let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &total_sql, values);
         let row = db.query_one(stmt).await?;
-        row.map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-            .unwrap_or(0)
+        row.map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
     };
 
     // Type counts
@@ -116,12 +115,14 @@ pub async fn get_search_stats(
         }
         let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &zero_sql, values);
         let row = db.query_one(stmt).await?;
-        row.map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-            .unwrap_or(0)
+        row.map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
     };
 
+    // Counts are bounded well within i32 range in practice; f64::from(i32) is lossless.
     let zero_result_rate = if total_searches > 0 {
-        zero_count as f64 / total_searches as f64 * 100.0
+        let z = f64::from(i32::try_from(zero_count).unwrap_or(i32::MAX));
+        let t = f64::from(i32::try_from(total_searches).unwrap_or(i32::MAX));
+        z / t * 100.0
     } else {
         0.0
     };
@@ -137,8 +138,7 @@ pub async fn get_search_stats(
         }
         let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &avg_sql, values);
         let row = db.query_one(stmt).await?;
-        row.map(|r| r.try_get_by::<f64, _>("avg_lat").unwrap_or(0.0))
-            .unwrap_or(0.0)
+        row.map_or(0.0, |r| r.try_get_by::<f64, _>("avg_lat").unwrap_or(0.0))
     };
 
     // Top queries

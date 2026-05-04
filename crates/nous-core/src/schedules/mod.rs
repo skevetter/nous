@@ -235,7 +235,8 @@ pub async fn list_schedules(
     }
 
     sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-    values.push((limit as i32).into());
+    // limit is capped by caller; safe to cast to i32
+    values.push(limit.cast_signed().into());
 
     let rows = db
         .query_all(Statement::from_sql_and_values(
@@ -417,7 +418,8 @@ pub async fn list_runs(
     }
 
     sql.push_str(" ORDER BY started_at DESC LIMIT ?");
-    values.push((limit as i32).into());
+    // limit is capped by caller; safe to cast to i32
+    values.push(limit.cast_signed().into());
 
     let rows = db
         .query_all(Statement::from_sql_and_values(
@@ -520,8 +522,7 @@ pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Valu
         ))
         .await?;
     let total: i64 = total_row
-        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
     let active_row = db
         .query_one(Statement::from_sql_and_values(
@@ -531,8 +532,7 @@ pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Valu
         ))
         .await?;
     let active: i64 = active_row
-        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
     let failing_row = db
         .query_one(Statement::from_sql_and_values(
@@ -545,8 +545,7 @@ pub async fn schedule_health(db: &DatabaseConnection) -> Result<serde_json::Valu
         ))
         .await?;
     let failing: i64 = failing_row
-        .map(|r| r.try_get_by::<i64, _>("cnt").unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |r| r.try_get_by::<i64, _>("cnt").unwrap_or(0));
 
     let next_row = db
         .query_one(Statement::from_sql_and_values(

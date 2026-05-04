@@ -130,8 +130,8 @@ pub async fn list_resources(
     let models = res_entity::Entity::find()
         .filter(cond)
         .order_by_desc(res_entity::Column::CreatedAt)
-        .limit(Some(limit as u64))
-        .offset(Some(offset as u64))
+        .limit(Some(u64::from(limit)))
+        .offset(Some(u64::from(offset)))
         .all(db)
         .await?;
 
@@ -319,7 +319,8 @@ pub async fn search_by_tags(
 
     sql.push_str(&conditions.join(" AND "));
     sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-    params.push((limit as i32).into());
+    // limit is capped at 200 by caller; safe to cast to i32
+    params.push(limit.cast_signed().into());
 
     let stmt = Statement::from_sql_and_values(sea_orm::DbBackend::Sqlite, &sql, params);
     let rows = db.query_all(stmt).await?;
@@ -360,13 +361,15 @@ pub async fn search_fts(
     let limit = limit.unwrap_or(20).min(100);
     let sanitized = sanitize_fts5_query(query_str);
 
+    // limit is capped at 100; safe to cast to i32
+    let limit_i = limit.cast_signed();
     let (sql, params): (&str, Vec<sea_orm::Value>) = if let Some(ns) = namespace {
         (
             "SELECT r.* FROM resources r \
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? AND r.namespace = ? \
              LIMIT ?",
-            vec![sanitized.clone().into(), ns.into(), (limit as i32).into()],
+            vec![sanitized.clone().into(), ns.into(), limit_i.into()],
         )
     } else {
         (
@@ -374,7 +377,7 @@ pub async fn search_fts(
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? \
              LIMIT ?",
-            vec![sanitized.into(), (limit as i32).into()],
+            vec![sanitized.into(), limit_i.into()],
         )
     };
 

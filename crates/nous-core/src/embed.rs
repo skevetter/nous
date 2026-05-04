@@ -107,7 +107,7 @@ impl OnnxEmbeddingModel {
             .get_ids()
             .iter()
             .take(MAX_SEQ_LEN)
-            .map(|&id| id as i64)
+            .map(|&id| i64::from(id))
             .collect();
 
         Ok(ids)
@@ -129,7 +129,8 @@ impl Embedder for OnnxEmbeddingModel {
             let attention_mask: Vec<i64> = vec![1; seq_len];
             let token_type_ids: Vec<i64> = vec![0; seq_len];
 
-            let shape = vec![1i64, seq_len as i64];
+            // seq_len is token count (<= model max length, never > i64::MAX)
+            let shape = vec![1i64, i64::try_from(seq_len).unwrap_or(i64::MAX)];
 
             let input_ids_tensor =
                 ort::value::Tensor::from_array((shape.clone(), input_ids.into_boxed_slice()))
@@ -164,8 +165,9 @@ impl Embedder for OnnxEmbeddingModel {
             })?;
 
             if shape.len() == 3 {
-                let seq_len_out = shape[1] as usize;
-                let hidden_dim = shape[2] as usize;
+                // ONNX shape values are always positive; use try_from to handle sign safely
+                let seq_len_out = usize::try_from(shape[1]).unwrap_or(0);
+                let hidden_dim = usize::try_from(shape[2]).unwrap_or(0);
                 let mut embedding = vec![0.0f32; hidden_dim];
 
                 for s in 0..seq_len_out {
@@ -174,8 +176,10 @@ impl Embedder for OnnxEmbeddingModel {
                         embedding[d] += data[offset + d];
                     }
                 }
+                // seq_len_out is token count (fits in u16); u16→f32 is lossless
+                let seq_len_f = f32::from(u16::try_from(seq_len_out).unwrap_or(u16::MAX));
                 for val in &mut embedding {
-                    *val /= seq_len_out as f32;
+                    *val /= seq_len_f;
                 }
 
                 let norm: f32 = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -263,18 +267,17 @@ impl Embedder for MockEmbedder {
 
 pub struct RigEmbedderAdapter<M: rig::embeddings::EmbeddingModel> {
     model: M,
-    rt: tokio::runtime::Handle,
 }
 
 impl<M: rig::embeddings::EmbeddingModel> RigEmbedderAdapter<M> {
-    pub fn new(model: M, rt: tokio::runtime::Handle) -> Self {
-        Self { model, rt }
+    pub fn new(model: M) -> Self {
+        Self { model }
     }
 }
 
 impl<M: rig::embeddings::EmbeddingModel> Embedder for RigEmbedderAdapter<M> {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, NousError> {
-        let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let owned: Vec<String> = texts.iter().map(std::string::ToString::to_string).collect();
         let embeddings = std::thread::scope(|s| {
             s.spawn(|| {
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -346,9 +349,8 @@ mod tests {
 
     #[test]
     fn rig_embedder_adapter_f64_to_f32() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
         let model = MockRigModel { dims: 3 };
-        let adapter = RigEmbedderAdapter::new(model, rt.handle().clone());
+        let adapter = RigEmbedderAdapter::new(model);
 
         let results = adapter.embed(&["hello", "world"]).unwrap();
         assert_eq!(results.len(), 2);
@@ -358,9 +360,8 @@ mod tests {
 
     #[test]
     fn rig_embedder_adapter_dimension() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
         let model = MockRigModel { dims: 768 };
-        let adapter = RigEmbedderAdapter::new(model, rt.handle().clone());
+        let adapter = RigEmbedderAdapter::new(model);
         assert_eq!(adapter.dimension(), 768);
     }
 
