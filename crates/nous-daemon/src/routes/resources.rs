@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -112,8 +113,42 @@ pub async fn list(
         .map(|s| s.parse::<nous_core::resources::OwnershipPolicy>())
         .transpose()?;
 
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM resources");
+    let mut count_conds: Vec<String> = Vec::new();
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref t) = resource_type {
+        count_conds.push("resource_type = ?".into());
+        count_vals.push(t.as_str().to_string().into());
+    }
+    if let Some(ref s) = status {
+        count_conds.push("status = ?".into());
+        count_vals.push(s.as_str().to_string().into());
+    } else {
+        count_conds.push("status != 'deleted'".into());
+    }
+    if let Some(ref agent_id) = params.owner_agent_id {
+        count_conds.push("owner_agent_id = ?".into());
+        count_vals.push(agent_id.clone().into());
+    }
+    if let Some(ref ns) = params.namespace {
+        count_conds.push("namespace = ?".into());
+        count_vals.push(ns.clone().into());
+    }
+    if params.orphaned == Some(true) {
+        count_conds.push("owner_agent_id IS NULL".into());
+    }
+    if let Some(ref p) = ownership_policy {
+        count_conds.push("ownership_policy = ?".into());
+        count_vals.push(p.as_str().to_string().into());
+    }
+    if !count_conds.is_empty() {
+        count_sql.push_str(" WHERE ");
+        count_sql.push_str(&count_conds.join(" AND "));
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
 
     let resources = nous_core::resources::list_resources(
         &state.pool,
@@ -129,7 +164,7 @@ pub async fn list(
         },
     )
     .await?;
-    Ok(crate::response::paginated(resources, limit, offset))
+    Ok(crate::response::paginated(resources, limit, offset, total_count))
 }
 
 pub async fn get(

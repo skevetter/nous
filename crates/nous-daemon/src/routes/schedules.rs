@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -78,8 +79,26 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListSchedulesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset: u32 = 0;
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM schedules");
+    let mut count_conds: Vec<String> = Vec::new();
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(e) = params.enabled {
+        count_conds.push("enabled = ?".into());
+        count_vals.push(if e { 1i32.into() } else { 0i32.into() });
+    }
+    if let Some(ref at) = params.action_type {
+        count_conds.push("action_type = ?".into());
+        count_vals.push(at.clone().into());
+    }
+    if !count_conds.is_empty() {
+        count_sql.push_str(" WHERE ");
+        count_sql.push_str(&count_conds.join(" AND "));
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let schedules = nous_core::schedules::list_schedules(
         &state.pool,
         params.enabled,
@@ -87,7 +106,7 @@ pub async fn list(
         Some(limit + 1),
     )
     .await?;
-    Ok(crate::response::paginated(schedules, limit, offset))
+    Ok(crate::response::paginated(schedules, limit, offset, total_count))
 }
 
 pub async fn get(
@@ -141,12 +160,22 @@ pub async fn list_runs(
     Path(id): Path<String>,
     Query(params): Query<ListRunsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset: u32 = 0;
+
+    let mut count_sql =
+        String::from("SELECT COUNT(*) as cnt FROM schedule_runs WHERE schedule_id = ?");
+    let mut count_vals: Vec<sea_orm::Value> = vec![id.clone().into()];
+    if let Some(ref s) = params.status {
+        count_sql.push_str(" AND status = ?");
+        count_vals.push(s.clone().into());
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let runs =
         nous_core::schedules::list_runs(&state.pool, &id, params.status.as_deref(), Some(limit + 1))
             .await?;
-    Ok(crate::response::paginated(runs, limit, offset))
+    Ok(crate::response::paginated(runs, limit, offset, total_count))
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
