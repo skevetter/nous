@@ -121,14 +121,26 @@ pub async fn list_tasks(params: ListTasksParams<'_>) -> Result<Vec<Task>, NousEr
     } = params;
     let limit = limit.unwrap_or(50).min(200);
     let offset = offset.unwrap_or(0);
-    let order_dir = order_dir.unwrap_or("DESC");
+    let order_dir = match order_dir.unwrap_or("DESC") {
+        d if d.eq_ignore_ascii_case("asc") => "ASC",
+        d if d.eq_ignore_ascii_case("desc") => "DESC",
+        _ => "DESC",
+    };
 
-    let order_clause = match order_by.unwrap_or("created_at") {
+    let order_column = match order_by.unwrap_or("created_at") {
+        "priority" | "updated_at" | "status" | "title" | "created_at" => {
+            order_by.unwrap_or("created_at")
+        }
+        _ => "created_at",
+    };
+
+    let order_clause = match order_column {
         "priority" => format!(
             "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END {order_dir}"
         ),
         "updated_at" => format!("updated_at {order_dir}"),
         "status" => format!("status {order_dir}"),
+        "title" => format!("title {order_dir}"),
         _ => format!("created_at {order_dir}"),
     };
 
