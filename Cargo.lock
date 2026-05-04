@@ -3862,6 +3862,7 @@ dependencies = [
  "chrono",
  "dirs",
  "glob",
+ "nous-core",
  "nous-migration",
  "ort",
  "proptest",

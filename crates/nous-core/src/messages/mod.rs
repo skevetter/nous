@@ -100,59 +100,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_messages_with_since_filter() {
+        use sea_orm::ConnectionTrait;
+        use uuid::Uuid;
         let (db, _tmp) = setup().await;
         let room = create_room(&db, "since-room", None, None).await.unwrap();
 
-        let msg1 = post_message(
-            &db,
-            PostMessageRequest {
-                room_id: room.id.clone(),
-                sender_id: "agent-1".into(),
-                content: "First".into(),
-                reply_to: None,
-                metadata: None,
-                message_type: None,
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-        post_message(
-            &db,
-            PostMessageRequest {
-                room_id: room.id.clone(),
-                sender_id: "agent-1".into(),
-                content: "Second".into(),
-                reply_to: None,
-                metadata: None,
-                message_type: None,
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-        post_message(
-            &db,
-            PostMessageRequest {
-                room_id: room.id.clone(),
-                sender_id: "agent-1".into(),
-                content: "Third".into(),
-                reply_to: None,
-                metadata: None,
-                message_type: None,
-            },
-            None,
-        )
-        .await
-        .unwrap();
+        // Insert with explicit timestamps spaced 1 second apart so the
+        // since filter is deterministic regardless of wall-clock speed.
+        let t1 = "2025-01-01T10:00:01.000000Z";
+        let t2 = "2025-01-01T10:00:02.000000Z";
+        let t3 = "2025-01-01T10:00:03.000000Z";
+        for (content, ts) in [("First", t1), ("Second", t2), ("Third", t3)] {
+            let id = Uuid::now_v7().to_string();
+            db.execute_unprepared(&format!(
+                "INSERT INTO room_messages (id, room_id, sender_id, content, message_type, created_at) \
+                 VALUES ('{id}', '{}', 'agent-1', '{content}', 'user', '{ts}')",
+                room.id
+            ))
+            .await
+            .unwrap();
+        }
 
         let messages = read_messages(
             &db,
             ReadMessagesRequest {
                 room_id: room.id.clone(),
-                since: Some(msg1.created_at.clone()),
+                since: Some(t1.to_string()),
                 before: None,
                 limit: None,
             },
