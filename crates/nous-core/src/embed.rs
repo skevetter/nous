@@ -275,10 +275,18 @@ impl<M: rig::embeddings::EmbeddingModel> RigEmbedderAdapter<M> {
 impl<M: rig::embeddings::EmbeddingModel> Embedder for RigEmbedderAdapter<M> {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, NousError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        let embeddings = self
-            .rt
-            .block_on(self.model.embed_texts(owned))
-            .map_err(|e| NousError::Internal(format!("embedding failed: {e}")))?;
+        let embeddings = std::thread::scope(|s| {
+            s.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| NousError::Internal(format!("failed to build runtime: {e}")))?;
+                rt.block_on(self.model.embed_texts(owned))
+                    .map_err(|e| NousError::Internal(format!("embedding failed: {e}")))
+            })
+            .join()
+            .unwrap_or_else(|_| Err(NousError::Internal("embedding thread panicked".into())))
+        })?;
         Ok(embeddings
             .into_iter()
             .map(|e| e.vec.into_iter().map(|v| v as f32).collect())
