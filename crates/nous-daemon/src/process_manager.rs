@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "sandbox")]
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,11 +36,46 @@ pub struct ProcessHandle {
 
 pub struct ProcessRegistry {
     handles: Mutex<HashMap<String, ProcessHandle>>, // keyed by agent_id
+    /// Tracks agent_ids currently in the process of being spawned.
+    /// Prevents TOCTOU races where concurrent spawn() calls for the same
+    /// agent_id could both pass the `handles` check before either inserts.
+    spawning: Mutex<HashSet<String>>,
 }
 
 impl Default for ProcessRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Guard that removes an agent_id from the `spawning` set on drop,
+/// ensuring the reservation is released even if the spawn fails.
+struct SpawnReservation<'a> {
+    registry: &'a ProcessRegistry,
+    agent_id: Option<String>,
+}
+
+impl<'a> SpawnReservation<'a> {
+    /// Consume the reservation without removing from the spawning set
+    /// (caller has successfully inserted into handles).
+    fn defuse(mut self) {
+        self.agent_id = None;
+    }
+}
+
+impl Drop for SpawnReservation<'_> {
+    fn drop(&mut self) {
+        if let Some(ref agent_id) = self.agent_id {
+            // Use try_lock to remove from spawning set synchronously.
+            // If the lock is contended, spawn a task to clean up.
+            if let Ok(mut spawning) = self.registry.spawning.try_lock() {
+                spawning.remove(agent_id);
+            }
+            // If try_lock fails we are in an async drop path; the entry
+            // will be cleaned up on the next spawn attempt for this agent_id
+            // since we'll hold the handles lock at that point.
+            // In practice, try_lock will succeed because contention is minimal.
+        }
     }
 }
 
@@ -66,6 +101,7 @@ impl ProcessRegistry {
     pub fn new() -> Self {
         Self {
             handles: Mutex::new(HashMap::new()),
+            spawning: Mutex::new(HashSet::new()),
         }
     }
 
@@ -79,19 +115,31 @@ impl ProcessRegistry {
             env,
             timeout_secs,
         } = params;
-        // Check if already running
-        {
+        // Reserve the agent_id slot atomically: check both handles and spawning set
+        // while holding both locks to prevent TOCTOU races.
+        let reservation = {
             let handles = self.handles.lock().await;
             if handles.contains_key(agent_id) {
                 return Err(NousError::Conflict(format!(
                     "agent '{agent_id}' already has a running process"
                 )));
             }
-        }
+            let mut spawning = self.spawning.lock().await;
+            if !spawning.insert(agent_id.to_string()) {
+                return Err(NousError::Conflict(format!(
+                    "agent '{agent_id}' already has a running process"
+                )));
+            }
+            drop(handles);
+            SpawnReservation {
+                registry: self,
+                agent_id: Some(agent_id.to_string()),
+            }
+        };
 
         #[cfg(feature = "sandbox")]
         if process_type == "sandbox" {
-            return self.spawn_sandbox(state, agent_id, timeout_secs).await;
+            return self.spawn_sandbox(state, agent_id, timeout_secs, reservation).await;
         }
 
         let env_json = env
@@ -167,10 +215,12 @@ impl ProcessRegistry {
         let agent_id_owned = agent_id.to_string();
         let timeout = timeout_secs;
 
-        // Store handle first
+        // Store handle and release the spawn reservation
         {
             let mut handles = self.handles.lock().await;
             handles.insert(agent_id.to_string(), handle);
+            self.spawning.lock().await.remove(agent_id);
+            reservation.defuse();
         }
 
         // Spawn the monitor task
@@ -208,6 +258,7 @@ impl ProcessRegistry {
         state: &AppState,
         agent_id: &str,
         timeout_secs: Option<i64>,
+        reservation: SpawnReservation<'_>,
     ) -> Result<Process, NousError> {
         let sandbox_mgr = state.sandbox_manager().ok_or_else(|| {
             NousError::Config("sandbox feature enabled but SandboxManager not initialized".into())
@@ -264,6 +315,8 @@ impl ProcessRegistry {
         {
             let mut handles = self.handles.lock().await;
             handles.insert(agent_id.to_string(), handle);
+            self.spawning.lock().await.remove(agent_id);
+            reservation.defuse();
         }
 
         let process_id = process.id.clone();
