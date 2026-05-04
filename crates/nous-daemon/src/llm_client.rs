@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 pub type LlmClient = Client;
 
-pub const DEFAULT_MODEL: &str = "anthropic.claude-sonnet-4-20250514-v1:0";
+pub const DEFAULT_MODEL: &str = "us.anthropic.claude-sonnet-4-20250514-v1:0";
 
 #[derive(Debug, Clone)]
 pub struct LlmConfig {

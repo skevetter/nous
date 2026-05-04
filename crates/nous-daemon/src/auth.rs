@@ -20,6 +20,19 @@ struct AuthErrorBody {
     message: &'static str,
 }
 
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn unauthorized(message: &'static str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -46,7 +59,7 @@ pub async fn require_api_key(
     match auth_header {
         Some(value) if value.starts_with("Bearer ") => {
             let token = &value[7..];
-            if token == key.0.as_ref() {
+            if constant_time_eq(token, key.0.as_ref()) {
                 next.run(request).await
             } else {
                 unauthorized("invalid API key")

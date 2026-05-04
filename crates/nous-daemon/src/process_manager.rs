@@ -624,7 +624,12 @@ impl ProcessRegistry {
             }
             None => {
                 tokio::select! {
-                    () = cancel.cancelled() => None,
+                    () = cancel.cancelled() => {
+                        // The monitor may have taken the child via wait_for_exit; kill it
+                        // so the OS process doesn't outlive the stop() call.
+                        Self::kill_process_handle(state, agent_id).await;
+                        None
+                    },
                     result = Self::wait_for_exit(state, agent_id) => Some(result),
                 }
             }
@@ -639,7 +644,12 @@ impl ProcessRegistry {
     ) -> Option<(Option<i32>, Option<String>)> {
         let (agent_id, process_id) = ids;
         tokio::select! {
-            () = cancel.cancelled() => None,
+            () = cancel.cancelled() => {
+                // The monitor may have taken the child via wait_for_exit; kill it
+                // so the OS process doesn't outlive the stop() call.
+                Self::kill_process_handle(state, agent_id).await;
+                None
+            },
             result = tokio::time::timeout(duration, Self::wait_for_exit(state, agent_id)) => {
                 Self::handle_deadline_result(state, agent_id, process_id, result).await
             }
@@ -838,10 +848,12 @@ impl ProcessRegistry {
     ) -> Option<i32> {
         if force {
             let _ = child.kill().await;
+            // Reap the process after kill to avoid zombies.
+            child.wait().await.ok().and_then(|s| s.code())
         } else {
             Self::graceful_terminate(&mut child, grace_secs).await;
+            child.try_wait().ok().flatten().and_then(|s| s.code())
         }
-        child.try_wait().ok().flatten().and_then(|s| s.code())
     }
 
     async fn graceful_terminate(child: &mut tokio::process::Child, grace_secs: u64) {

@@ -414,6 +414,7 @@ impl AgentTool for FsListTool {
             let entries: Vec<String> = glob::glob(&full_pattern)
                 .map_err(|e| ToolError::InvalidArgs(format!("invalid glob: {e}")))?
                 .filter_map(|r| r.ok())
+                .filter(|p| check_read_permission(p, ctx).is_ok())
                 .map(|p| p.display().to_string())
                 .collect();
             Ok(ToolOutput {
