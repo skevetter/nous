@@ -9,7 +9,7 @@ use nous_core::agents::processes::{UpdateAgentRequest, UpdateProcessStatusReques
 use nous_core::config::Config;
 use nous_core::db::DbPools;
 
-use super::output::{OutputFormat, print_list};
+use super::output::{OutputFormat, parse_fields, print_list};
 
 #[derive(Subcommand)]
 pub enum AgentCommands {
@@ -115,6 +115,9 @@ pub enum AgentCommands {
         /// Output format: json (default), table, csv
         #[arg(short, long, default_value = "json")]
         output: OutputFormat,
+        /// Comma-separated fields to include (e.g. id,name,status)
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Show the agent tree (hierarchy)
     Tree {
@@ -465,8 +468,8 @@ async fn dispatch_membership_cmd(
         }
         AgentCommands::Deregister { id, force } => cmd_deregister(pool, id, force).await?,
         AgentCommands::Lookup { name, namespace } => cmd_lookup(pool, name, namespace).await?,
-        AgentCommands::List { status, namespace, limit, output } => {
-            cmd_list(pool, ListArgs { status, namespace, limit, output }).await?
+        AgentCommands::List { status, namespace, limit, output, fields } => {
+            cmd_list(pool, ListArgs { status, namespace, limit, output, fields }).await?
         }
         AgentCommands::Tree { root, namespace } => cmd_tree(pool, root, namespace).await?,
         _ => unreachable!(),
@@ -782,7 +785,8 @@ async fn cmd_list(
     )
     .await?;
     let val = serde_json::to_value(&list)?;
-    print_list(&val, &args.output, &["id", "name", "agent_type", "status", "namespace", "last_seen_at"]);
+    let fields_override = args.fields.as_deref().map(parse_fields);
+    print_list(&val, &args.output, &["id", "name", "agent_type", "status", "namespace", "last_seen_at"], fields_override.as_deref());
     Ok(())
 }
 
@@ -1017,6 +1021,7 @@ struct ListArgs {
     namespace: Option<String>,
     limit: u32,
     output: OutputFormat,
+    fields: Option<String>,
 }
 
 struct InvokeArgs {

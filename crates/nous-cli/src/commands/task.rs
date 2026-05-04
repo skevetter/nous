@@ -4,7 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::tasks;
 
-use super::output::{OutputFormat, print_list};
+use super::output::{OutputFormat, parse_fields, print_list};
 
 #[derive(Subcommand)]
 pub enum TaskCommands {
@@ -40,6 +40,9 @@ pub enum TaskCommands {
         /// Output format: json (default), table, csv
         #[arg(short, long, default_value = "json")]
         output: OutputFormat,
+        /// Comma-separated fields to include (e.g. id,title,status)
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Get task details by ID
     Get {
@@ -205,8 +208,8 @@ async fn dispatch(
         TaskCommands::Create { title, description, priority, assignee, labels, room_id, create_room } => {
             cmd_create(pool, CreateArgs { title, description, priority, assignee, labels, room_id, create_room }).await?;
         }
-        TaskCommands::List { status, assignee, label, limit, offset, output } => {
-            cmd_list(pool, ListArgs { status, assignee, label, limit, offset, output }).await?;
+        TaskCommands::List { status, assignee, label, limit, offset, output, fields } => {
+            cmd_list(pool, ListArgs { status, assignee, label, limit, offset, output, fields }).await?;
         }
         TaskCommands::Get { id } => cmd_get(pool, &id).await?,
         TaskCommands::Update { id, status, priority, assignee, description } => {
@@ -337,6 +340,7 @@ struct ListArgs {
     limit: u32,
     offset: u32,
     output: OutputFormat,
+    fields: Option<String>,
 }
 
 async fn cmd_list(
@@ -355,7 +359,8 @@ async fn cmd_list(
     })
     .await?;
     let val = serde_json::to_value(&tasks)?;
-    print_list(&val, &args.output, &["id", "title", "status", "priority", "assignee_id", "created_at"]);
+    let fields_override = args.fields.as_deref().map(parse_fields);
+    print_list(&val, &args.output, &["id", "title", "status", "priority", "assignee_id", "created_at"], fields_override.as_deref());
     Ok(())
 }
 

@@ -4,7 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::resources;
 
-use super::output::{OutputFormat, print_list};
+use super::output::{OutputFormat, parse_fields, print_list};
 
 #[derive(Subcommand)]
 pub enum ResourceCommands {
@@ -61,6 +61,9 @@ pub enum ResourceCommands {
         /// Output format: json (default), table, csv
         #[arg(short, long, default_value = "json")]
         output: OutputFormat,
+        /// Comma-separated fields to include (e.g. id,name,resource_type)
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Show a single resource by ID
     Show {
@@ -178,8 +181,8 @@ async fn dispatch(
             name, r#type, owner, path, namespace, tags, metadata, policy,
         } => cmd_register(pool, RegisterArgs { name, resource_type: r#type, owner, path, namespace, tags, metadata, policy }).await?,
         ResourceCommands::List {
-            r#type, status, owner, orphaned, namespace, policy, limit, output,
-        } => cmd_list(pool, ListArgs { resource_type: r#type, status, owner, orphaned, namespace, policy, limit, output }).await?,
+            r#type, status, owner, orphaned, namespace, policy, limit, output, fields,
+        } => cmd_list(pool, ListArgs { resource_type: r#type, status, owner, orphaned, namespace, policy, limit, output, fields }).await?,
         ResourceCommands::Update { id, name, path, tags, metadata, policy } => {
             cmd_update(pool, UpdateArgs { id, name, path, tags, metadata, policy }).await?;
         }
@@ -274,6 +277,7 @@ struct ListArgs {
     policy: Option<String>,
     limit: u32,
     output: OutputFormat,
+    fields: Option<String>,
 }
 
 async fn cmd_list(
@@ -307,7 +311,8 @@ async fn cmd_list(
     )
     .await?;
     let val = serde_json::to_value(&items)?;
-    print_list(&val, &args.output, &["id", "name", "resource_type", "status", "owner_agent_id", "namespace"]);
+    let fields_override = args.fields.as_deref().map(parse_fields);
+    print_list(&val, &args.output, &["id", "name", "resource_type", "status", "owner_agent_id", "namespace"], fields_override.as_deref());
     Ok(())
 }
 

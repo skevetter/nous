@@ -9,13 +9,53 @@ pub enum OutputFormat {
     Csv,
 }
 
-pub fn print_list(values: &Value, format: &OutputFormat, columns: &[&str]) {
+/// Parse a comma-separated fields string into a Vec of owned strings.
+pub fn parse_fields(fields: &str) -> Vec<String> {
+    fields.split(',').map(|f| f.trim().to_owned()).filter(|f| !f.is_empty()).collect()
+}
+
+/// Print a list value in the given format.
+///
+/// `fields_override` — if Some, use those column names; otherwise use `default_columns`.
+pub fn print_list(values: &Value, format: &OutputFormat, default_columns: &[&str], fields_override: Option<&[String]>) {
+    let owned: Vec<String>;
+    let columns: Vec<&str> = if let Some(f) = fields_override {
+        f.iter().map(String::as_str).collect()
+    } else {
+        owned = default_columns.iter().map(|s| s.to_string()).collect();
+        owned.iter().map(String::as_str).collect()
+    };
+
     match format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(values).unwrap_or_default());
-        }
-        OutputFormat::Table => print_table(values, columns),
-        OutputFormat::Csv => print_csv(values, columns),
+        OutputFormat::Json => print_json(values, &columns),
+        OutputFormat::Table => print_table(values, &columns),
+        OutputFormat::Csv => print_csv(values, &columns),
+    }
+}
+
+fn print_json(values: &Value, columns: &[&str]) {
+    // When columns cover all fields we just pretty-print as-is.
+    // When a fields filter is active we project each object to only the requested keys.
+    let projected = project(values, columns);
+    println!("{}", serde_json::to_string_pretty(&projected).unwrap_or_default());
+}
+
+fn project(values: &Value, columns: &[&str]) -> Value {
+    match values {
+        Value::Array(rows) => Value::Array(rows.iter().map(|r| project_row(r, columns)).collect()),
+        other => other.clone(),
+    }
+}
+
+fn project_row(row: &Value, columns: &[&str]) -> Value {
+    if let Value::Object(map) = row {
+        let projected: serde_json::Map<String, Value> = columns
+            .iter()
+            .filter_map(|c| map.get(*c).map(|v| (c.to_string(), v.clone())))
+            .collect();
+        Value::Object(projected)
+    } else {
+        row.clone()
     }
 }
 

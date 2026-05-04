@@ -4,7 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::schedules::{self, SystemClock};
 
-use super::output::{OutputFormat, print_list};
+use super::output::{OutputFormat, parse_fields, print_list};
 
 #[derive(Subcommand)]
 pub enum ScheduleCommands {
@@ -43,6 +43,9 @@ pub enum ScheduleCommands {
         /// Output format: json (default), table, csv
         #[arg(short, long, default_value = "json")]
         output: OutputFormat,
+        /// Comma-separated fields to include (e.g. id,name,enabled)
+        #[arg(long)]
+        fields: Option<String>,
     },
     /// Get schedule details
     Get {
@@ -160,8 +163,8 @@ async fn dispatch(
             )
             .await?;
         }
-        ScheduleCommands::List { enabled, action, limit, output } => {
-            cmd_list(pool, ListArgs { enabled, action, limit, output }).await?;
+        ScheduleCommands::List { enabled, action, limit, output, fields } => {
+            cmd_list(pool, ListArgs { enabled, action, limit, output, fields }).await?;
         }
         ScheduleCommands::Get { id } => {
             let schedule = schedules::get_schedule(pool, &id).await?;
@@ -260,6 +263,7 @@ struct ListArgs {
     action: Option<String>,
     limit: u32,
     output: OutputFormat,
+    fields: Option<String>,
 }
 
 async fn cmd_list(
@@ -270,10 +274,12 @@ async fn cmd_list(
         schedules::list_schedules(pool, args.enabled, args.action.as_deref(), Some(args.limit))
             .await?;
     let val = serde_json::to_value(&list)?;
+    let fields_override = args.fields.as_deref().map(parse_fields);
     print_list(
         &val,
         &args.output,
         &["id", "name", "cron_expr", "action_type", "enabled", "next_run_at"],
+        fields_override.as_deref(),
     );
     Ok(())
 }
