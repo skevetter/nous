@@ -257,6 +257,8 @@ mod tests {
                 allowed_paths: None,
                 network_access: NetworkPolicy::Unrestricted,
                 max_output_bytes: 1_048_576,
+                shell: None,
+                network: None,
             },
             services: None,
         }

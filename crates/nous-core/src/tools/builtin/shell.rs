@@ -24,6 +24,41 @@ fn bg_processes() -> &'static RwLock<HashMap<u64, BackgroundProcess>> {
     BACKGROUND_PROCESSES.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+fn check_shell_permission(command: &str, ctx: &ToolContext) -> Result<(), ToolError> {
+    let shell_perm = ctx.permissions.shell.as_ref().ok_or_else(|| {
+        ToolError::PermissionDenied("shell execution denied: no shell permissions configured".into())
+    })?;
+
+    if shell_perm.allow_arbitrary {
+        return Ok(());
+    }
+
+    let base_command = command.split_whitespace().next().unwrap_or("");
+
+    if shell_perm
+        .denied_commands
+        .iter()
+        .any(|d| d == base_command)
+    {
+        return Err(ToolError::PermissionDenied(format!(
+            "shell command denied: '{base_command}' is in the denied list"
+        )));
+    }
+
+    if shell_perm.allowed_commands.is_empty()
+        || !shell_perm
+            .allowed_commands
+            .iter()
+            .any(|a| a == base_command)
+    {
+        return Err(ToolError::PermissionDenied(format!(
+            "shell command denied: '{base_command}' is not in the allowed list"
+        )));
+    }
+
+    Ok(())
+}
+
 // --- ShellExecTool ---
 
 #[derive(Default)]
@@ -83,6 +118,8 @@ impl AgentTool for ShellExecTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'command' required".into()))?;
+
+        check_shell_permission(command, ctx)?;
 
         let cwd = args
             .get("cwd")
@@ -184,6 +221,8 @@ impl AgentTool for ShellExecBackgroundTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'command' required".into()))?;
+
+        check_shell_permission(command, ctx)?;
 
         let cwd = args
             .get("cwd")
@@ -407,6 +446,12 @@ mod tests {
                 allowed_paths: None,
                 network_access: NetworkPolicy::None,
                 max_output_bytes: 1_048_576,
+                shell: Some(ShellPermission {
+                    allowed_commands: vec![],
+                    denied_commands: vec![],
+                    allow_arbitrary: true,
+                }),
+                network: None,
             },
             services: None,
         }
@@ -453,5 +498,92 @@ mod tests {
         kill.call(json!({"handle": handle}), &test_ctx())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_denied_by_default_no_permissions() {
+        let ctx = ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::None,
+                max_output_bytes: 1_048_576,
+                shell: None,
+                network: None,
+            },
+            services: None,
+        };
+        let tool = ShellExecTool::new();
+        let result = tool.call(json!({"command": "echo hello"}), &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+    }
+
+    #[tokio::test]
+    async fn shell_allowed_with_matching_permission() {
+        let ctx = ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::None,
+                max_output_bytes: 1_048_576,
+                shell: Some(ShellPermission {
+                    allowed_commands: vec!["echo".into()],
+                    denied_commands: vec![],
+                    allow_arbitrary: false,
+                }),
+                network: None,
+            },
+            services: None,
+        };
+        let tool = ShellExecTool::new();
+        let result = tool.call(json!({"command": "echo hello"}), &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn shell_denied_command_rejected() {
+        let ctx = ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::None,
+                max_output_bytes: 1_048_576,
+                shell: Some(ShellPermission {
+                    allowed_commands: vec!["echo".into(), "rm".into()],
+                    denied_commands: vec!["rm".into()],
+                    allow_arbitrary: false,
+                }),
+                network: None,
+            },
+            services: None,
+        };
+        let tool = ShellExecTool::new();
+        let result = tool.call(json!({"command": "rm -rf /tmp/test"}), &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
     }
 }

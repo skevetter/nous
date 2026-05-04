@@ -8,6 +8,34 @@ use crate::tools::{
     ToolContext, ToolError, ToolMetadata, ToolOutput, ToolPermissions,
 };
 
+fn check_network_permission(url: &str, ctx: &ToolContext) -> Result<(), ToolError> {
+    let net_perm = ctx.permissions.network.as_ref().ok_or_else(|| {
+        ToolError::PermissionDenied(
+            "network access denied: no network permissions configured".into(),
+        )
+    })?;
+
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| ToolError::InvalidArgs(format!("invalid URL: {e}")))?;
+    let host = parsed.host_str().unwrap_or("");
+
+    if net_perm.denied_hosts.iter().any(|d| d == host) {
+        return Err(ToolError::PermissionDenied(format!(
+            "network access denied: host '{host}' is in the denied list"
+        )));
+    }
+
+    if !net_perm.allowed_hosts.is_empty()
+        && !net_perm.allowed_hosts.iter().any(|a| a == host || a == "*")
+    {
+        return Err(ToolError::PermissionDenied(format!(
+            "network access denied: host '{host}' is not in the allowed list"
+        )));
+    }
+
+    Ok(())
+}
+
 // --- HttpRequestTool ---
 
 #[derive(Default)]
@@ -62,12 +90,13 @@ impl AgentTool for HttpRequestTool {
         self.init_meta()
     }
 
-    async fn call(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'url' required".into()))?;
 
+        check_network_permission(url, ctx)?;
         validate_url(url).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
         let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
@@ -182,12 +211,13 @@ impl AgentTool for HttpFetchTool {
         self.init_meta()
     }
 
-    async fn call(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("'url' required".into()))?;
 
+        check_network_permission(url, ctx)?;
         validate_url(url).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
         let max_bytes = args
@@ -235,7 +265,31 @@ impl AgentTool for HttpFetchTool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::tools::{NetworkPolicy, ResolvedPermissions, ToolContext};
+
+    fn test_ctx_no_network() -> ToolContext {
+        ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::None,
+                max_output_bytes: 1_048_576,
+                shell: None,
+                network: None,
+            },
+            services: None,
+        }
+    }
 
     #[test]
     fn http_request_tool_metadata() {
@@ -252,5 +306,83 @@ mod tests {
         let meta = tool.metadata();
         assert_eq!(meta.name, "http_fetch");
         assert_eq!(meta.category, ToolCategory::Http);
+    }
+
+    #[tokio::test]
+    async fn http_denied_by_default_no_permissions() {
+        let ctx = test_ctx_no_network();
+        let tool = HttpRequestTool::new();
+        let result = tool
+            .call(json!({"url": "https://example.com"}), &ctx)
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+    }
+
+    #[tokio::test]
+    async fn http_allowed_with_matching_host() {
+        let ctx = ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::Unrestricted,
+                max_output_bytes: 1_048_576,
+                shell: None,
+                network: Some(NetworkPermission {
+                    allowed_hosts: vec!["example.com".into()],
+                    denied_hosts: vec![],
+                    max_request_size_bytes: None,
+                }),
+            },
+            services: None,
+        };
+        let tool = HttpRequestTool::new();
+        let result = tool
+            .call(json!({"url": "https://example.com/path"}), &ctx)
+            .await;
+        // Permission check passes (request may fail due to network, but that's OK)
+        // We verify the permission check itself doesn't block it
+        assert!(!matches!(result, Err(ToolError::PermissionDenied(_))));
+    }
+
+    #[tokio::test]
+    async fn http_denied_host_rejected() {
+        let ctx = ToolContext {
+            agent_id: "test-agent".into(),
+            agent_name: "test".into(),
+            namespace: "test".into(),
+            workspace_dir: None,
+            session_id: None,
+            timeout: Duration::from_secs(30),
+            permissions: ResolvedPermissions {
+                allowed_tools: None,
+                denied_tools: None,
+                allowed_paths: None,
+                network_access: NetworkPolicy::Unrestricted,
+                max_output_bytes: 1_048_576,
+                shell: None,
+                network: Some(NetworkPermission {
+                    allowed_hosts: vec!["*".into()],
+                    denied_hosts: vec!["evil.com".into()],
+                    max_request_size_bytes: None,
+                }),
+            },
+            services: None,
+        };
+        let tool = HttpRequestTool::new();
+        let result = tool
+            .call(json!({"url": "https://evil.com/steal"}), &ctx)
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
     }
 }

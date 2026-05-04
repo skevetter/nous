@@ -200,6 +200,8 @@ pub struct ResolvedPermissions {
     pub allowed_paths: Option<Vec<PathBuf>>,
     pub network_access: NetworkPolicy,
     pub max_output_bytes: usize,
+    pub shell: Option<ShellPermission>,
+    pub network: Option<NetworkPermission>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
