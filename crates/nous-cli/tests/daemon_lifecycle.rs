@@ -1,3 +1,9 @@
+// These tests exercise the real daemon binary via subprocess calls. They are
+// marked #[ignore] because they require: (1) a compiled `nous` binary on PATH
+// or at CARGO_BIN_EXE_nous, and (2) the NOUS_TEST_DAEMON env var set to opt-in.
+// They cannot be converted to mock-based tests because they specifically verify
+// OS-level process management (PID files, SIGTERM, daemon background fork).
+// Run with: cargo test --test daemon_lifecycle -- --ignored
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

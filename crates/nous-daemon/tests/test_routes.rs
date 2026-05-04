@@ -1248,3 +1248,414 @@ async fn schedule_full_lifecycle() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// =============================================================================
+// Unicode / Special Character / Boundary Tests
+// =============================================================================
+
+#[tokio::test]
+async fn room_name_with_emoji_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "🚀 launch-room 🎉", "purpose": "emoji test" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "🚀 launch-room 🎉");
+
+    let room_id = body["data"]["id"].as_str().unwrap().to_string();
+    let get_response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/rooms/{room_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let get_body: Value = json_body(get_response).await;
+    assert_eq!(get_body["data"]["name"], "🚀 launch-room 🎉");
+}
+
+#[tokio::test]
+async fn room_name_with_cjk_characters_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "日本語ルーム", "purpose": "CJK test" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "日本語ルーム");
+}
+
+#[tokio::test]
+async fn room_name_with_rtl_characters_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "غرفة المشروع", "purpose": "RTL Arabic test" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "غرفة المشروع");
+}
+
+#[tokio::test]
+async fn message_content_with_emoji_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let room = nous_core::rooms::create_room(&state.pool, "emoji-msg-room", None, None)
+        .await
+        .unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/rooms/{}/messages", room.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "sender_id": "agent-1",
+                        "content": "Hello 👋 World 🌍 — done ✅"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["content"], "Hello 👋 World 🌍 — done ✅");
+}
+
+#[tokio::test]
+async fn message_content_with_mixed_unicode_scripts_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let room = nous_core::rooms::create_room(&state.pool, "mixed-unicode-room", None, None)
+        .await
+        .unwrap();
+
+    let mixed = "Привет мир • مرحبا • 你好 • こんにちは";
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/rooms/{}/messages", room.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "sender_id": "agent-1", "content": mixed }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["content"], mixed);
+}
+
+#[tokio::test]
+async fn agent_name_with_unicode_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "助理-🤖-agent".into(),
+            agent_type: None,
+            parent_id: None,
+            namespace: Some("unicode-ns".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{}", agent.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "助理-🤖-agent");
+}
+
+#[tokio::test]
+async fn memory_with_unicode_content_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/memories")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "决策：使用 Rust 🦀",
+                        "content": "我们决定使用 Rust。理由：性能 + 安全性 ✔️",
+                        "type": "decision",
+                        "importance": "high",
+                        "topic_key": "architecture"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["title"], "决策：使用 Rust 🦀");
+    assert_eq!(
+        body["data"]["content"],
+        "我们决定使用 Rust。理由：性能 + 安全性 ✔️"
+    );
+}
+
+#[tokio::test]
+async fn room_name_with_special_punctuation_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let name = r#"test/room & "special" <chars>"#;
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "name": name }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], name);
+}
+
+#[tokio::test]
+async fn message_with_newline_and_tab_boundary_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let room = nous_core::rooms::create_room(&state.pool, "whitespace-room", None, None)
+        .await
+        .unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/rooms/{}/messages", room.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "sender_id": "agent-1", "content": "line1\nline2\ttabbed" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["content"], "line1\nline2\ttabbed");
+}
+
+#[tokio::test]
+async fn room_name_with_zero_width_characters_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    // Zero-width joiner (U+200D) and zero-width non-joiner (U+200C)
+    let name = "room\u{200D}zwj\u{200C}zwnj";
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "name": name }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], name);
+}
+
+#[tokio::test]
+async fn schedule_name_with_unicode_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/schedules")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "スケジュール-🕐",
+                        "cron_expr": "0 * * * *",
+                        "action_type": "mcp_tool",
+                        "action_payload": "{\"tool\": \"health\"}"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["name"], "スケジュール-🕐");
+}
+
+#[tokio::test]
+async fn agent_namespace_with_unicode_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let agent = nous_core::agents::register_agent(
+        &state.pool,
+        nous_core::agents::RegisterAgentRequest {
+            name: "unicode-ns-agent".into(),
+            agent_type: None,
+            parent_id: None,
+            namespace: Some("团队/alpha 🌐".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{}", agent.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["namespace"], "团队/alpha 🌐");
+}
+
+#[tokio::test]
+async fn memory_search_with_accented_query_succeeds() {
+    let (state, _tmp) = test_state().await;
+
+    nous_core::memory::save_memory(
+        &state.pool,
+        nous_core::memory::SaveMemoryRequest {
+            workspace_id: None,
+            agent_id: None,
+            title: "Rust memory".into(),
+            content: "arquitectura Rust backend".into(),
+            memory_type: nous_core::memory::MemoryType::Decision,
+            importance: None,
+            topic_key: None,
+            valid_from: None,
+            valid_until: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri("/memories/search?q=arquitectura")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn room_purpose_with_rtl_and_emoji_roundtrips() {
+    let (state, _tmp) = test_state().await;
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/rooms")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "rtl-emoji-room",
+                        "purpose": "هدف المشروع 🎯 — رائع"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: Value = json_body(response).await;
+    assert_eq!(body["data"]["purpose"], "هدف المشروع 🎯 — رائع");
+}
