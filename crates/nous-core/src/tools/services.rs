@@ -39,6 +39,10 @@ fn map_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed(e.to_string())
 }
 
+fn to_json<T: serde::Serialize>(v: T) -> Result<serde_json::Value, ToolError> {
+    serde_json::to_value(v).map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+}
+
 #[async_trait::async_trait]
 impl ToolServices for DaemonToolServices {
     async fn save_memory(&self, params: super::SaveMemoryParams) -> Result<Value, ToolError> {
@@ -63,7 +67,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(mem).unwrap())
+        to_json(mem)
     }
 
     async fn search_memories(
@@ -107,7 +111,7 @@ impl ToolServices for DaemonToolServices {
         {
             tracing::debug!(error = %e, "failed to record fts search analytics");
         }
-        Ok(serde_json::to_value(results).unwrap())
+        to_json(results)
     }
 
     async fn search_memories_hybrid(
@@ -153,7 +157,7 @@ impl ToolServices for DaemonToolServices {
             {
                 tracing::debug!(error = %e, "failed to record hybrid search analytics");
             }
-            Ok(serde_json::to_value(results).unwrap())
+            to_json(results)
         } else {
             let fts_results = memory::search_memories(
                 &self.pool,
@@ -205,7 +209,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(results).unwrap())
+        to_json(results)
     }
 
     async fn relate_memories(
@@ -227,7 +231,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(rel).unwrap())
+        to_json(rel)
     }
 
     async fn update_memory(
@@ -255,7 +259,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(mem).unwrap())
+        to_json(mem)
     }
 
     async fn post_to_room(&self, params: super::PostToRoomParams) -> Result<Value, ToolError> {
@@ -277,7 +281,7 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(msg).unwrap())
+        to_json(msg)
     }
 
     async fn read_room(&self, room: String, limit: Option<u32>) -> Result<Value, ToolError> {
@@ -295,14 +299,14 @@ impl ToolServices for DaemonToolServices {
         )
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(messages).unwrap())
+        to_json(messages)
     }
 
     async fn create_room(&self, name: String, purpose: Option<String>) -> Result<Value, ToolError> {
         let room = rooms::create_room(&self.pool, &name, purpose.as_deref(), None)
             .await
             .map_err(map_err)?;
-        Ok(serde_json::to_value(room).unwrap())
+        to_json(room)
     }
 
     async fn wait_for_message(&self, room: String, timeout_secs: u64) -> Result<Value, ToolError> {
@@ -346,7 +350,7 @@ impl ToolServices for DaemonToolServices {
             if let Some(msg) = messages.into_iter().next() {
                 // Update baseline so subsequent iterations won't re-return this message
                 let _ = last_created_at.insert(msg.created_at.clone());
-                return Ok(serde_json::to_value(&msg).unwrap());
+                return to_json(&msg);
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -369,7 +373,7 @@ impl ToolServices for DaemonToolServices {
         })
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(task).unwrap())
+        to_json(task)
     }
 
     async fn update_task(
@@ -391,7 +395,7 @@ impl ToolServices for DaemonToolServices {
         })
         .await
         .map_err(map_err)?;
-        Ok(serde_json::to_value(task).unwrap())
+        to_json(task)
     }
 }
 

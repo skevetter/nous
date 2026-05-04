@@ -6,7 +6,7 @@ use nous_core::worktrees;
 
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     let mut all = worktree_schemas();
@@ -437,7 +437,7 @@ async fn handle_worktree_create(
         },
     )
     .await?;
-    Ok(serde_json::to_value(wt).unwrap())
+    to_json(wt)
 }
 
 async fn handle_worktree_list(
@@ -470,7 +470,7 @@ async fn handle_worktree_list(
         },
     )
     .await?;
-    Ok(serde_json::to_value(wts).unwrap())
+    to_json(wts)
 }
 
 async fn handle_worktree_get(
@@ -479,7 +479,7 @@ async fn handle_worktree_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let wt = worktrees::get(&state.pool, id).await?;
-    Ok(serde_json::to_value(wt).unwrap())
+    to_json(wt)
 }
 
 async fn handle_worktree_archive(
@@ -488,7 +488,7 @@ async fn handle_worktree_archive(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let wt = worktrees::archive(&state.pool, id).await?;
-    Ok(serde_json::to_value(wt).unwrap())
+    to_json(wt)
 }
 
 async fn handle_worktree_delete(
@@ -544,7 +544,7 @@ async fn handle_resource_register(
         },
     )
     .await?;
-    Ok(serde_json::to_value(resource).unwrap())
+    to_json(resource)
 }
 
 async fn handle_resource_list(
@@ -590,7 +590,7 @@ async fn handle_resource_list(
         },
     )
     .await?;
-    Ok(serde_json::to_value(items).unwrap())
+    to_json(items)
 }
 
 async fn handle_resource_get(
@@ -599,7 +599,7 @@ async fn handle_resource_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let resource = resources::get_resource_by_id(&state.pool, id).await?;
-    Ok(serde_json::to_value(resource).unwrap())
+    to_json(resource)
 }
 
 async fn handle_resource_update(
@@ -641,7 +641,7 @@ async fn handle_resource_update(
         },
     )
     .await?;
-    Ok(serde_json::to_value(resource).unwrap())
+    to_json(resource)
 }
 
 async fn handle_resource_search(
@@ -683,7 +683,7 @@ async fn handle_resource_search(
         },
     )
     .await?;
-    Ok(serde_json::to_value(items).unwrap())
+    to_json(items)
 }
 
 async fn handle_resource_archive(
@@ -692,7 +692,7 @@ async fn handle_resource_archive(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let resource = resources::archive_resource(&state.pool, id).await?;
-    Ok(serde_json::to_value(resource).unwrap())
+    to_json(resource)
 }
 
 async fn handle_resource_deregister(
@@ -711,7 +711,7 @@ async fn handle_resource_heartbeat(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let resource = resources::heartbeat_resource(&state.pool, id).await?;
-    Ok(serde_json::to_value(resource).unwrap())
+    to_json(resource)
 }
 
 async fn handle_resource_transfer(
@@ -764,7 +764,7 @@ async fn handle_schedule_create(
         clock: &clock,
     })
     .await?;
-    Ok(serde_json::to_value(schedule).unwrap())
+    to_json(schedule)
 }
 
 async fn handle_schedule_get(
@@ -773,7 +773,7 @@ async fn handle_schedule_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let schedule = schedules::get_schedule(&state.pool, id).await?;
-    Ok(serde_json::to_value(schedule).unwrap())
+    to_json(schedule)
 }
 
 async fn handle_schedule_list(
@@ -784,7 +784,7 @@ async fn handle_schedule_list(
     let action_type = args.get("action_type").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let list = schedules::list_schedules(&state.pool, enabled, action_type, limit).await?;
-    Ok(serde_json::to_value(list).unwrap())
+    to_json(list)
 }
 
 async fn handle_schedule_update(
@@ -837,7 +837,7 @@ async fn handle_schedule_update(
         clock: &clock,
     })
     .await?;
-    Ok(serde_json::to_value(schedule).unwrap())
+    to_json(schedule)
 }
 
 async fn handle_schedule_delete(
@@ -857,7 +857,7 @@ async fn handle_schedule_runs_list(
     let status = args.get("status").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let runs = schedules::list_runs(&state.pool, schedule_id, status, limit).await?;
-    Ok(serde_json::to_value(runs).unwrap())
+    to_json(runs)
 }
 
 async fn handle_schedule_health(

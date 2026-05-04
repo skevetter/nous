@@ -1,4 +1,3 @@
-pub mod agent_memory;
 pub mod auth;
 pub mod embedding;
 pub mod error;

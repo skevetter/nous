@@ -4,7 +4,7 @@ use nous_core::tasks;
 
 use crate::state::AppState;
 
-use super::{require_str, ToolSchema};
+use super::{require_str, to_json, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
     let mut all = task_crud_schemas();
@@ -413,7 +413,7 @@ async fn handle_task_create(
         registry: None,
     })
     .await?;
-    Ok(serde_json::to_value(task).unwrap())
+    to_json(task)
 }
 
 async fn handle_task_list(
@@ -439,7 +439,7 @@ async fn handle_task_list(
         order_dir: None,
     })
     .await?;
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
 
 async fn handle_task_get(
@@ -448,7 +448,7 @@ async fn handle_task_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let task = tasks::get_task(&state.pool, id).await?;
-    Ok(serde_json::to_value(task).unwrap())
+    to_json(task)
 }
 
 async fn handle_task_update(
@@ -472,7 +472,7 @@ async fn handle_task_update(
         registry: None,
     })
     .await?;
-    Ok(serde_json::to_value(task).unwrap())
+    to_json(task)
 }
 
 async fn handle_task_close(
@@ -481,7 +481,7 @@ async fn handle_task_close(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let task = tasks::close_task(&state.pool, id, None).await?;
-    Ok(serde_json::to_value(task).unwrap())
+    to_json(task)
 }
 
 async fn handle_task_link(
@@ -499,7 +499,7 @@ async fn handle_task_link(
         actor_id: None,
     })
     .await?;
-    Ok(serde_json::to_value(link).unwrap())
+    to_json(link)
 }
 
 async fn handle_task_unlink(
@@ -526,7 +526,7 @@ async fn handle_task_list_links(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let links = tasks::list_links(&state.pool, id).await?;
-    Ok(serde_json::to_value(links).unwrap())
+    to_json(links)
 }
 
 async fn handle_task_add_note(
@@ -548,7 +548,7 @@ async fn handle_task_depends_add(
     let depends_on_task_id = require_str(args, "depends_on_task_id")?;
     let dep_type = args.get("dep_type").and_then(|v| v.as_str());
     let dep = tasks::add_dependency(&state.pool, task_id, depends_on_task_id, dep_type).await?;
-    Ok(serde_json::to_value(dep).unwrap())
+    to_json(dep)
 }
 
 async fn handle_task_depends_remove(
@@ -568,7 +568,7 @@ async fn handle_task_depends_list(
 ) -> Result<Value, nous_core::error::NousError> {
     let task_id = require_str(args, "task_id")?;
     let deps = tasks::list_dependencies(&state.pool, task_id).await?;
-    Ok(serde_json::to_value(deps).unwrap())
+    to_json(deps)
 }
 
 async fn handle_task_template_create(
@@ -603,7 +603,7 @@ async fn handle_task_template_create(
         checklist: checklist.as_deref(),
     })
     .await?;
-    Ok(serde_json::to_value(tmpl).unwrap())
+    to_json(tmpl)
 }
 
 async fn handle_task_template_list(
@@ -612,7 +612,7 @@ async fn handle_task_template_list(
 ) -> Result<Value, nous_core::error::NousError> {
     let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let templates = tasks::list_templates(&state.pool, limit).await?;
-    Ok(serde_json::to_value(templates).unwrap())
+    to_json(templates)
 }
 
 async fn handle_task_template_get(
@@ -621,7 +621,7 @@ async fn handle_task_template_get(
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
     let tmpl = tasks::get_template(&state.pool, id).await?;
-    Ok(serde_json::to_value(tmpl).unwrap())
+    to_json(tmpl)
 }
 
 async fn handle_task_template_use(
@@ -654,7 +654,7 @@ async fn handle_task_template_use(
         overrides_labels: labels.as_deref(),
     })
     .await?;
-    Ok(serde_json::to_value(task).unwrap())
+    to_json(task)
 }
 
 async fn handle_task_batch_close(
@@ -671,7 +671,7 @@ async fn handle_task_batch_close(
         })
         .unwrap_or_default();
     let result = tasks::batch_close(&state.pool, &task_ids).await?;
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
 
 async fn handle_task_batch_update_status(
@@ -689,7 +689,7 @@ async fn handle_task_batch_update_status(
         .unwrap_or_default();
     let status = require_str(args, "status")?;
     let result = tasks::batch_update_status(&state.pool, &task_ids, status).await?;
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
 
 async fn handle_task_batch_assign(
@@ -707,7 +707,7 @@ async fn handle_task_batch_assign(
         .unwrap_or_default();
     let assignee_id = require_str(args, "assignee_id")?;
     let result = tasks::batch_assign(&state.pool, &task_ids, assignee_id).await?;
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
 
 async fn handle_task_command(
@@ -730,5 +730,5 @@ async fn handle_task_command(
     };
 
     let result = tasks::execute_task_command(&state.pool, cmd, Some(&state.registry)).await?;
-    Ok(serde_json::to_value(result).unwrap())
+    to_json(result)
 }
