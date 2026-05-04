@@ -327,28 +327,46 @@ impl ToolServices for DaemonToolServices {
         let room_obj = rooms::get_room(&self.pool, &room)
             .await
             .map_err(map_err)?;
+
+        // Get the current latest message's created_at as the baseline so we only
+        // return messages that arrive AFTER this call begins.
+        let existing = messages::read_messages(
+            &self.pool,
+            ReadMessagesRequest {
+                room_id: room_obj.id.clone(),
+                since: None,
+                before: None,
+                limit: Some(200),
+            },
+        )
+        .await
+        .map_err(map_err)?;
+        let mut last_created_at = existing.last().map(|m| m.created_at.clone());
+
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let last_id: Option<String> = None;
         loop {
+            if std::time::Instant::now() >= deadline {
+                return Ok(serde_json::json!({"timeout": true, "message": null}));
+            }
+
             let messages = messages::read_messages(
                 &self.pool,
                 ReadMessagesRequest {
                     room_id: room_obj.id.clone(),
-                    since: last_id.clone(),
+                    since: last_created_at.clone(),
                     before: None,
                     limit: Some(1),
                 },
             )
             .await
             .map_err(map_err)?;
-            if let Some(msg) = messages.into_iter().last() {
-                return Ok(serde_json::to_value(msg).unwrap());
+
+            if let Some(msg) = messages.into_iter().next() {
+                // Update baseline so subsequent iterations won't re-return this message
+                let _ = last_created_at.insert(msg.created_at.clone());
+                return Ok(serde_json::to_value(&msg).unwrap());
             }
-            if std::time::Instant::now() >= deadline {
-                return Err(ToolError::Timeout(std::time::Duration::from_secs(
-                    timeout_secs,
-                )));
-            }
+
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     }
