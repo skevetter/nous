@@ -648,7 +648,7 @@ fn truncate_output(output: &str, max_bytes: usize) -> String {
 fn output_matches_pattern(output: &str, pattern: &str) -> bool {
     if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
         let re_pattern = &pattern[1..pattern.len() - 1];
-        match regex::Regex::new(re_pattern) {
+        match regex::RegexBuilder::new(re_pattern).size_limit(10 * 1024).build() {
             Ok(re) => re.is_match(output),
             Err(_) => output.contains(pattern),
         }
