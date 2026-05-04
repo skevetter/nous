@@ -4,6 +4,7 @@ pub mod db;
 pub mod embed;
 pub mod entities;
 pub mod error;
+pub mod fts;
 pub mod memory;
 pub mod messages;
 pub mod notifications;

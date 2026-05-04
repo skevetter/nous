@@ -15,6 +15,7 @@ use crate::entities::agent_templates as tmpl_entity;
 use crate::entities::agent_versions as ver_entity;
 use crate::entities::agents as agent_entity;
 use crate::error::NousError;
+use crate::fts::sanitize_fts5_query;
 use crate::notifications::subscribe_to_room;
 use crate::rooms;
 
@@ -547,6 +548,7 @@ pub async fn search_agents(
     }
 
     let limit = limit.unwrap_or(20).min(100);
+    let sanitized = sanitize_fts5_query(query);
 
     let rows = if let Some(ns) = namespace {
         db.query_all(Statement::from_sql_and_values(
@@ -555,7 +557,7 @@ pub async fn search_agents(
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? AND a.namespace = ? \
              LIMIT ?",
-            [query.into(), ns.into(), (limit as i32).into()],
+            [sanitized.clone().into(), ns.into(), (limit as i32).into()],
         ))
         .await?
     } else {
@@ -565,7 +567,7 @@ pub async fn search_agents(
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? \
              LIMIT ?",
-            [query.into(), (limit as i32).into()],
+            [sanitized.into(), (limit as i32).into()],
         ))
         .await?
     };
