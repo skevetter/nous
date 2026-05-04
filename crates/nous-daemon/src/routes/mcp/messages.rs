@@ -14,6 +14,12 @@ use crate::state::AppState;
 use super::{require_str, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
+    let mut all = room_messaging_schemas();
+    all.extend(room_subscription_schemas());
+    all
+}
+
+fn room_messaging_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {
             name: "room_post_message",
@@ -72,6 +78,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["room_id"]
             }),
         },
+    ]
+}
+
+fn room_subscription_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "room_subscribe",
             description: "Subscribe an agent to a room's notifications",
@@ -155,11 +166,32 @@ pub async fn dispatch(
     args: &Value,
     state: &AppState,
 ) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_messaging(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_subscriptions(name, args, state).await
+}
+
+async fn dispatch_messaging(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
     match name {
         "room_post_message" => Some(handle_post_message(args, state).await),
         "room_read_messages" => Some(handle_read_messages(args, state).await),
         "room_search" => Some(handle_search(args, state).await),
         "room_wait" => Some(handle_wait(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_subscriptions(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "room_subscribe" => Some(handle_subscribe(args, state).await),
         "room_unsubscribe" => Some(handle_unsubscribe(args, state).await),
         "room_mentions" => Some(handle_mentions(args, state).await),
@@ -264,14 +296,14 @@ async fn handle_wait(
         });
     let agent_id = args.get("agent_id").and_then(|v| v.as_str());
     let result = if let Some(aid) = agent_id {
-        room_wait_persistent(
-            &state.pool,
-            &state.registry,
+        room_wait_persistent(nous_core::notifications::RoomWaitPersistentParams {
+            db: &state.pool,
+            registry: &state.registry,
             room_id,
-            aid,
+            agent_id: aid,
             timeout_ms,
-            topics.as_deref(),
-        )
+            topics: topics.as_deref(),
+        })
         .await?
     } else {
         room_wait(&state.registry, room_id, timeout_ms, topics.as_deref()).await?

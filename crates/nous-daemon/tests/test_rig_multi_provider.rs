@@ -1,9 +1,10 @@
 mod common;
 
-use nous_core::agents::processes;
+use nous_core::agents::processes::{self, UpdateAgentRequest};
 use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::error::NousError;
 use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
+use nous_daemon::process_manager::InvokeParams;
 use nous_daemon::state::AppState;
 use tempfile::TempDir;
 
@@ -30,9 +31,19 @@ async fn register_agent(state: &AppState, name: &str, process_type: Option<&str>
     .unwrap();
 
     if let Some(pt) = process_type {
-        processes::update_agent(&state.pool, &agent.id, Some(pt), None, None, None, None)
-            .await
-            .unwrap();
+        processes::update_agent(
+            &state.pool,
+            UpdateAgentRequest {
+                id: &agent.id,
+                process_type: Some(pt),
+                spawn_command: None,
+                working_dir: None,
+                auto_restart: None,
+                metadata_json: None,
+            },
+        )
+        .await
+        .unwrap();
     }
 
     agent.id
@@ -59,7 +70,14 @@ async fn test_default_model_used_when_no_override() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     assert!(result.is_err());
@@ -81,7 +99,14 @@ async fn test_model_override_from_metadata() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: Some(metadata),
+            is_async: false,
+        })
         .await;
 
     assert!(result.is_err());
@@ -103,7 +128,14 @@ async fn test_preamble_extraction_from_metadata() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: Some(metadata),
+            is_async: false,
+        })
         .await;
 
     assert!(result.is_err());
@@ -123,7 +155,14 @@ async fn test_llm_client_none_returns_config_error() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     let err = result.unwrap_err();
@@ -140,7 +179,14 @@ async fn test_process_type_dispatch_routes_claude() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "test", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "test",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     let err = result.unwrap_err();
@@ -157,7 +203,14 @@ async fn test_process_type_dispatch_routes_shell() {
 
     let invocation = state
         .process_registry
-        .invoke(&state, &agent_id, "echo routed", Some(30), None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "echo routed",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: false,
+        })
         .await
         .unwrap();
 
@@ -176,7 +229,14 @@ async fn test_process_type_dispatch_routes_none_to_shell() {
 
     let invocation = state
         .process_registry
-        .invoke(&state, &agent_id, "echo fallback", Some(30), None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "echo fallback",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: false,
+        })
         .await
         .unwrap();
 
@@ -195,7 +255,14 @@ async fn test_process_type_dispatch_unknown_returns_error() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "test", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "test",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     let err = result.unwrap_err();
@@ -217,14 +284,14 @@ async fn test_metadata_with_both_model_and_preamble() {
 
     let result = state
         .process_registry
-        .invoke(
-            &state,
-            &agent_id,
-            "review this code",
-            None,
-            Some(metadata),
-            false,
-        )
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "review this code",
+            timeout_secs: None,
+            metadata: Some(metadata),
+            is_async: false,
+        })
         .await;
 
     let err = result.unwrap_err();
@@ -248,7 +315,14 @@ async fn test_metadata_with_extra_fields_does_not_break_dispatch() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, Some(metadata), false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: Some(metadata),
+            is_async: false,
+        })
         .await;
 
     let err = result.unwrap_err();

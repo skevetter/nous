@@ -107,6 +107,74 @@ impl CronExpr {
         Ok(set)
     }
 
+    fn parse_step_part(
+        part: &str,
+        range: (u32, u32),
+        result: &mut BTreeSet<u32>,
+        is_wildcard: &mut bool,
+    ) -> Result<(), NousError> {
+        let (min, max) = range;
+        let parts: Vec<&str> = part.splitn(2, '/').collect();
+        let step: u32 = parts[1]
+            .parse()
+            .map_err(|_| NousError::Validation(format!("invalid step value: {}", parts[1])))?;
+        if step == 0 {
+            return Err(NousError::Validation("step value cannot be 0".into()));
+        }
+
+        let (range_start, range_end) = if parts[0] == "*" {
+            *is_wildcard = true;
+            (min, max)
+        } else if parts[0].contains('-') {
+            let range: Vec<&str> = parts[0].splitn(2, '-').collect();
+            let start: u32 = range[0].parse().map_err(|_| {
+                NousError::Validation(format!("invalid range start: {}", range[0]))
+            })?;
+            let end: u32 = range[1].parse().map_err(|_| {
+                NousError::Validation(format!("invalid range end: {}", range[1]))
+            })?;
+            (start, end)
+        } else {
+            let start: u32 = parts[0].parse().map_err(|_| {
+                NousError::Validation(format!("invalid value: {}", parts[0]))
+            })?;
+            (start, max)
+        };
+
+        let mut val = range_start;
+        while val <= range_end {
+            if val >= min && val <= max {
+                result.insert(val);
+            }
+            val += step;
+        }
+        Ok(())
+    }
+
+    fn parse_range_part(
+        part: &str,
+        min: u32,
+        max: u32,
+        result: &mut BTreeSet<u32>,
+    ) -> Result<(), NousError> {
+        let range: Vec<&str> = part.splitn(2, '-').collect();
+        let start: u32 = range[0]
+            .parse()
+            .map_err(|_| NousError::Validation(format!("invalid range start: {}", range[0])))?;
+        let end: u32 = range[1]
+            .parse()
+            .map_err(|_| NousError::Validation(format!("invalid range end: {}", range[1])))?;
+        if start > end {
+            return Err(NousError::Validation(format!("invalid range: {start}-{end}")));
+        }
+        for v in start..=end {
+            if v >= min && v <= max {
+                result.insert(v);
+            }
+        }
+        Ok(())
+    }
+
     fn parse_field_with_wildcard(
         field: &str,
         min: u32,
@@ -117,63 +185,14 @@ impl CronExpr {
 
         for part in field.split(',') {
             if part.contains('/') {
-                let parts: Vec<&str> = part.splitn(2, '/').collect();
-                let step: u32 = parts[1].parse().map_err(|_| {
-                    NousError::Validation(format!("invalid step value: {}", parts[1]))
-                })?;
-                if step == 0 {
-                    return Err(NousError::Validation("step value cannot be 0".into()));
-                }
-
-                let (range_start, range_end) = if parts[0] == "*" {
-                    is_wildcard = true;
-                    (min, max)
-                } else if parts[0].contains('-') {
-                    let range: Vec<&str> = parts[0].splitn(2, '-').collect();
-                    let start: u32 = range[0].parse().map_err(|_| {
-                        NousError::Validation(format!("invalid range start: {}", range[0]))
-                    })?;
-                    let end: u32 = range[1].parse().map_err(|_| {
-                        NousError::Validation(format!("invalid range end: {}", range[1]))
-                    })?;
-                    (start, end)
-                } else {
-                    let start: u32 = parts[0].parse().map_err(|_| {
-                        NousError::Validation(format!("invalid value: {}", parts[0]))
-                    })?;
-                    (start, max)
-                };
-
-                let mut val = range_start;
-                while val <= range_end {
-                    if val >= min && val <= max {
-                        result.insert(val);
-                    }
-                    val += step;
-                }
+                Self::parse_step_part(part, (min, max), &mut result, &mut is_wildcard)?;
             } else if part == "*" {
                 is_wildcard = true;
                 for v in min..=max {
                     result.insert(v);
                 }
             } else if part.contains('-') {
-                let range: Vec<&str> = part.splitn(2, '-').collect();
-                let start: u32 = range[0].parse().map_err(|_| {
-                    NousError::Validation(format!("invalid range start: {}", range[0]))
-                })?;
-                let end: u32 = range[1].parse().map_err(|_| {
-                    NousError::Validation(format!("invalid range end: {}", range[1]))
-                })?;
-                if start > end {
-                    return Err(NousError::Validation(format!(
-                        "invalid range: {start}-{end}"
-                    )));
-                }
-                for v in start..=end {
-                    if v >= min && v <= max {
-                        result.insert(v);
-                    }
-                }
+                Self::parse_range_part(part, min, max, &mut result)?;
             } else {
                 let val: u32 = part
                     .parse()

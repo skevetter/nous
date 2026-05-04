@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Write as _;
 
 use sea_orm::entity::prelude::*;
@@ -16,9 +16,69 @@ use crate::rooms;
 
 use super::events::post_task_event_to_room;
 use super::types::{
-    BatchError, BatchResult, CreateTaskParams, ListTasksParams, PostTaskEventParams, Task,
-    TaskDependency, TaskEvent, TaskLink, TaskLinks, TaskTemplate, UpdateTaskParams,
+    BatchError, BatchResult, CreateFromTemplateParams, CreateTaskParams, CreateTemplateParams,
+    LinkTasksParams, ListTasksParams, PostTaskEventParams, Task, TaskDependency, TaskEvent,
+    TaskLink, TaskLinks, TaskTemplate, UnlinkTasksParams, UpdateTaskParams,
 };
+
+struct ResolveTaskRoomParams<'a> {
+    db: &'a DatabaseConnection,
+    task_id: &'a str,
+    title: &'a str,
+    room_id: Option<&'a str>,
+    create_room: bool,
+}
+
+async fn resolve_task_room(params: ResolveTaskRoomParams<'_>) -> Result<Option<String>, NousError> {
+    let ResolveTaskRoomParams {
+        db,
+        task_id,
+        title,
+        room_id,
+        create_room,
+    } = params;
+    if create_room {
+        let room_name = format!("task-{task_id}");
+        let room = rooms::create_room(
+            db,
+            &room_name,
+            Some(&format!("Discussion for task: {title}")),
+            None,
+        )
+        .await?;
+        Ok(Some(room.id))
+    } else {
+        Ok(room_id.map(String::from))
+    }
+}
+
+struct TaskCreatedEventParams<'a> {
+    db: &'a DatabaseConnection,
+    registry: Option<&'a crate::notifications::NotificationRegistry>,
+    task_id: &'a str,
+    title: &'a str,
+    actor_id: Option<&'a str>,
+    room_id: Option<&'a str>,
+}
+
+async fn post_task_created_event_to_room(params: TaskCreatedEventParams<'_>) {
+    let TaskCreatedEventParams { db, registry, task_id, title, actor_id, room_id } = params;
+    let Some(rid) = room_id else { return };
+    if let Err(e) = post_task_event_to_room(PostTaskEventParams {
+        db,
+        registry,
+        task_id,
+        room_id: rid,
+        event_type: "created",
+        old_value: None,
+        new_value: Some(title),
+        actor_id,
+    })
+    .await
+    {
+        tracing::warn!(task_id = %task_id, error = %e, "failed to post task created event to room");
+    }
+}
 
 pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError> {
     let CreateTaskParams {
@@ -40,19 +100,14 @@ pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError
     let id = Uuid::now_v7().to_string();
     let priority = priority.unwrap_or("medium");
 
-    let effective_room_id = if create_room {
-        let room_name = format!("task-{id}");
-        let room = rooms::create_room(
-            db,
-            &room_name,
-            Some(&format!("Discussion for task: {title}")),
-            None,
-        )
-        .await?;
-        Some(room.id)
-    } else {
-        room_id.map(String::from)
-    };
+    let effective_room_id = resolve_task_room(ResolveTaskRoomParams {
+        db,
+        task_id: &id,
+        title,
+        room_id,
+        create_room,
+    })
+    .await?;
 
     let labels_json = labels.map(|l| serde_json::to_string(l).unwrap_or_else(|_| "[]".to_string()));
 
@@ -84,22 +139,15 @@ pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError
 
     event_entity::Entity::insert(event_model).exec(db).await?;
 
-    if let Some(ref rid) = effective_room_id {
-        if let Err(e) = post_task_event_to_room(PostTaskEventParams {
-            db,
-            registry,
-            task_id: &id,
-            room_id: rid,
-            event_type: "created",
-            old_value: None,
-            new_value: Some(title),
-            actor_id,
-        })
-        .await
-        {
-            tracing::warn!(task_id = %id, error = %e, "failed to post task created event to room");
-        }
-    }
+    post_task_created_event_to_room(TaskCreatedEventParams {
+        db,
+        registry,
+        task_id: &id,
+        title,
+        actor_id,
+        room_id: effective_room_id.as_deref(),
+    })
+    .await;
 
     let model = task_entity::Entity::find_by_id(&id)
         .one(db)
@@ -107,6 +155,27 @@ pub async fn create_task(params: CreateTaskParams<'_>) -> Result<Task, NousError
         .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
 
     Ok(Task::from_model(model))
+}
+
+fn build_order_clause(order_by: Option<&str>, order_dir: Option<&str>) -> String {
+    let dir = match order_dir.unwrap_or("DESC") {
+        d if d.eq_ignore_ascii_case("asc") => "ASC",
+        d if d.eq_ignore_ascii_case("desc") => "DESC",
+        _ => "DESC",
+    };
+    let column = match order_by.unwrap_or("created_at") {
+        col @ ("priority" | "updated_at" | "status" | "title" | "created_at") => col,
+        _ => "created_at",
+    };
+    match column {
+        "priority" => format!(
+            "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END {dir}"
+        ),
+        "updated_at" => format!("updated_at {dir}"),
+        "status" => format!("status {dir}"),
+        "title" => format!("title {dir}"),
+        _ => format!("created_at {dir}"),
+    }
 }
 
 pub async fn list_tasks(params: ListTasksParams<'_>) -> Result<Vec<Task>, NousError> {
@@ -122,28 +191,7 @@ pub async fn list_tasks(params: ListTasksParams<'_>) -> Result<Vec<Task>, NousEr
     } = params;
     let limit = limit.unwrap_or(50).min(200);
     let offset = offset.unwrap_or(0);
-    let order_dir = match order_dir.unwrap_or("DESC") {
-        d if d.eq_ignore_ascii_case("asc") => "ASC",
-        d if d.eq_ignore_ascii_case("desc") => "DESC",
-        _ => "DESC",
-    };
-
-    let order_column = match order_by.unwrap_or("created_at") {
-        "priority" | "updated_at" | "status" | "title" | "created_at" => {
-            order_by.unwrap_or("created_at")
-        }
-        _ => "created_at",
-    };
-
-    let order_clause = match order_column {
-        "priority" => format!(
-            "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END {order_dir}"
-        ),
-        "updated_at" => format!("updated_at {order_dir}"),
-        "status" => format!("status {order_dir}"),
-        "title" => format!("title {order_dir}"),
-        _ => format!("created_at {order_dir}"),
-    };
+    let order_clause = build_order_clause(order_by, order_dir);
 
     let mut sql = String::from("SELECT tasks.* FROM tasks");
     let mut conditions: Vec<String> = Vec::new();
@@ -230,170 +278,198 @@ pub async fn get_task(db: &DatabaseConnection, id: &str) -> Result<Task, NousErr
     Ok(task)
 }
 
-pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError> {
-    let UpdateTaskParams {
-        db,
-        id,
-        status,
-        priority,
-        assignee_id,
-        description,
-        labels,
-        actor_id,
-        registry,
-    } = params;
-    let existing_model = task_entity::Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
+struct ApplyUpdateContext<'a> {
+    db: &'a DatabaseConnection,
+    id: &'a str,
+    existing_room_id: &'a Option<String>,
+    actor_id: Option<&'a str>,
+    registry: Option<&'a crate::notifications::NotificationRegistry>,
+}
 
-    let existing = Task::from_model(existing_model);
+struct InsertTaskEventParams<'a> {
+    db: &'a DatabaseConnection,
+    task_id: &'a str,
+    event_type: &'a str,
+    old_value: Option<&'a str>,
+    new_value: Option<&'a str>,
+    actor_id: Option<&'a str>,
+}
 
-    if let Some(new_status) = status {
-        if new_status != existing.status {
-            let event_model = event_entity::ActiveModel {
-                id: Set(Uuid::now_v7().to_string()),
-                task_id: Set(id.to_string()),
-                event_type: Set("status_changed".to_string()),
-                old_value: Set(Some(existing.status.clone())),
-                new_value: Set(Some(new_status.to_string())),
-                actor_id: Set(actor_id.map(String::from)),
-                created_at: NotSet,
-            };
-            event_entity::Entity::insert(event_model).exec(db).await?;
+async fn insert_task_event(params: InsertTaskEventParams<'_>) -> Result<(), NousError> {
+    let InsertTaskEventParams { db, task_id, event_type, old_value, new_value, actor_id } = params;
+    let event_model = event_entity::ActiveModel {
+        id: Set(Uuid::now_v7().to_string()),
+        task_id: Set(task_id.to_string()),
+        event_type: Set(event_type.to_string()),
+        old_value: Set(old_value.map(String::from)),
+        new_value: Set(new_value.map(String::from)),
+        actor_id: Set(actor_id.map(String::from)),
+        created_at: NotSet,
+    };
+    event_entity::Entity::insert(event_model).exec(db).await?;
+    Ok(())
+}
 
-            db.execute(Statement::from_sql_and_values(
-                sea_orm::DbBackend::Sqlite,
-                "UPDATE tasks SET status = ? WHERE id = ?",
-                [new_status.into(), id.into()],
-            ))
-            .await?;
+async fn try_post_room_event(params: PostTaskEventParams<'_>) {
+    let task_id = params.task_id;
+    let event_type = params.event_type;
+    if let Err(e) = post_task_event_to_room(params).await {
+        tracing::warn!(task_id = %task_id, error = %e, event_type, "failed to post task event to room");
+    }
+}
 
-            if new_status == "closed" {
-                db.execute(Statement::from_sql_and_values(
-                    sea_orm::DbBackend::Sqlite,
-                    "UPDATE tasks SET closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-                    [id.into()],
-                ))
-                .await?;
-            }
+struct RoomEventParams<'a> {
+    ctx: &'a ApplyUpdateContext<'a>,
+    event_type: &'a str,
+    old_value: Option<&'a str>,
+    new_value: Option<&'a str>,
+}
 
-            if let Some(ref rid) = existing.room_id {
-                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
-                    db,
-                    registry,
-                    task_id: id,
-                    room_id: rid,
-                    event_type: "status_changed",
-                    old_value: Some(&existing.status),
-                    new_value: Some(new_status),
-                    actor_id,
-                })
-                .await
-                {
-                    tracing::warn!(task_id = %id, error = %e, "failed to post task status_changed event to room");
-                }
-            }
-        }
+async fn try_post_to_room_if_set(params: RoomEventParams<'_>) {
+    let RoomEventParams { ctx, event_type, old_value, new_value } = params;
+    let Some(rid) = ctx.existing_room_id.as_deref() else { return };
+    try_post_room_event(PostTaskEventParams {
+        db: ctx.db,
+        registry: ctx.registry,
+        task_id: ctx.id,
+        room_id: rid,
+        event_type,
+        old_value,
+        new_value,
+        actor_id: ctx.actor_id,
+    })
+    .await;
+}
+
+async fn apply_status_update(
+    ctx: ApplyUpdateContext<'_>,
+    new_status: &str,
+    existing_status: &str,
+) -> Result<(), NousError> {
+    insert_task_event(InsertTaskEventParams {
+        db: ctx.db,
+        task_id: ctx.id,
+        event_type: "status_changed",
+        old_value: Some(existing_status),
+        new_value: Some(new_status),
+        actor_id: ctx.actor_id,
+    })
+    .await?;
+
+    ctx.db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE tasks SET status = ? WHERE id = ?",
+        [new_status.into(), ctx.id.into()],
+    ))
+    .await?;
+
+    if new_status == "closed" {
+        ctx.db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE tasks SET closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [ctx.id.into()],
+        ))
+        .await?;
     }
 
-    if let Some(new_priority) = priority {
-        if new_priority != existing.priority {
-            let event_model = event_entity::ActiveModel {
-                id: Set(Uuid::now_v7().to_string()),
-                task_id: Set(id.to_string()),
-                event_type: Set("priority_changed".to_string()),
-                old_value: Set(Some(existing.priority.clone())),
-                new_value: Set(Some(new_priority.to_string())),
-                actor_id: Set(actor_id.map(String::from)),
-                created_at: NotSet,
-            };
-            event_entity::Entity::insert(event_model).exec(db).await?;
+    try_post_to_room_if_set(RoomEventParams {
+        ctx: &ctx,
+        event_type: "status_changed",
+        old_value: Some(existing_status),
+        new_value: Some(new_status),
+    }).await;
+    Ok(())
+}
 
-            db.execute(Statement::from_sql_and_values(
-                sea_orm::DbBackend::Sqlite,
-                "UPDATE tasks SET priority = ? WHERE id = ?",
-                [new_priority.into(), id.into()],
-            ))
-            .await?;
+async fn apply_priority_update(
+    ctx: ApplyUpdateContext<'_>,
+    new_priority: &str,
+    existing_priority: &str,
+) -> Result<(), NousError> {
+    insert_task_event(InsertTaskEventParams {
+        db: ctx.db,
+        task_id: ctx.id,
+        event_type: "priority_changed",
+        old_value: Some(existing_priority),
+        new_value: Some(new_priority),
+        actor_id: ctx.actor_id,
+    })
+    .await?;
 
-            if let Some(ref rid) = existing.room_id {
-                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
-                    db,
-                    registry,
-                    task_id: id,
-                    room_id: rid,
-                    event_type: "priority_changed",
-                    old_value: Some(&existing.priority),
-                    new_value: Some(new_priority),
-                    actor_id,
-                })
-                .await
-                {
-                    tracing::warn!(task_id = %id, error = %e, "failed to post task priority_changed event to room");
-                }
-            }
-        }
+    ctx.db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE tasks SET priority = ? WHERE id = ?",
+        [new_priority.into(), ctx.id.into()],
+    ))
+    .await?;
+
+    try_post_to_room_if_set(RoomEventParams {
+        ctx: &ctx,
+        event_type: "priority_changed",
+        old_value: Some(existing_priority),
+        new_value: Some(new_priority),
+    }).await;
+    Ok(())
+}
+
+fn log_assignment_registered(task_id: &str, assignee: &str, agent_name: &str) {
+    tracing::info!(
+        task_id,
+        assignee,
+        agent_name,
+        "task assigned to registered agent"
+    );
+}
+
+fn log_assignment_unregistered(task_id: &str, assignee: &str) {
+    tracing::warn!(task_id, assignee, "task assigned to unregistered agent ID");
+}
+
+async fn log_agent_assignment(db: &DatabaseConnection, task_id: &str, new_assignee: &str) {
+    match agents::get_agent_by_id(db, new_assignee).await {
+        Ok(agent) => log_assignment_registered(task_id, new_assignee, &agent.name),
+        Err(_) => log_assignment_unregistered(task_id, new_assignee),
     }
+}
 
-    if let Some(new_assignee) = assignee_id {
-        let old_assignee = existing.assignee_id.as_deref().unwrap_or("");
-        if new_assignee != old_assignee {
-            match agents::get_agent_by_id(db, new_assignee).await {
-                Ok(agent) => {
-                    tracing::info!(
-                        task_id = id,
-                        assignee = new_assignee,
-                        agent_name = %agent.name,
-                        "task assigned to registered agent"
-                    );
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        task_id = id,
-                        assignee = new_assignee,
-                        "task assigned to unregistered agent ID"
-                    );
-                }
-            }
+async fn apply_assignee_update(
+    ctx: ApplyUpdateContext<'_>,
+    new_assignee: &str,
+    old_assignee: &str,
+) -> Result<(), NousError> {
+    log_agent_assignment(ctx.db, ctx.id, new_assignee).await;
+    insert_task_event(InsertTaskEventParams {
+        db: ctx.db,
+        task_id: ctx.id,
+        event_type: "assigned",
+        old_value: Some(old_assignee),
+        new_value: Some(new_assignee),
+        actor_id: ctx.actor_id,
+    })
+    .await?;
 
-            let event_model = event_entity::ActiveModel {
-                id: Set(Uuid::now_v7().to_string()),
-                task_id: Set(id.to_string()),
-                event_type: Set("assigned".to_string()),
-                old_value: Set(Some(old_assignee.to_string())),
-                new_value: Set(Some(new_assignee.to_string())),
-                actor_id: Set(actor_id.map(String::from)),
-                created_at: NotSet,
-            };
-            event_entity::Entity::insert(event_model).exec(db).await?;
+    ctx.db.execute(Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE tasks SET assignee_id = ? WHERE id = ?",
+        [new_assignee.into(), ctx.id.into()],
+    ))
+    .await?;
 
-            db.execute(Statement::from_sql_and_values(
-                sea_orm::DbBackend::Sqlite,
-                "UPDATE tasks SET assignee_id = ? WHERE id = ?",
-                [new_assignee.into(), id.into()],
-            ))
-            .await?;
+    try_post_to_room_if_set(RoomEventParams {
+        ctx: &ctx,
+        event_type: "assigned",
+        old_value: Some(old_assignee),
+        new_value: Some(new_assignee),
+    }).await;
+    Ok(())
+}
 
-            if let Some(ref rid) = existing.room_id {
-                if let Err(e) = post_task_event_to_room(PostTaskEventParams {
-                    db,
-                    registry,
-                    task_id: id,
-                    room_id: rid,
-                    event_type: "assigned",
-                    old_value: Some(old_assignee),
-                    new_value: Some(new_assignee),
-                    actor_id,
-                })
-                .await
-                {
-                    tracing::warn!(task_id = %id, error = %e, "failed to post task assigned event to room");
-                }
-            }
-        }
-    }
-
+async fn apply_simple_field_updates(
+    db: &DatabaseConnection,
+    id: &str,
+    description: Option<&str>,
+    labels: Option<&[String]>,
+) -> Result<(), NousError> {
     if let Some(desc) = description {
         db.execute(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
@@ -412,6 +488,81 @@ pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError
         ))
         .await?;
     }
+    Ok(())
+}
+
+struct TaskUpdateCtx<'a> {
+    db: &'a DatabaseConnection,
+    id: &'a str,
+    existing: &'a Task,
+    actor_id: Option<&'a str>,
+    registry: Option<&'a crate::notifications::NotificationRegistry>,
+}
+
+impl<'a> TaskUpdateCtx<'a> {
+    fn apply_ctx(&self) -> ApplyUpdateContext<'_> {
+        ApplyUpdateContext {
+            db: self.db,
+            id: self.id,
+            existing_room_id: &self.existing.room_id,
+            actor_id: self.actor_id,
+            registry: self.registry,
+        }
+    }
+
+    async fn apply_status_if_changed(&self, new_status: Option<&'a str>) -> Result<(), NousError> {
+        if let Some(s) = new_status {
+            if s != self.existing.status {
+                apply_status_update(self.apply_ctx(), s, &self.existing.status).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_priority_if_changed(&self, new_priority: Option<&'a str>) -> Result<(), NousError> {
+        if let Some(p) = new_priority {
+            if p != self.existing.priority {
+                apply_priority_update(self.apply_ctx(), p, &self.existing.priority).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_assignee_if_changed(&self, new_assignee: Option<&'a str>) -> Result<(), NousError> {
+        if let Some(a) = new_assignee {
+            let old = self.existing.assignee_id.as_deref().unwrap_or("");
+            if a != old {
+                apply_assignee_update(self.apply_ctx(), a, old).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn update_task(params: UpdateTaskParams<'_>) -> Result<Task, NousError> {
+    let UpdateTaskParams {
+        db,
+        id,
+        status,
+        priority,
+        assignee_id,
+        description,
+        labels,
+        actor_id,
+        registry,
+    } = params;
+    let existing_model = task_entity::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| NousError::NotFound(format!("task '{id}' not found")))?;
+
+    let existing = Task::from_model(existing_model);
+    let ctx = TaskUpdateCtx { db, id, existing: &existing, actor_id, registry };
+
+    ctx.apply_status_if_changed(status).await?;
+    ctx.apply_priority_if_changed(priority).await?;
+    ctx.apply_assignee_if_changed(assignee_id).await?;
+    apply_simple_field_updates(db, id, description, labels).await?;
 
     let model = task_entity::Entity::find_by_id(id)
         .one(db)
@@ -440,41 +591,53 @@ pub async fn close_task(
     .await
 }
 
-pub async fn link_tasks(
+async fn check_link_cycle(
     db: &DatabaseConnection,
     source_id: &str,
     target_id: &str,
     link_type: &str,
-    actor_id: Option<&str>,
-) -> Result<TaskLink, NousError> {
-    if link_type == "blocked_by" || link_type == "parent" {
-        let mut visited = std::collections::HashSet::new();
-        let mut stack = vec![target_id.to_string()];
+) -> Result<(), NousError> {
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = vec![target_id.to_string()];
 
-        while let Some(current) = stack.pop() {
-            if current == source_id {
-                return Err(NousError::CyclicLink(format!(
-                    "linking {source_id} -> {target_id} would create a cycle"
-                )));
-            }
-            if visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current.clone());
-
-            let rows = db
-                .query_all(Statement::from_sql_and_values(
-                    sea_orm::DbBackend::Sqlite,
-                    "SELECT target_id FROM task_links WHERE source_id = ? AND link_type = ?",
-                    [current.clone().into(), link_type.into()],
-                ))
-                .await?;
-
-            for row in &rows {
-                let tid: String = row.try_get("", "target_id")?;
-                stack.push(tid);
-            }
+    while let Some(current) = stack.pop() {
+        if current == source_id {
+            return Err(NousError::CyclicLink(format!(
+                "linking {source_id} -> {target_id} would create a cycle"
+            )));
         }
+        if visited.contains(&current) {
+            continue;
+        }
+        visited.insert(current.clone());
+
+        let rows = db
+            .query_all(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT target_id FROM task_links WHERE source_id = ? AND link_type = ?",
+                [current.clone().into(), link_type.into()],
+            ))
+            .await?;
+
+        for row in &rows {
+            let tid: String = row.try_get("", "target_id")?;
+            stack.push(tid);
+        }
+    }
+    Ok(())
+}
+
+pub async fn link_tasks(params: LinkTasksParams<'_>) -> Result<TaskLink, NousError> {
+    let LinkTasksParams {
+        db,
+        source_id,
+        target_id,
+        link_type,
+        actor_id,
+    } = params;
+
+    if link_type == "blocked_by" || link_type == "parent" {
+        check_link_cycle(db, source_id, target_id, link_type).await?;
     }
 
     let id = Uuid::now_v7().to_string();
@@ -509,13 +672,14 @@ pub async fn link_tasks(
     Ok(TaskLink::from_model(model))
 }
 
-pub async fn unlink_tasks(
-    db: &DatabaseConnection,
-    source_id: &str,
-    target_id: &str,
-    link_type: &str,
-    actor_id: Option<&str>,
-) -> Result<(), NousError> {
+pub async fn unlink_tasks(params: UnlinkTasksParams<'_>) -> Result<(), NousError> {
+    let UnlinkTasksParams {
+        db,
+        source_id,
+        target_id,
+        link_type,
+        actor_id,
+    } = params;
     let result = db
         .execute(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
@@ -802,15 +966,16 @@ async fn would_create_cycle(
     Ok(false)
 }
 
-pub async fn create_template(
-    db: &DatabaseConnection,
-    name: &str,
-    title_pattern: &str,
-    description_template: Option<&str>,
-    default_priority: Option<&str>,
-    default_labels: Option<&[String]>,
-    checklist: Option<&[String]>,
-) -> Result<TaskTemplate, NousError> {
+pub async fn create_template(params: CreateTemplateParams<'_>) -> Result<TaskTemplate, NousError> {
+    let CreateTemplateParams {
+        db,
+        name,
+        title_pattern,
+        description_template,
+        default_priority,
+        default_labels,
+        checklist,
+    } = params;
     if name.trim().is_empty() {
         return Err(NousError::Validation(
             "template name cannot be empty".into(),
@@ -893,14 +1058,15 @@ pub async fn list_templates(
     Ok(templates)
 }
 
-pub async fn create_from_template<S: ::std::hash::BuildHasher>(
-    db: &DatabaseConnection,
-    template_id: &str,
-    title_vars: Option<&HashMap<String, String, S>>,
-    overrides_description: Option<&str>,
-    overrides_assignee: Option<&str>,
-    overrides_labels: Option<&[String]>,
-) -> Result<Task, NousError> {
+pub async fn create_from_template(params: CreateFromTemplateParams<'_>) -> Result<Task, NousError> {
+    let CreateFromTemplateParams {
+        db,
+        template_id,
+        title_vars,
+        overrides_description,
+        overrides_assignee,
+        overrides_labels,
+    } = params;
     let template = get_template(db, template_id).await?;
 
     let mut title = template.title_pattern.clone();

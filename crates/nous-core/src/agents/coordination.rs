@@ -44,14 +44,25 @@ pub struct PresenceEvent {
     pub room_id: String,
 }
 
+#[derive(Debug)]
+pub struct PostHandoffRequest<'a> {
+    pub room_id: &'a str,
+    pub from_agent: &'a str,
+    pub to_agent: &'a str,
+    pub payload: HandoffPayload,
+}
+
 pub async fn post_handoff(
     db: &DatabaseConnection,
     registry: Option<&NotificationRegistry>,
-    room_id: &str,
-    from_agent: &str,
-    to_agent: &str,
-    payload: HandoffPayload,
+    req: PostHandoffRequest<'_>,
 ) -> Result<Message, NousError> {
+    let PostHandoffRequest {
+        room_id,
+        from_agent,
+        to_agent,
+        payload,
+    } = req;
     let metadata = serde_json::json!({
         "message_type": "handoff",
         "mentions": [to_agent],
@@ -155,9 +166,18 @@ mod tests {
             deadline: None,
         };
 
-        let msg = post_handoff(&db, None, &room.id, "agent-a", "agent-b", payload)
-            .await
-            .unwrap();
+        let msg = post_handoff(
+            &db,
+            None,
+            PostHandoffRequest {
+                room_id: &room.id,
+                from_agent: "agent-a",
+                to_agent: "agent-b",
+                payload,
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(msg.room_id, room.id);
         assert_eq!(msg.sender_id, "agent-a");

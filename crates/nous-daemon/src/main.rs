@@ -15,6 +15,84 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+fn log_llm_not_configured(e: &impl std::fmt::Display) {
+    let msg = format!(
+        "\n╔══════════════════════════════════════════════════════╗\
+         \n║  LLM CLIENT NOT CONFIGURED                          ║\
+         \n║                                                      ║\
+         \n║  Agent invocation endpoints will return 503.         ║\
+         \n║  Set AWS_PROFILE or AWS credentials to enable LLM.   ║\
+         \n║  Reason: {:<43} ║\
+         \n╚══════════════════════════════════════════════════════╝",
+        format!("{e}")
+    );
+    tracing::warn!("{msg}");
+}
+
+fn build_llm_client() -> (Option<Arc<LlmClient>>, String) {
+    match LlmClient::from_env() {
+        Ok(client) => {
+            tracing::info!("LLM client configured for Bedrock");
+            let model =
+                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+            (Some(Arc::new(client)), model)
+        }
+        Err(e) => {
+            log_llm_not_configured(&e);
+            (None, DEFAULT_MODEL.to_string())
+        }
+    }
+}
+
+fn spawn_shutdown_listener(shutdown: CancellationToken) {
+    tokio::spawn(async move {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+        tracing::info!("shutdown signal received");
+        shutdown.cancel();
+    });
+}
+
+struct AppStateConfig {
+    embedder: Option<Arc<dyn nous_core::memory::Embedder>>,
+    embedding_config: nous_core::memory::EmbeddingConfig,
+    vector_store_config: nous_core::memory::VectorStoreConfig,
+    llm_client: Option<Arc<LlmClient>>,
+    default_model: String,
+    shutdown: CancellationToken,
+}
+
+fn build_app_state(pools: &DbPools, cfg: AppStateConfig) -> AppState {
+    let registry = Arc::new(NotificationRegistry::new());
+    let tool_services = AppState::build_tool_services(
+        pools.fts.clone(),
+        pools.vec.clone(),
+        cfg.embedder.clone(),
+        registry.clone(),
+    );
+    AppState {
+        pool: pools.fts.clone(),
+        vec_pool: pools.vec.clone(),
+        registry,
+        embedder: cfg.embedder,
+        embedding_config: cfg.embedding_config,
+        vector_store_config: cfg.vector_store_config,
+        schedule_notify: Arc::new(Notify::new()),
+        shutdown: cfg.shutdown,
+        process_registry: Arc::new(ProcessRegistry::new()),
+        llm_client: cfg.llm_client,
+        default_model: cfg.default_model,
+        tool_services,
+        #[cfg(feature = "sandbox")]
+        sandbox_manager: None,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -45,65 +123,22 @@ async fn main() {
             }
         };
 
-    let (llm_client, default_model) = match LlmClient::from_env() {
-        Ok(client) => {
-            tracing::info!("LLM client configured for Bedrock");
-            let model =
-                std::env::var("NOUS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-            (Some(Arc::new(client)), model)
-        }
-        Err(e) => {
-            tracing::warn!("╔══════════════════════════════════════════════════════╗");
-            tracing::warn!("║  LLM CLIENT NOT CONFIGURED                          ║");
-            tracing::warn!("║                                                      ║");
-            tracing::warn!("║  Agent invocation endpoints will return 503.         ║");
-            tracing::warn!("║  Set AWS_PROFILE or AWS credentials to enable LLM.   ║");
-            tracing::warn!("║  Reason: {:<43} ║", format!("{e}"));
-            tracing::warn!("╚══════════════════════════════════════════════════════╝");
-            (None, DEFAULT_MODEL.to_string())
-        }
-    };
+    let (llm_client, default_model) = build_llm_client();
 
     let shutdown = CancellationToken::new();
+    spawn_shutdown_listener(shutdown.clone());
 
-    {
-        let shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to register SIGTERM handler");
-            tokio::select! {
-                _ = sigterm.recv() => {}
-                _ = tokio::signal::ctrl_c() => {}
-            }
-            tracing::info!("shutdown signal received");
-            shutdown.cancel();
-        });
-    }
-
-    let registry = Arc::new(NotificationRegistry::new());
-    let tool_services = AppState::build_tool_services(
-        pools.fts.clone(),
-        pools.vec.clone(),
-        embedder.clone(),
-        registry.clone(),
+    let state = build_app_state(
+        &pools,
+        AppStateConfig {
+            embedder,
+            embedding_config,
+            vector_store_config,
+            llm_client,
+            default_model,
+            shutdown: shutdown.clone(),
+        },
     );
-    let state = AppState {
-        pool: pools.fts.clone(),
-        vec_pool: pools.vec.clone(),
-        registry,
-        embedder,
-        embedding_config,
-        vector_store_config,
-        schedule_notify: Arc::new(Notify::new()),
-        shutdown: shutdown.clone(),
-        process_registry: Arc::new(ProcessRegistry::new()),
-        llm_client,
-        default_model,
-        tool_services,
-        #[cfg(feature = "sandbox")]
-        sandbox_manager: None,
-    };
 
     let api_key = config.resolve_api_key();
     if api_key.is_some() {
@@ -149,7 +184,6 @@ async fn main() {
 
     tracing::info!("HTTP server stopped, shutting down child processes");
     process_registry.shutdown(&shutdown_state).await;
-
 
     scheduler_handle.await.expect("scheduler task panicked");
 }

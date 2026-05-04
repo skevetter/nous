@@ -1,5 +1,5 @@
 use nous_core::db::{create_vec_pool, DbPools, VecPool, EMBEDDING_DIMENSION};
-use nous_core::memory::{self, MemoryType, SaveMemoryRequest};
+use nous_core::memory::{self, search::SearchSimilarParams, MemoryType, SaveMemoryRequest};
 use tempfile::TempDir;
 
 fn create_test_vec_pool(tmp: &TempDir) -> VecPool {
@@ -253,9 +253,16 @@ async fn store_and_search_via_api() {
     query[0] = 0.9;
     query[1] = 0.1;
 
-    let results = memory::search_similar(&pools.fts, &pools.vec, &query, 10, Some("ws-1"), None)
-        .await
-        .unwrap();
+    let results = memory::search_similar(SearchSimilarParams {
+        db: &pools.fts,
+        vec_pool: &pools.vec,
+        query_embedding: &query,
+        limit: 10,
+        workspace_id: Some("ws-1"),
+        threshold: None,
+    })
+    .await
+    .unwrap();
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].memory.id, mem.id);

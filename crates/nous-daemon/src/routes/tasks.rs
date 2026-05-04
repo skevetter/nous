@@ -162,13 +162,13 @@ pub async fn link(
     State(state): State<AppState>,
     Json(body): Json<LinkBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let task_link = nous_core::tasks::link_tasks(
-        &state.pool,
-        &body.source_id,
-        &body.target_id,
-        &body.link_type,
-        None,
-    )
+    let task_link = nous_core::tasks::link_tasks(nous_core::tasks::LinkTasksParams {
+        db: &state.pool,
+        source_id: &body.source_id,
+        target_id: &body.target_id,
+        link_type: &body.link_type,
+        actor_id: None,
+    })
     .await?;
     Ok(ApiResponse::created(task_link))
 }
@@ -177,13 +177,13 @@ pub async fn unlink(
     State(state): State<AppState>,
     Json(body): Json<UnlinkBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    nous_core::tasks::unlink_tasks(
-        &state.pool,
-        &body.source_id,
-        &body.target_id,
-        &body.link_type,
-        None,
-    )
+    nous_core::tasks::unlink_tasks(nous_core::tasks::UnlinkTasksParams {
+        db: &state.pool,
+        source_id: &body.source_id,
+        target_id: &body.target_id,
+        link_type: &body.link_type,
+        actor_id: None,
+    })
     .await?;
     Ok(crate::response::no_content())
 }

@@ -74,51 +74,22 @@ async fn execute(
     pools.run_migrations().await?;
     let pool = &pools.fts;
 
+    dispatch(pool, cmd).await?;
+
+    pools.close().await;
+    Ok(())
+}
+
+async fn dispatch(
+    pool: &sea_orm::DatabaseConnection,
+    cmd: WorktreeCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        WorktreeCommands::Create {
-            branch,
-            slug,
-            repo_root,
-            task,
-            agent,
-        } => {
-            let wt = worktrees::create(
-                pool,
-                worktrees::CreateWorktreeRequest {
-                    slug,
-                    branch,
-                    repo_root,
-                    agent_id: agent,
-                    task_id: task,
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&wt)?);
+        WorktreeCommands::Create { branch, slug, repo_root, task, agent } => {
+            cmd_create(pool, CreateArgs { branch, slug, repo_root, task, agent }).await?;
         }
-        WorktreeCommands::List {
-            status,
-            agent,
-            task,
-            limit,
-            offset,
-        } => {
-            let status_parsed = status
-                .as_deref()
-                .map(str::parse::<worktrees::WorktreeStatus>)
-                .transpose()?;
-            let wts = worktrees::list(
-                pool,
-                worktrees::ListWorktreesFilter {
-                    status: status_parsed,
-                    agent_id: agent,
-                    task_id: task,
-                    repo_root: None,
-                    limit: Some(limit),
-                    offset: Some(offset),
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&wts)?);
+        WorktreeCommands::List { status, agent, task, limit, offset } => {
+            cmd_list(pool, ListArgs { status, agent, task, limit, offset }).await?;
         }
         WorktreeCommands::Show { id } => {
             let wt = worktrees::get(pool, &id).await?;
@@ -133,7 +104,65 @@ async fn execute(
             println!("{{\"deleted\": true}}");
         }
     }
+    Ok(())
+}
 
-    pools.close().await;
+struct CreateArgs {
+    branch: String,
+    slug: Option<String>,
+    repo_root: String,
+    task: Option<String>,
+    agent: Option<String>,
+}
+
+async fn cmd_create(
+    pool: &sea_orm::DatabaseConnection,
+    args: CreateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let wt = worktrees::create(
+        pool,
+        worktrees::CreateWorktreeRequest {
+            slug: args.slug,
+            branch: args.branch,
+            repo_root: args.repo_root,
+            agent_id: args.agent,
+            task_id: args.task,
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&wt)?);
+    Ok(())
+}
+
+struct ListArgs {
+    status: Option<String>,
+    agent: Option<String>,
+    task: Option<String>,
+    limit: u32,
+    offset: u32,
+}
+
+async fn cmd_list(
+    pool: &sea_orm::DatabaseConnection,
+    args: ListArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status_parsed = args
+        .status
+        .as_deref()
+        .map(|s| s.parse::<worktrees::WorktreeStatus>())
+        .transpose()?;
+    let wts = worktrees::list(
+        pool,
+        worktrees::ListWorktreesFilter {
+            status: status_parsed,
+            agent_id: args.agent,
+            task_id: args.task,
+            repo_root: None,
+            limit: Some(args.limit),
+            offset: Some(args.offset),
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&wts)?);
     Ok(())
 }

@@ -8,10 +8,9 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "sandbox")]
 use nous_core::db::DatabaseConnection;
 
-use nous_core::agents::processes::{self, Invocation, Process};
+use nous_core::agents::processes::{self, Invocation, Process, UpdateProcessStatusRequest, UpdateInvocationRequest};
 #[cfg(feature = "sandbox")]
 use nous_core::agents::sandbox::SandboxConfig;
 use nous_core::error::NousError;
@@ -97,6 +96,78 @@ pub struct MonitorProcessParams {
     pub timeout_secs: Option<i64>,
 }
 
+struct SpawnMonitorTaskParams {
+    state: AppState,
+    process_id: String,
+    agent_id: String,
+    cancel: CancellationToken,
+    timeout_secs: Option<i64>,
+}
+
+struct WaitForExitParams<'a> {
+    state: &'a AppState,
+    agent_id: &'a str,
+    process_id: &'a str,
+    cancel: CancellationToken,
+    timeout_secs: Option<i64>,
+}
+
+pub struct StopParams<'a> {
+    pub state: &'a AppState,
+    pub agent_id: &'a str,
+    pub force: bool,
+    pub grace_secs: u64,
+}
+
+pub struct RestartParams<'a> {
+    pub state: &'a AppState,
+    pub agent_id: &'a str,
+    pub command: Option<&'a str>,
+    pub working_dir: Option<&'a str>,
+}
+
+pub struct InvokeParams<'a> {
+    pub state: &'a AppState,
+    pub agent_id: &'a str,
+    pub prompt: &'a str,
+    pub timeout_secs: Option<i64>,
+    pub metadata: Option<serde_json::Value>,
+    pub is_async: bool,
+}
+
+struct InvokeShellParams<'a> {
+    state: &'a AppState,
+    invocation: &'a Invocation,
+    prompt: &'a str,
+    timeout_secs: Option<i64>,
+    is_async: bool,
+}
+
+struct InvokeClaudeParams<'a> {
+    state: &'a AppState,
+    invocation: &'a Invocation,
+    prompt: &'a str,
+    timeout_secs: Option<i64>,
+    metadata: &'a Option<serde_json::Value>,
+    is_async: bool,
+}
+
+struct DispatchInvocationParams<'a> {
+    state: &'a AppState,
+    invocation: &'a Invocation,
+    prompt: &'a str,
+    timeout_secs: Option<i64>,
+    metadata: &'a Option<serde_json::Value>,
+    is_async: bool,
+    process_type: Option<&'a str>,
+}
+
+enum LlmOutcome {
+    Completed { output: String, duration_ms: i64 },
+    Failed { error_detail: String, duration_ms: i64 },
+    TimedOut { duration_ms: i64 },
+}
+
 impl ProcessRegistry {
     pub fn new() -> Self {
         Self {
@@ -115,27 +186,8 @@ impl ProcessRegistry {
             env,
             timeout_secs,
         } = params;
-        // Reserve the agent_id slot atomically: check both handles and spawning set
-        // while holding both locks to prevent TOCTOU races.
-        let reservation = {
-            let handles = self.handles.lock().await;
-            if handles.contains_key(agent_id) {
-                return Err(NousError::Conflict(format!(
-                    "agent '{agent_id}' already has a running process"
-                )));
-            }
-            let mut spawning = self.spawning.lock().await;
-            if !spawning.insert(agent_id.to_string()) {
-                return Err(NousError::Conflict(format!(
-                    "agent '{agent_id}' already has a running process"
-                )));
-            }
-            drop(handles);
-            SpawnReservation {
-                registry: self,
-                agent_id: Some(agent_id.to_string()),
-            }
-        };
+
+        let reservation = self.reserve_spawn_slot(agent_id).await?;
 
         #[cfg(feature = "sandbox")]
         if process_type == "sandbox" {
@@ -146,7 +198,6 @@ impl ProcessRegistry {
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()));
 
-        // Create DB record
         let process = processes::create_process(processes::CreateProcessParams {
             db: &state.pool,
             agent_id,
@@ -158,48 +209,36 @@ impl ProcessRegistry {
         })
         .await?;
 
-        // Update to starting
         let process = processes::update_process_status(
             &state.pool,
-            &process.id,
-            "starting",
-            None,
-            None,
-            None,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "starting",
+                exit_code: None,
+                output: None,
+                pid: None,
+            },
         )
         .await?;
 
-        // Spawn the child process
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(command);
-        cmd.kill_on_drop(true);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        if let Some(wd) = working_dir {
-            cmd.current_dir(wd);
-        }
-
-        if let Some(ref env_val) = env {
-            if let Some(obj) = env_val.as_object() {
-                for (k, v) in obj {
-                    if let Some(val) = v.as_str() {
-                        cmd.env(k, val);
-                    }
-                }
-            }
-        }
-
+        let mut cmd = Self::build_child_command(command, working_dir, env.as_ref());
         let child = cmd
             .spawn()
             .map_err(|e| NousError::Internal(format!("failed to spawn process: {e}")))?;
 
         let pid = child.id().map(i64::from);
 
-        // Update to running with PID
-        let process =
-            processes::update_process_status(&state.pool, &process.id, "running", None, None, pid)
-                .await?;
+        let process = processes::update_process_status(
+            &state.pool,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "running",
+                exit_code: None,
+                output: None,
+                pid,
+            },
+        )
+        .await?;
 
         let cancel = CancellationToken::new();
         let handle = ProcessHandle {
@@ -210,12 +249,9 @@ impl ProcessRegistry {
             cancel: cancel.clone(),
         };
 
-        // Start background monitoring task
         let process_id = process.id.clone();
         let agent_id_owned = agent_id.to_string();
-        let timeout = timeout_secs;
 
-        // Store handle and release the spawn reservation
         {
             let mut handles = self.handles.lock().await;
             handles.insert(agent_id.to_string(), handle);
@@ -223,17 +259,86 @@ impl ProcessRegistry {
             reservation.defuse();
         }
 
-        // Spawn the monitor task
-        let state_clone = state.clone();
-        let monitor_agent_id = agent_id.to_string();
+        Self::spawn_monitor_task(SpawnMonitorTaskParams {
+            state: state.clone(),
+            process_id,
+            agent_id: agent_id_owned,
+            cancel,
+            timeout_secs,
+        });
+
+        Ok(process)
+    }
+
+    async fn reserve_spawn_slot<'a>(
+        &'a self,
+        agent_id: &str,
+    ) -> Result<SpawnReservation<'a>, NousError> {
+        // Reserve the agent_id slot atomically: check both handles and spawning set
+        // while holding both locks to prevent TOCTOU races.
+        let handles = self.handles.lock().await;
+        if handles.contains_key(agent_id) {
+            return Err(NousError::Conflict(format!(
+                "agent '{agent_id}' already has a running process"
+            )));
+        }
+        let mut spawning = self.spawning.lock().await;
+        if !spawning.insert(agent_id.to_string()) {
+            return Err(NousError::Conflict(format!(
+                "agent '{agent_id}' already has a running process"
+            )));
+        }
+        drop(handles);
+        Ok(SpawnReservation {
+            registry: self,
+            agent_id: Some(agent_id.to_string()),
+        })
+    }
+
+    fn build_child_command(
+        command: &str,
+        working_dir: Option<&str>,
+        env: Option<&serde_json::Value>,
+    ) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd.kill_on_drop(true);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        if let Some(wd) = working_dir {
+            cmd.current_dir(wd);
+        }
+
+        if let Some(env_val) = env {
+            if let Some(obj) = env_val.as_object() {
+                for (k, v) in obj {
+                    if let Some(val) = v.as_str() {
+                        cmd.env(k, val);
+                    }
+                }
+            }
+        }
+        cmd
+    }
+
+    fn spawn_monitor_task(params: SpawnMonitorTaskParams) {
+        let SpawnMonitorTaskParams {
+            state,
+            process_id,
+            agent_id,
+            cancel,
+            timeout_secs,
+        } = params;
+        let monitor_agent_id = agent_id.clone();
         tokio::spawn(async move {
             let result =
                 std::panic::AssertUnwindSafe(Self::monitor_process(MonitorProcessParams {
-                    state: state_clone,
+                    state,
                     process_id,
-                    agent_id: agent_id_owned,
+                    agent_id,
                     cancel,
-                    timeout_secs: timeout,
+                    timeout_secs,
                 }));
             if let Err(panic_info) = futures::FutureExt::catch_unwind(result).await {
                 let msg = panic_info
@@ -248,8 +353,6 @@ impl ProcessRegistry {
                 );
             }
         });
-
-        Ok(process)
     }
 
     #[cfg(feature = "sandbox")]
@@ -409,11 +512,13 @@ impl ProcessRegistry {
                         Some(ref s) if s != "running" => {
                             if let Err(e) = processes::update_process_status(
                                 &state.pool,
-                                &process_id,
-                                "crashed",
-                                None,
-                                Some(&format!("sandbox status: {s}")),
-                                None,
+                                UpdateProcessStatusRequest {
+                                    process_id: &process_id,
+                                    status: "crashed",
+                                    exit_code: None,
+                                    output: Some(&format!("sandbox status: {s}")),
+                                    pid: None,
+                                },
                             ).await {
                                 tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to crashed");
                             }
@@ -431,11 +536,13 @@ impl ProcessRegistry {
                                 );
                                 if let Err(e) = processes::update_process_status(
                                     &state.pool,
-                                    &process_id,
-                                    "running",
-                                    None,
-                                    Some(&summary),
-                                    None,
+                                    UpdateProcessStatusRequest {
+                                        process_id: &process_id,
+                                        status: "running",
+                                        exit_code: None,
+                                        output: Some(&summary),
+                                        pid: None,
+                                    },
                                 ).await {
                                     tracing::warn!(process_id = %process_id, error = %e, "failed to update sandbox metrics");
                                 }
@@ -444,11 +551,13 @@ impl ProcessRegistry {
                         None => {
                             if let Err(e) = processes::update_process_status(
                                 &state.pool,
-                                &process_id,
-                                "crashed",
-                                None,
-                                Some("sandbox no longer tracked by manager"),
-                                None,
+                                UpdateProcessStatusRequest {
+                                    process_id: &process_id,
+                                    status: "crashed",
+                                    exit_code: None,
+                                    output: Some("sandbox no longer tracked by manager"),
+                                    pid: None,
+                                },
                             ).await {
                                 tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to crashed");
                             }
@@ -476,68 +585,133 @@ impl ProcessRegistry {
             cancel,
             timeout_secs,
         } = params;
-        // Wait for process exit or cancellation
-        let timeout_duration = timeout_secs.map(|s| safe_timeout(s, 300));
 
-        let result = if let Some(duration) = timeout_duration {
-            tokio::select! {
-                () = cancel.cancelled() => {
-                    // Intentional stop
-                    None
-                }
-                result = tokio::time::timeout(duration, Self::wait_for_exit(&state, &agent_id)) => {
-                    if let Ok(exit_result) = result { Some(exit_result) } else {
-                        // Timeout
-                        if let Err(e) = processes::update_process_status(
-                            &state.pool, &process_id, "failed", None,
-                            Some("process timed out"), None,
-                        ).await {
-                            tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to failed on timeout");
-                        }
-                        // Kill the child from handles
-                        if let Some(mut handle) = state.process_registry.handles.lock().await.remove(&agent_id) {
-                            if let Some(mut child) = handle.child.take() {
-                                let _ = child.kill().await;
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-        } else {
-            tokio::select! {
-                () = cancel.cancelled() => None,
-                result = Self::wait_for_exit(&state, &agent_id) => Some(result),
-            }
-        };
+        let result = Self::wait_for_exit_with_timeout(WaitForExitParams {
+            state: &state,
+            agent_id: &agent_id,
+            process_id: &process_id,
+            cancel,
+            timeout_secs,
+        })
+        .await;
 
         if let Some((exit_code, output)) = result {
-            let status = if exit_code == Some(0) {
-                "stopped"
-            } else {
-                "crashed"
-            };
-            if let Err(e) = processes::update_process_status(
-                &state.pool,
-                &process_id,
-                status,
-                exit_code,
-                output.as_deref(),
-                None,
-            )
-            .await
-            {
-                tracing::warn!(process_id = %process_id, error = %e, "failed to update process exit status");
-            }
+            Self::update_exit_status(&state, &process_id, exit_code, output.as_deref()).await;
         }
 
-        // Remove from handles
         state
             .process_registry
             .handles
             .lock()
             .await
             .remove(&agent_id);
+    }
+
+    async fn wait_for_exit_with_timeout(
+        params: WaitForExitParams<'_>,
+    ) -> Option<(Option<i32>, Option<String>)> {
+        let WaitForExitParams {
+            state,
+            agent_id,
+            process_id,
+            cancel,
+            timeout_secs,
+        } = params;
+
+        match timeout_secs.map(|s| safe_timeout(s, 300)) {
+            Some(duration) => {
+                Self::wait_with_deadline(state, (agent_id, process_id), cancel, duration).await
+            }
+            None => {
+                tokio::select! {
+                    () = cancel.cancelled() => None,
+                    result = Self::wait_for_exit(state, agent_id) => Some(result),
+                }
+            }
+        }
+    }
+
+    async fn wait_with_deadline(
+        state: &AppState,
+        ids: (&str, &str),
+        cancel: CancellationToken,
+        duration: Duration,
+    ) -> Option<(Option<i32>, Option<String>)> {
+        let (agent_id, process_id) = ids;
+        tokio::select! {
+            () = cancel.cancelled() => None,
+            result = tokio::time::timeout(duration, Self::wait_for_exit(state, agent_id)) => {
+                Self::handle_deadline_result(state, agent_id, process_id, result).await
+            }
+        }
+    }
+
+    async fn handle_deadline_result(
+        state: &AppState,
+        agent_id: &str,
+        process_id: &str,
+        result: Result<(Option<i32>, Option<String>), tokio::time::error::Elapsed>,
+    ) -> Option<(Option<i32>, Option<String>)> {
+        match result {
+            Ok(exit_result) => Some(exit_result),
+            Err(_) => {
+                Self::handle_process_timeout(state, agent_id, process_id).await;
+                None
+            }
+        }
+    }
+
+    async fn handle_process_timeout(state: &AppState, agent_id: &str, process_id: &str) {
+        Self::log_process_status_update(
+            &state.pool,
+            UpdateProcessStatusRequest {
+                process_id,
+                status: "failed",
+                exit_code: None,
+                output: Some("process timed out"),
+                pid: None,
+            },
+        )
+        .await;
+        Self::kill_process_handle(state, agent_id).await;
+    }
+
+    async fn kill_process_handle(state: &AppState, agent_id: &str) {
+        let handle = state
+            .process_registry
+            .handles
+            .lock()
+            .await
+            .remove(agent_id);
+        if let Some(mut handle) = handle {
+            if let Some(mut child) = handle.child.take() {
+                let _ = child.kill().await;
+            }
+        }
+    }
+
+    async fn update_exit_status(
+        state: &AppState,
+        process_id: &str,
+        exit_code: Option<i32>,
+        output: Option<&str>,
+    ) {
+        let status = if exit_code == Some(0) { "stopped" } else { "crashed" };
+        Self::log_process_status_update(
+            &state.pool,
+            UpdateProcessStatusRequest { process_id, status, exit_code, output, pid: None },
+        )
+        .await;
+    }
+
+    async fn log_process_status_update(
+        pool: &DatabaseConnection,
+        req: UpdateProcessStatusRequest<'_>,
+    ) {
+        let process_id = req.process_id;
+        if let Err(e) = processes::update_process_status(pool, req).await {
+            tracing::warn!(process_id = %process_id, error = %e, "failed to update process exit status");
+        }
     }
 
     async fn wait_for_exit(state: &AppState, agent_id: &str) -> (Option<i32>, Option<String>) {
@@ -557,13 +731,8 @@ impl ProcessRegistry {
         }
     }
 
-    pub async fn stop(
-        &self,
-        state: &AppState,
-        agent_id: &str,
-        force: bool,
-        grace_secs: u64,
-    ) -> Result<Process, NousError> {
+    pub async fn stop(&self, params: StopParams<'_>) -> Result<Process, NousError> {
+        let StopParams { state, agent_id, force, grace_secs } = params;
         let mut handles = self.handles.lock().await;
         let handle = handles.get_mut(agent_id).ok_or_else(|| {
             NousError::NotFound(format!("no running process for agent '{agent_id}'"))
@@ -572,117 +741,142 @@ impl ProcessRegistry {
         let process_id = handle.process_id.clone();
         let is_sandbox = handle.child.is_none();
 
-        // Update status to stopping
-        if let Err(e) =
-            processes::update_process_status(&state.pool, &process_id, "stopping", None, None, None)
-                .await
-        {
-            tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to stopping");
-        }
-
-        // Cancel the monitor task
+        Self::mark_stopping(&state.pool, &process_id).await;
         handle.cancel.cancel();
 
         #[cfg(feature = "sandbox")]
         if is_sandbox {
-            handles.remove(agent_id);
-            drop(handles);
-
-            if let Some(sandbox_mgr) = state.sandbox_manager() {
-                let mut mgr = sandbox_mgr.lock().await;
-                let _ = mgr.stop(agent_id).await;
-            }
-
-            return processes::update_process_status(
-                &state.pool,
-                &process_id,
-                "stopped",
-                None,
-                None,
-                None,
-            )
-            .await;
+            return self
+                .stop_sandbox(state, agent_id, &process_id, handles)
+                .await;
         }
 
         #[cfg(not(feature = "sandbox"))]
         let _ = is_sandbox;
 
-        let exit_code = if let Some(mut child) = handle.child.take() {
-            if force {
-                let _ = child.kill().await;
-            } else {
-                #[cfg(unix)]
-                {
-                    if let Some(pid) = child.id() {
-                        unsafe {
-                            // PIDs are always < 2^31 on all supported platforms
-                            libc::kill(pid.cast_signed(), libc::SIGTERM);
-                        }
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = child.kill().await;
-                }
-
-                let grace = Duration::from_secs(grace_secs);
-                match tokio::time::timeout(grace, child.wait()).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        let _ = child.kill().await;
-                    }
-                }
-            }
-            child.try_wait().ok().flatten().and_then(|s| s.code())
-        } else {
-            tokio::task::yield_now().await;
-            None
-        };
+        let exit_code = Self::stop_native_child(handle, force, grace_secs).await;
 
         handles.remove(agent_id);
         drop(handles);
 
-        processes::update_process_status(&state.pool, &process_id, "stopped", exit_code, None, None)
-            .await
+        processes::update_process_status(
+            &state.pool,
+            UpdateProcessStatusRequest {
+                process_id: &process_id,
+                status: "stopped",
+                exit_code,
+                output: None,
+                pid: None,
+            },
+        )
+        .await
     }
 
-    pub async fn restart(
+    async fn mark_stopping(pool: &DatabaseConnection, process_id: &str) {
+        if let Err(e) = processes::update_process_status(
+            pool,
+            UpdateProcessStatusRequest {
+                process_id,
+                status: "stopping",
+                exit_code: None,
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+        {
+            tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to stopping");
+        }
+    }
+
+    async fn stop_native_child(
+        handle: &mut ProcessHandle,
+        force: bool,
+        grace_secs: u64,
+    ) -> Option<i32> {
+        if let Some(child) = handle.child.take() {
+            Self::terminate_child(child, force, grace_secs).await
+        } else {
+            tokio::task::yield_now().await;
+            None
+        }
+    }
+
+    #[cfg(feature = "sandbox")]
+    async fn stop_sandbox(
         &self,
         state: &AppState,
         agent_id: &str,
-        command: Option<&str>,
-        working_dir: Option<&str>,
+        process_id: &str,
+        mut handles: tokio::sync::MutexGuard<'_, HashMap<String, ProcessHandle>>,
     ) -> Result<Process, NousError> {
-        // Get current process info before stopping
+        handles.remove(agent_id);
+        drop(handles);
+
+        if let Some(sandbox_mgr) = state.sandbox_manager() {
+            let mut mgr = sandbox_mgr.lock().await;
+            let _ = mgr.stop(agent_id).await;
+        }
+
+        processes::update_process_status(
+            &state.pool,
+            UpdateProcessStatusRequest {
+                process_id,
+                status: "stopped",
+                exit_code: None,
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+    }
+
+    async fn terminate_child(
+        mut child: tokio::process::Child,
+        force: bool,
+        grace_secs: u64,
+    ) -> Option<i32> {
+        if force {
+            let _ = child.kill().await;
+        } else {
+            Self::graceful_terminate(&mut child, grace_secs).await;
+        }
+        child.try_wait().ok().flatten().and_then(|s| s.code())
+    }
+
+    async fn graceful_terminate(child: &mut tokio::process::Child, grace_secs: u64) {
+        #[cfg(unix)]
+        {
+            if let Some(pid) = child.id() {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill().await;
+        }
+
+        let grace = Duration::from_secs(grace_secs);
+        if tokio::time::timeout(grace, child.wait()).await.is_err() {
+            let _ = child.kill().await;
+        }
+    }
+
+    pub async fn restart(&self, params: RestartParams<'_>) -> Result<Process, NousError> {
+        let RestartParams { state, agent_id, command, working_dir } = params;
+
         let current = {
             let handles = self.handles.lock().await;
             handles.get(agent_id).map(|h| h.process_id.clone())
         };
 
         let (old_command, old_working_dir, old_process_type, old_env, old_timeout) =
-            if let Some(ref pid) = current {
-                let proc = processes::get_process_by_id(&state.pool, pid).await?;
-                (
-                    proc.command,
-                    proc.working_dir,
-                    proc.process_type,
-                    proc.env_json,
-                    proc.timeout_secs,
-                )
-            } else {
-                let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
-                (
-                    agent.spawn_command.unwrap_or_default(),
-                    agent.working_dir,
-                    agent.process_type.unwrap_or_else(|| "shell".to_string()),
-                    Some("{}".to_string()),
-                    None,
-                )
-            };
+            self.load_process_config(state, agent_id, current.as_deref()).await?;
 
-        // Stop if running
         if current.is_some() {
-            let _ = self.stop(state, agent_id, false, 10).await;
+            let _ = self.stop(StopParams { state, agent_id, force: false, grace_secs: 10 }).await;
         }
 
         let cmd = command.unwrap_or(&old_command);
@@ -703,15 +897,30 @@ impl ProcessRegistry {
         .await
     }
 
-    pub async fn invoke(
+    async fn load_process_config(
         &self,
         state: &AppState,
         agent_id: &str,
-        prompt: &str,
-        timeout_secs: Option<i64>,
-        metadata: Option<serde_json::Value>,
-        is_async: bool,
-    ) -> Result<Invocation, NousError> {
+        current_process_id: Option<&str>,
+    ) -> Result<(String, Option<String>, String, Option<String>, Option<i64>), NousError> {
+        if let Some(pid) = current_process_id {
+            let proc = processes::get_process_by_id(&state.pool, pid).await?;
+            Ok((proc.command, proc.working_dir, proc.process_type, proc.env_json, proc.timeout_secs))
+        } else {
+            let agent = nous_core::agents::get_agent_by_id(&state.pool, agent_id).await?;
+            Ok((
+                agent.spawn_command.unwrap_or_default(),
+                agent.working_dir,
+                agent.process_type.unwrap_or_else(|| "shell".to_string()),
+                Some("{}".to_string()),
+                None,
+            ))
+        }
+    }
+
+    pub async fn invoke(&self, params: InvokeParams<'_>) -> Result<Invocation, NousError> {
+        let InvokeParams { state, agent_id, prompt, timeout_secs, metadata, is_async } = params;
+
         let metadata_str = metadata
             .as_ref()
             .and_then(|v| serde_json::to_string(v).ok());
@@ -720,76 +929,109 @@ impl ProcessRegistry {
             processes::create_invocation(&state.pool, agent_id, prompt, metadata_str.as_deref())
                 .await?;
 
-        // Update to running
-        let invocation =
-            processes::update_invocation(&state.pool, &invocation.id, "running", None, None, None)
-                .await?;
+        let invocation = processes::update_invocation(
+            &state.pool,
+            UpdateInvocationRequest {
+                invocation_id: &invocation.id,
+                status: "running",
+                result: None,
+                error: None,
+                duration_ms: None,
+            },
+        )
+        .await?;
 
         let agent = match nous_core::agents::get_agent_by_id(&state.pool, agent_id).await {
             Ok(a) => a,
             Err(e) => {
-                if let Err(db_err) = processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "failed",
-                    None,
-                    Some(&e.to_string()),
-                    None,
-                )
-                .await
-                {
-                    tracing::warn!(invocation_id = %invocation.id, error = %db_err, "failed to mark invocation as failed");
-                }
+                Self::mark_invocation_failed(&state.pool, &invocation.id, &e.to_string()).await;
                 return Err(e);
             }
         };
 
-        let result = match agent.process_type.as_deref() {
-            Some("claude" | "sandbox") => {
-                self.invoke_claude(
-                    state,
-                    &invocation,
-                    prompt,
-                    timeout_secs,
-                    metadata.as_ref(),
-                    is_async,
-                )
-                .await
-            }
-            Some("shell") | None => {
-                self.invoke_shell(state, &invocation, prompt, timeout_secs, is_async)
-                    .await
-            }
-            Some(other) => Err(NousError::Config(format!(
-                "unsupported process_type '{other}'"
-            ))),
-        };
+        let result = self
+            .dispatch_invocation(DispatchInvocationParams {
+                state,
+                invocation: &invocation,
+                prompt,
+                timeout_secs,
+                metadata: &metadata,
+                is_async,
+                process_type: agent.process_type.as_deref(),
+            })
+            .await;
 
         if let Err(ref e) = result {
-            if let Err(db_err) = processes::update_invocation(
-                &state.pool,
-                &invocation.id,
-                "failed",
-                None,
-                Some(&e.to_string()),
-                None,
-            )
-            .await
-            {
-                tracing::warn!(invocation_id = %invocation.id, error = %db_err, "failed to mark invocation as failed");
-            }
+            Self::mark_invocation_failed(&state.pool, &invocation.id, &e.to_string()).await;
         }
         result
     }
 
-    async fn invoke_shell(
+    async fn dispatch_invocation(
         &self,
-        state: &AppState,
-        invocation: &Invocation,
-        prompt: &str,
-        timeout_secs: Option<i64>,
-        is_async: bool,
+        params: DispatchInvocationParams<'_>,
     ) -> Result<Invocation, NousError> {
+        let DispatchInvocationParams {
+            state,
+            invocation,
+            prompt,
+            timeout_secs,
+            metadata,
+            is_async,
+            process_type,
+        } = params;
+        match process_type {
+            Some("claude") | Some("sandbox") => {
+                self.invoke_claude(InvokeClaudeParams {
+                    state,
+                    invocation,
+                    prompt,
+                    timeout_secs,
+                    metadata,
+                    is_async,
+                })
+                .await
+            }
+            Some("shell") | None => {
+                self.invoke_shell(InvokeShellParams {
+                    state,
+                    invocation,
+                    prompt,
+                    timeout_secs,
+                    is_async,
+                })
+                .await
+            }
+            Some(other) => Err(NousError::Config(format!(
+                "unsupported process_type '{other}'"
+            ))),
+        }
+    }
+
+    async fn mark_invocation_failed(
+        pool: &DatabaseConnection,
+        invocation_id: &str,
+        error: &str,
+    ) {
+        if let Err(db_err) = processes::update_invocation(
+            pool,
+            UpdateInvocationRequest {
+                invocation_id,
+                status: "failed",
+                result: None,
+                error: Some(error),
+                duration_ms: None,
+            },
+        )
+        .await
+        {
+            tracing::warn!(invocation_id = %invocation_id, error = %db_err, "failed to mark invocation as failed");
+        }
+    }
+
+    async fn invoke_shell(&self, params: InvokeShellParams<'_>) -> Result<Invocation, NousError> {
+        let InvokeShellParams { state, invocation, prompt, timeout_secs, is_async } = params;
+
         if is_async {
             let inv_id = invocation.id.clone();
             let prompt_owned = prompt.to_string();
@@ -797,71 +1039,12 @@ impl ProcessRegistry {
             let state_clone = state.clone();
             tokio::spawn(async move {
                 let start = std::time::Instant::now();
-                let result = tokio::time::timeout(timeout, async {
-                    let output = Command::new("sh")
-                        .arg("-c")
-                        .arg(&prompt_owned)
-                        .kill_on_drop(true)
-                        .output()
-                        .await;
-                    match output {
-                        Ok(out) => {
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            let combined = if stderr.is_empty() {
-                                stdout.to_string()
-                            } else {
-                                format!("{stdout}\n{stderr}")
-                            };
-                            if out.status.success() {
-                                Ok(combined)
-                            } else {
-                                Err(format!(
-                                    "exit code {}: {combined}",
-                                    out.status.code().unwrap_or(-1)
-                                ))
-                            }
-                        }
-                        Err(e) => Err(format!("failed to execute: {e}")),
-                    }
-                })
-                .await;
+                let result =
+                    tokio::time::timeout(timeout, Self::run_shell_command(&prompt_owned)).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
-                let update_result = match result {
-                    Ok(Ok(output)) => {
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "completed",
-                            Some(&output),
-                            None,
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                    Ok(Err(err)) => {
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "failed",
-                            None,
-                            Some(&err),
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                    Err(_) => {
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "timeout",
-                            None,
-                            Some("invocation timed out"),
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                };
+                let update_result =
+                    Self::update_invocation_from_result(&state_clone.pool, &inv_id, result, duration_ms)
+                        .await;
                 if let Err(e) = update_result {
                     tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
                 }
@@ -871,71 +1054,82 @@ impl ProcessRegistry {
 
         let start = std::time::Instant::now();
         let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
-
-        let result = tokio::time::timeout(timeout, async {
-            let output = Command::new("sh")
-                .arg("-c")
-                .arg(prompt)
-                .kill_on_drop(true)
-                .output()
-                .await;
-
-            match output {
-                Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    let combined = if stderr.is_empty() {
-                        stdout.to_string()
-                    } else {
-                        format!("{stdout}\n{stderr}")
-                    };
-                    if out.status.success() {
-                        Ok(combined)
-                    } else {
-                        Err(format!(
-                            "exit code {}: {combined}",
-                            out.status.code().unwrap_or(-1)
-                        ))
-                    }
-                }
-                Err(e) => Err(format!("failed to execute: {e}")),
-            }
-        })
-        .await;
-
+        let result = tokio::time::timeout(timeout, Self::run_shell_command(prompt)).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
+        Self::update_invocation_from_result(&state.pool, &invocation.id, result, duration_ms).await
+    }
+
+    async fn run_shell_command(prompt: &str) -> Result<String, String> {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(prompt)
+            .kill_on_drop(true)
+            .output()
+            .await;
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let combined = if stderr.is_empty() {
+                    stdout.to_string()
+                } else {
+                    format!("{stdout}\n{stderr}")
+                };
+                if out.status.success() {
+                    Ok(combined)
+                } else {
+                    Err(format!("exit code {}: {combined}", out.status.code().unwrap_or(-1)))
+                }
+            }
+            Err(e) => Err(format!("failed to execute: {e}")),
+        }
+    }
+
+    async fn update_invocation_from_result(
+        pool: &DatabaseConnection,
+        invocation_id: &str,
+        result: Result<Result<String, String>, tokio::time::error::Elapsed>,
+        duration_ms: i64,
+    ) -> Result<Invocation, NousError> {
         match result {
             Ok(Ok(output)) => {
                 processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "completed",
-                    Some(&output),
-                    None,
-                    Some(duration_ms),
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "completed",
+                        result: Some(&output),
+                        error: None,
+                        duration_ms: Some(duration_ms),
+                    },
                 )
                 .await
             }
             Ok(Err(err)) => {
                 processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "failed",
-                    None,
-                    Some(&err),
-                    Some(duration_ms),
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "failed",
+                        result: None,
+                        error: Some(&err),
+                        duration_ms: Some(duration_ms),
+                    },
                 )
                 .await
             }
             Err(_) => {
                 processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "timeout",
-                    None,
-                    Some("invocation timed out"),
-                    Some(duration_ms),
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "timeout",
+                        result: None,
+                        error: Some("invocation timed out"),
+                        duration_ms: Some(duration_ms),
+                    },
                 )
                 .await
             }
@@ -944,27 +1138,27 @@ impl ProcessRegistry {
 
     async fn invoke_claude(
         &self,
-        state: &AppState,
-        invocation: &Invocation,
-        prompt: &str,
-        timeout_secs: Option<i64>,
-        metadata: Option<&serde_json::Value>,
-        is_async: bool,
+        params: InvokeClaudeParams<'_>,
     ) -> Result<Invocation, NousError> {
         use rig::client::completion::CompletionClient;
         use rig::completion::Prompt as _;
+
+        let InvokeClaudeParams { state, invocation, prompt, timeout_secs, metadata, is_async } =
+            params;
 
         let client = state.llm_client.as_ref().ok_or_else(|| {
             NousError::Unavailable("LLM client not configured — set AWS credentials".into())
         })?;
 
         let model = metadata
+            .as_ref()
             .and_then(|m| m.get("model"))
             .and_then(|v| v.as_str())
             .unwrap_or(&state.default_model)
             .to_string();
 
         let preamble = metadata
+            .as_ref()
             .and_then(|m| m.get("preamble"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -977,51 +1171,13 @@ impl ProcessRegistry {
             let state_clone = state.clone();
             let client = client.clone();
             tokio::spawn(async move {
-                let agent = if preamble.is_empty() {
-                    client.agent(&model).build()
-                } else {
-                    client.agent(&model).preamble(&preamble).build()
-                };
+                let agent = Self::build_llm_agent(&client, &model, &preamble);
                 let start = std::time::Instant::now();
                 let result = tokio::time::timeout(timeout, agent.prompt(&prompt_owned)).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
-                let update_result = match result {
-                    Ok(Ok(output)) => {
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "completed",
-                            Some(&output),
-                            None,
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                    Ok(Err(err)) => {
-                        let error_detail = format!("Bedrock error (model={model}): {err:?}");
-                        tracing::error!(inv_id = %inv_id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "failed",
-                            None,
-                            Some(&error_detail),
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                    Err(_) => {
-                        processes::update_invocation(
-                            &state_clone.pool,
-                            &inv_id,
-                            "timeout",
-                            None,
-                            Some("invocation timed out"),
-                            Some(duration_ms),
-                        )
-                        .await
-                    }
-                };
+                let outcome = Self::classify_llm_result(result, &model, &inv_id, duration_ms);
+                let update_result =
+                    Self::record_llm_outcome(&state_clone.pool, &inv_id, outcome).await;
                 if let Err(e) = update_result {
                     tracing::error!(inv_id = %inv_id, error = %e, "failed to update invocation status");
                 }
@@ -1029,50 +1185,94 @@ impl ProcessRegistry {
             return Ok(invocation.clone());
         }
 
-        let agent = if preamble.is_empty() {
-            client.agent(&model).build()
-        } else {
-            client.agent(&model).preamble(&preamble).build()
-        };
-
+        let agent = Self::build_llm_agent(client, &model, &preamble);
         let start = std::time::Instant::now();
         let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
         let result = tokio::time::timeout(timeout, agent.prompt(prompt)).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
+        let outcome = Self::classify_llm_result(result, &model, &invocation.id, duration_ms);
+        Self::record_llm_outcome(&state.pool, &invocation.id, outcome).await
+    }
+
+    fn build_llm_agent(
+        client: &crate::llm_client::LlmClient,
+        model: &str,
+        preamble: &str,
+    ) -> impl rig::completion::Prompt {
+        use rig::client::completion::CompletionClient;
+        if preamble.is_empty() {
+            client.agent(model).build()
+        } else {
+            client.agent(model).preamble(preamble).build()
+        }
+    }
+
+    fn classify_llm_result<E: std::fmt::Debug>(
+        result: Result<Result<String, E>, tokio::time::error::Elapsed>,
+        model: &str,
+        invocation_id: &str,
+        duration_ms: i64,
+    ) -> LlmOutcome {
         match result {
-            Ok(Ok(output)) => {
-                processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "completed",
-                    Some(&output),
-                    None,
-                    Some(duration_ms),
-                )
-                .await
-            }
+            Ok(Ok(output)) => LlmOutcome::Completed { output, duration_ms },
             Ok(Err(err)) => {
                 let error_detail = format!("Bedrock error (model={model}): {err:?}");
-                tracing::error!(invocation_id = %invocation.id, model = %model, duration_ms = %duration_ms, error = %error_detail, "LLM invocation failed");
+                tracing::error!(
+                    invocation_id = %invocation_id,
+                    model = %model,
+                    duration_ms = %duration_ms,
+                    error = %error_detail,
+                    "LLM invocation failed"
+                );
+                LlmOutcome::Failed { error_detail, duration_ms }
+            }
+            Err(_) => LlmOutcome::TimedOut { duration_ms },
+        }
+    }
+
+    async fn record_llm_outcome(
+        pool: &DatabaseConnection,
+        invocation_id: &str,
+        outcome: LlmOutcome,
+    ) -> Result<Invocation, NousError> {
+        match outcome {
+            LlmOutcome::Completed { output, duration_ms } => {
                 processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "failed",
-                    None,
-                    Some(&error_detail),
-                    Some(duration_ms),
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "completed",
+                        result: Some(&output),
+                        error: None,
+                        duration_ms: Some(duration_ms),
+                    },
                 )
                 .await
             }
-            Err(_) => {
+            LlmOutcome::Failed { error_detail, duration_ms } => {
                 processes::update_invocation(
-                    &state.pool,
-                    &invocation.id,
-                    "timeout",
-                    None,
-                    Some("invocation timed out"),
-                    Some(duration_ms),
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "failed",
+                        result: None,
+                        error: Some(&error_detail),
+                        duration_ms: Some(duration_ms),
+                    },
+                )
+                .await
+            }
+            LlmOutcome::TimedOut { duration_ms } => {
+                processes::update_invocation(
+                    pool,
+                    UpdateInvocationRequest {
+                        invocation_id,
+                        status: "timeout",
+                        result: None,
+                        error: Some("invocation timed out"),
+                        duration_ms: Some(duration_ms),
+                    },
                 )
                 .await
             }
@@ -1130,11 +1330,13 @@ impl ProcessRegistry {
                     );
                     if let Err(e) = processes::update_process_status(
                         pool,
-                        &proc.id,
-                        "crashed",
-                        None,
-                        Some("no sandbox_name on recovery"),
-                        None,
+                        UpdateProcessStatusRequest {
+                            process_id: &proc.id,
+                            status: "crashed",
+                            exit_code: None,
+                            output: Some("no sandbox_name on recovery"),
+                            pid: None,
+                        },
                     )
                     .await
                     {
@@ -1179,11 +1381,13 @@ impl ProcessRegistry {
                 Ok(false) | Err(_) => {
                     if let Err(e) = processes::update_process_status(
                         pool,
-                        &proc.id,
-                        "crashed",
-                        None,
-                        Some("sandbox unreachable on daemon restart"),
-                        None,
+                        UpdateProcessStatusRequest {
+                            process_id: &proc.id,
+                            status: "crashed",
+                            exit_code: None,
+                            output: Some("sandbox unreachable on daemon restart"),
+                            pid: None,
+                        },
                     )
                     .await
                     {
@@ -1210,12 +1414,45 @@ impl ProcessRegistry {
         };
 
         for agent_id in agent_ids {
-            tracing::info!(agent_id = %agent_id, "stopping agent process for shutdown");
-            if let Err(e) = self.stop(state, &agent_id, false, 5).await {
-                tracing::warn!(agent_id = %agent_id, error = %e, "failed to gracefully stop process, force killing");
-                let _ = self.stop(state, &agent_id, true, 0).await;
-            }
+            self.shutdown_agent(state, &agent_id).await;
         }
+    }
+
+    async fn shutdown_agent(&self, state: &AppState, agent_id: &str) {
+        tracing::info!(agent_id = %agent_id, "stopping agent process for shutdown");
+        self.stop_with_fallback(state, agent_id).await;
+    }
+
+    async fn stop_with_fallback(&self, state: &AppState, agent_id: &str) {
+        let graceful_result = self.try_graceful_stop(state, agent_id).await;
+        self.handle_graceful_stop_result(state, agent_id, graceful_result).await;
+    }
+
+    async fn handle_graceful_stop_result(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+        result: Result<Process, NousError>,
+    ) {
+        if let Err(e) = result {
+            tracing::warn!(agent_id = %agent_id, error = %e, "failed to gracefully stop process, force killing");
+            self.force_stop_agent(state, agent_id).await;
+        }
+    }
+
+    async fn try_graceful_stop(
+        &self,
+        state: &AppState,
+        agent_id: &str,
+    ) -> Result<Process, NousError> {
+        self.stop(StopParams { state, agent_id, force: false, grace_secs: 5 })
+            .await
+    }
+
+    async fn force_stop_agent(&self, state: &AppState, agent_id: &str) {
+        let _ = self
+            .stop(StopParams { state, agent_id, force: true, grace_secs: 0 })
+            .await;
     }
 }
 

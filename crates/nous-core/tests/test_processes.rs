@@ -4,6 +4,7 @@ use nous_core::agents::processes::{
     cleanup_agent_processes, create_invocation, create_process, get_active_process, get_invocation,
     get_latest_process, get_process_by_id, list_all_active_processes, list_invocations,
     list_processes, update_invocation, update_process_status, CreateProcessParams,
+    UpdateInvocationRequest, UpdateProcessStatusRequest,
 };
 use nous_core::agents::{self, RegisterAgentRequest};
 
@@ -95,16 +96,34 @@ async fn update_process_status_transitions() {
 
     assert_eq!(proc.status, "pending");
 
-    let updated = update_process_status(&db, &proc.id, "running", None, None, Some(1234))
-        .await
-        .unwrap();
+    let updated = update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &proc.id,
+            status: "running",
+            exit_code: None,
+            output: None,
+            pid: Some(1234),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(updated.status, "running");
     assert_eq!(updated.pid, Some(1234));
     assert!(updated.started_at.is_some());
 
-    let stopped = update_process_status(&db, &proc.id, "stopped", Some(0), Some("done"), None)
-        .await
-        .unwrap();
+    let stopped = update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &proc.id,
+            status: "stopped",
+            exit_code: Some(0),
+            output: Some("done"),
+            pid: None,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(stopped.status, "stopped");
     assert_eq!(stopped.exit_code, Some(0));
     assert_eq!(stopped.last_output.as_deref(), Some("done"));
@@ -134,9 +153,18 @@ async fn get_active_process_returns_running() {
     assert_eq!(active.unwrap().id, proc.id);
 
     // After stopping, no active process
-    update_process_status(&db, &proc.id, "stopped", Some(0), None, None)
-        .await
-        .unwrap();
+    update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &proc.id,
+            status: "stopped",
+            exit_code: Some(0),
+            output: None,
+            pid: None,
+        },
+    )
+    .await
+    .unwrap();
     let active = get_active_process(&db, &agent_id).await.unwrap();
     assert!(active.is_none());
 }
@@ -159,9 +187,18 @@ async fn get_latest_process_ordering() {
     .unwrap();
 
     // Stop first so partial unique index allows creating another
-    update_process_status(&db, &first.id, "stopped", Some(0), None, None)
-        .await
-        .unwrap();
+    update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &first.id,
+            status: "stopped",
+            exit_code: Some(0),
+            output: None,
+            pid: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let second = create_process(CreateProcessParams {
         db: &db,
@@ -187,9 +224,18 @@ async fn list_processes_respects_limit() {
     let mut last_id = String::new();
     for i in 0..5 {
         if !last_id.is_empty() {
-            update_process_status(&db, &last_id, "stopped", Some(0), None, None)
-                .await
-                .unwrap();
+            update_process_status(
+                &db,
+                UpdateProcessStatusRequest {
+                    process_id: &last_id,
+                    status: "stopped",
+                    exit_code: Some(0),
+                    output: None,
+                    pid: None,
+                },
+            )
+            .await
+            .unwrap();
         }
         let proc = create_process(CreateProcessParams {
             db: &db,
@@ -242,9 +288,18 @@ async fn list_all_active_processes_filters_correctly() {
     .await
     .unwrap();
 
-    update_process_status(&db, &p2.id, "stopped", Some(0), None, None)
-        .await
-        .unwrap();
+    update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &p2.id,
+            status: "stopped",
+            exit_code: Some(0),
+            output: None,
+            pid: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let active = list_all_active_processes(&db).await.unwrap();
     assert!(active.iter().any(|p| p.id == p1.id));
@@ -269,9 +324,18 @@ async fn cleanup_agent_processes_removes_all() {
     .unwrap();
 
     // Stop first so we can create a second
-    update_process_status(&db, &p1.id, "stopped", Some(0), None, None)
-        .await
-        .unwrap();
+    update_process_status(
+        &db,
+        UpdateProcessStatusRequest {
+            process_id: &p1.id,
+            status: "stopped",
+            exit_code: Some(0),
+            output: None,
+            pid: None,
+        },
+    )
+    .await
+    .unwrap();
 
     create_process(CreateProcessParams {
         db: &db,
@@ -331,11 +395,13 @@ async fn update_invocation_to_completed() {
 
     let updated = update_invocation(
         &db,
-        &inv.id,
-        "completed",
-        Some("result text"),
-        None,
-        Some(150),
+        UpdateInvocationRequest {
+            invocation_id: &inv.id,
+            status: "completed",
+            result: Some("result text"),
+            error: None,
+            duration_ms: Some(150),
+        },
     )
     .await
     .unwrap();
@@ -357,11 +423,13 @@ async fn update_invocation_to_failed() {
 
     let updated = update_invocation(
         &db,
-        &inv.id,
-        "failed",
-        None,
-        Some("something broke"),
-        Some(50),
+        UpdateInvocationRequest {
+            invocation_id: &inv.id,
+            status: "failed",
+            result: None,
+            error: Some("something broke"),
+            duration_ms: Some(50),
+        },
     )
     .await
     .unwrap();
@@ -383,9 +451,18 @@ async fn list_invocations_with_status_filter() {
         .await
         .unwrap();
 
-    update_invocation(&db, &inv1.id, "completed", Some("done"), None, None)
-        .await
-        .unwrap();
+    update_invocation(
+        &db,
+        UpdateInvocationRequest {
+            invocation_id: &inv1.id,
+            status: "completed",
+            result: Some("done"),
+            error: None,
+            duration_ms: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let all = list_invocations(&db, &agent_id, None, None).await.unwrap();
     assert_eq!(all.len(), 2);

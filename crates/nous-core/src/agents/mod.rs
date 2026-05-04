@@ -174,6 +174,46 @@ pub struct ListAgentsFilter {
 
 // --- Agent operations ---
 
+async fn setup_parent_child_relationship(
+    db: &DatabaseConnection,
+    agent_id: &str,
+    parent_id: &str,
+    namespace: &str,
+) -> Result<(), NousError> {
+    let rel_model = rel_entity::ActiveModel {
+        parent_id: Set(parent_id.to_string()),
+        child_id: Set(agent_id.to_string()),
+        relationship_type: Set("parent-child".to_string()),
+        namespace: Set(namespace.to_string()),
+        created_at: NotSet,
+    };
+
+    rel_entity::Entity::insert(rel_model).exec(db).await?;
+
+    let parent = get_agent_by_id(db, parent_id).await?;
+    let coord_room_name = format!("coord-{}-{}", namespace, parent.name);
+    match rooms::create_room(
+        db,
+        &coord_room_name,
+        Some(&format!("Coordination room for {}", parent.name)),
+        None,
+    )
+    .await
+    {
+        Ok(room) => {
+            subscribe_to_room(db, &room.id, parent_id, None).await?;
+            subscribe_to_room(db, &room.id, agent_id, None).await?;
+        }
+        Err(NousError::Conflict(_)) => {
+            let room = rooms::get_room(db, &coord_room_name).await?;
+            subscribe_to_room(db, &room.id, agent_id, None).await?;
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
 pub async fn register_agent(
     db: &DatabaseConnection,
     req: RegisterAgentRequest,
@@ -220,36 +260,7 @@ pub async fn register_agent(
     agent_entity::Entity::insert(model).exec(db).await?;
 
     if let Some(ref parent_id) = req.parent_id {
-        let rel_model = rel_entity::ActiveModel {
-            parent_id: Set(parent_id.clone()),
-            child_id: Set(id.clone()),
-            relationship_type: Set("parent-child".to_string()),
-            namespace: Set(namespace.clone()),
-            created_at: NotSet,
-        };
-
-        rel_entity::Entity::insert(rel_model).exec(db).await?;
-
-        let parent = get_agent_by_id(db, parent_id).await?;
-        let coord_room_name = format!("coord-{}-{}", namespace, parent.name);
-        match rooms::create_room(
-            db,
-            &coord_room_name,
-            Some(&format!("Coordination room for {}", parent.name)),
-            None,
-        )
-        .await
-        {
-            Ok(room) => {
-                subscribe_to_room(db, &room.id, parent_id, None).await?;
-                subscribe_to_room(db, &room.id, &id, None).await?;
-            }
-            Err(NousError::Conflict(_)) => {
-                let room = rooms::get_room(db, &coord_room_name).await?;
-                subscribe_to_room(db, &room.id, &id, None).await?;
-            }
-            Err(e) => return Err(e),
-        }
+        setup_parent_child_relationship(db, &id, parent_id, &namespace).await?;
     }
 
     get_agent_by_id(db, &id).await
@@ -971,12 +982,14 @@ pub async fn instantiate_from_template(
         {
             processes::update_agent(
                 db,
-                &agent.id,
-                process_type,
-                spawn_command,
-                working_dir,
-                auto_restart,
-                None,
+                processes::UpdateAgentRequest {
+                    id: &agent.id,
+                    process_type,
+                    spawn_command,
+                    working_dir,
+                    auto_restart,
+                    metadata_json: None,
+                },
             )
             .await?;
         }

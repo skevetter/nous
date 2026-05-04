@@ -1,8 +1,9 @@
 mod common;
 
-use nous_core::agents::processes;
+use nous_core::agents::processes::{self, UpdateAgentRequest};
 use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::error::NousError;
+use nous_daemon::process_manager::InvokeParams;
 use nous_daemon::state::AppState;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -32,9 +33,19 @@ async fn register_agent_with_process_type(
     .unwrap();
 
     if let Some(pt) = process_type {
-        processes::update_agent(&state.pool, &agent.id, Some(pt), None, None, None, None)
-            .await
-            .unwrap();
+        processes::update_agent(
+            &state.pool,
+            UpdateAgentRequest {
+                id: &agent.id,
+                process_type: Some(pt),
+                spawn_command: None,
+                working_dir: None,
+                auto_restart: None,
+                metadata_json: None,
+            },
+        )
+        .await
+        .unwrap();
     }
 
     agent.id
@@ -49,7 +60,14 @@ async fn sync_claude_invoke_no_llm_client_returns_config_error() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     assert!(result.is_err());
@@ -69,7 +87,14 @@ async fn async_claude_invoke_no_llm_client_returns_config_error() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, true)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: true,
+        })
         .await;
 
     assert!(result.is_err());
@@ -89,7 +114,14 @@ async fn unsupported_process_type_returns_config_error() {
 
     let result = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     assert!(result.is_err());
@@ -109,7 +141,14 @@ async fn shell_invoke_completes_with_output() {
 
     let invocation = state
         .process_registry
-        .invoke(&state, &agent_id, "echo hello", Some(30), None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "echo hello",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: false,
+        })
         .await
         .unwrap();
 
@@ -130,7 +169,14 @@ async fn null_process_type_falls_back_to_shell() {
 
     let invocation = state
         .process_registry
-        .invoke(&state, &agent_id, "echo test", Some(30), None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "echo test",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: false,
+        })
         .await
         .unwrap();
 
@@ -152,7 +198,14 @@ async fn invocation_status_failed_on_claude_dispatch_error() {
 
     let _ = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     let invocations = processes::list_invocations(&state.pool, &agent_id, None, Some(1))
@@ -175,7 +228,14 @@ async fn invocation_status_failed_on_unsupported_process_type() {
 
     let _ = state
         .process_registry
-        .invoke(&state, &agent_id, "hello", None, None, false)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "hello",
+            timeout_secs: None,
+            metadata: None,
+            is_async: false,
+        })
         .await;
 
     let invocations = processes::list_invocations(&state.pool, &agent_id, None, Some(1))
@@ -201,7 +261,14 @@ async fn async_shell_invoke_returns_running_then_completes() {
 
     let invocation = state
         .process_registry
-        .invoke(&state, &agent_id, "echo async-ok", Some(30), None, true)
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "echo async-ok",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: true,
+        })
         .await
         .unwrap();
 
@@ -245,14 +312,14 @@ async fn real_bedrock_claude_invoke() {
 
     let invocation = state
         .process_registry
-        .invoke(
-            &state,
-            &agent_id,
-            "Respond with exactly: PONG",
-            Some(30),
-            None,
-            false,
-        )
+        .invoke(InvokeParams {
+            state: &state,
+            agent_id: &agent_id,
+            prompt: "Respond with exactly: PONG",
+            timeout_secs: Some(30),
+            metadata: None,
+            is_async: false,
+        })
         .await
         .unwrap();
 

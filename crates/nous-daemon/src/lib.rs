@@ -65,6 +65,13 @@ pub fn app_with_options(
 }
 
 fn protected_routes() -> Router<AppState> {
+    room_and_task_routes()
+        .merge(agent_routes())
+        .merge(memory_and_resource_routes())
+        .merge(schedule_and_mcp_routes())
+}
+
+fn room_and_task_routes() -> Router<AppState> {
     Router::new()
         .route("/rooms", post(routes::rooms::create))
         .route("/rooms", get(routes::rooms::list))
@@ -99,6 +106,10 @@ fn protected_routes() -> Router<AppState> {
             patch(routes::worktrees::update_status),
         )
         .route("/worktrees/{id}/archive", patch(routes::worktrees::archive))
+}
+
+fn agent_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/agents",
             post(routes::agents::register).get(routes::agents::list),
@@ -128,6 +139,10 @@ fn protected_routes() -> Router<AppState> {
         )
         .route("/templates/{id}", get(routes::agents::get_template))
         .route("/templates/instantiate", post(routes::agents::instantiate))
+}
+
+fn memory_and_resource_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/memories",
             post(routes::memory::save).get(routes::memory::context),
@@ -160,6 +175,10 @@ fn protected_routes() -> Router<AppState> {
             "/resources/{id}/heartbeat",
             patch(routes::resources::heartbeat),
         )
+}
+
+fn schedule_and_mcp_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/schedules",
             post(routes::schedules::create).get(routes::schedules::list),
@@ -845,9 +864,15 @@ mod tests {
         .await
         .unwrap();
 
-        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "blocked_by", None)
-            .await
-            .unwrap();
+        nous_core::tasks::link_tasks(nous_core::tasks::LinkTasksParams {
+            db: &state.pool,
+            source_id: &t1.id,
+            target_id: &t2.id,
+            link_type: "blocked_by",
+            actor_id: None,
+        })
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -906,9 +931,15 @@ mod tests {
         .await
         .unwrap();
 
-        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "related_to", None)
-            .await
-            .unwrap();
+        nous_core::tasks::link_tasks(nous_core::tasks::LinkTasksParams {
+            db: &state.pool,
+            source_id: &t1.id,
+            target_id: &t2.id,
+            link_type: "related_to",
+            actor_id: None,
+        })
+        .await
+        .unwrap();
 
         let app = app(state);
 
@@ -967,9 +998,15 @@ mod tests {
         .await
         .unwrap();
 
-        nous_core::tasks::link_tasks(&state.pool, &t1.id, &t2.id, "parent", None)
-            .await
-            .unwrap();
+        nous_core::tasks::link_tasks(nous_core::tasks::LinkTasksParams {
+            db: &state.pool,
+            source_id: &t1.id,
+            target_id: &t2.id,
+            link_type: "parent",
+            actor_id: None,
+        })
+        .await
+        .unwrap();
 
         let app = app(state);
 

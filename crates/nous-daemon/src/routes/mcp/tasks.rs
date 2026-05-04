@@ -7,6 +7,19 @@ use crate::state::AppState;
 use super::{require_str, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
+    let mut all = task_crud_schemas();
+    all.extend(task_template_schemas());
+    all.extend(task_batch_schemas());
+    all
+}
+
+fn task_crud_schemas() -> Vec<ToolSchema> {
+    let mut schemas = task_basic_schemas();
+    schemas.extend(task_link_schemas());
+    schemas
+}
+
+fn task_basic_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {
             name: "task_create",
@@ -77,6 +90,24 @@ pub fn schemas() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
+            name: "task_add_note",
+            description: "Add a note to a task's discussion room",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Task ID" },
+                    "sender_id": { "type": "string", "description": "Sender agent ID" },
+                    "content": { "type": "string", "description": "Note content" }
+                },
+                "required": ["id", "sender_id", "content"]
+            }),
+        },
+    ]
+}
+
+fn task_link_schemas() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
             name: "task_link",
             description: "Create a link between two tasks",
             input_schema: serde_json::json!({
@@ -111,19 +142,6 @@ pub fn schemas() -> Vec<ToolSchema> {
                     "id": { "type": "string", "description": "Task ID" }
                 },
                 "required": ["id"]
-            }),
-        },
-        ToolSchema {
-            name: "task_add_note",
-            description: "Add a note to a task's discussion room",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Task ID" },
-                    "sender_id": { "type": "string", "description": "Sender agent ID" },
-                    "content": { "type": "string", "description": "Note content" }
-                },
-                "required": ["id", "sender_id", "content"]
             }),
         },
         ToolSchema {
@@ -163,6 +181,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["task_id"]
             }),
         },
+    ]
+}
+
+fn task_template_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "task_template_create",
             description: "Create a reusable task template",
@@ -215,6 +238,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["template_id"]
             }),
         },
+    ]
+}
+
+fn task_batch_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "task_batch_close",
             description: "Batch close multiple tasks",
@@ -273,23 +301,78 @@ pub async fn dispatch(
     args: &Value,
     state: &AppState,
 ) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_task_crud(name, args, state).await {
+        return Some(r);
+    }
+    if let Some(r) = dispatch_task_templates(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_task_batch(name, args, state).await
+}
+
+async fn dispatch_task_crud(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_task_basic(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_task_links(name, args, state).await
+}
+
+async fn dispatch_task_basic(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
     match name {
         "task_create" => Some(handle_task_create(args, state).await),
         "task_list" => Some(handle_task_list(args, state).await),
         "task_get" => Some(handle_task_get(args, state).await),
         "task_update" => Some(handle_task_update(args, state).await),
         "task_close" => Some(handle_task_close(args, state).await),
+        "task_add_note" => Some(handle_task_add_note(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_task_links(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "task_link" => Some(handle_task_link(args, state).await),
         "task_unlink" => Some(handle_task_unlink(args, state).await),
         "task_list_links" => Some(handle_task_list_links(args, state).await),
-        "task_add_note" => Some(handle_task_add_note(args, state).await),
         "task_depends_add" => Some(handle_task_depends_add(args, state).await),
         "task_depends_remove" => Some(handle_task_depends_remove(args, state).await),
         "task_depends_list" => Some(handle_task_depends_list(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_task_templates(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "task_template_create" => Some(handle_task_template_create(args, state).await),
         "task_template_list" => Some(handle_task_template_list(args, state).await),
         "task_template_get" => Some(handle_task_template_get(args, state).await),
         "task_template_use" => Some(handle_task_template_use(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_task_batch(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "task_batch_close" => Some(handle_task_batch_close(args, state).await),
         "task_batch_update_status" => Some(handle_task_batch_update_status(args, state).await),
         "task_batch_assign" => Some(handle_task_batch_assign(args, state).await),
@@ -408,7 +491,14 @@ async fn handle_task_link(
     let source_id = require_str(args, "source_id")?;
     let target_id = require_str(args, "target_id")?;
     let link_type = require_str(args, "link_type")?;
-    let link = tasks::link_tasks(&state.pool, source_id, target_id, link_type, None).await?;
+    let link = tasks::link_tasks(tasks::LinkTasksParams {
+        db: &state.pool,
+        source_id,
+        target_id,
+        link_type,
+        actor_id: None,
+    })
+    .await?;
     Ok(serde_json::to_value(link).unwrap())
 }
 
@@ -419,7 +509,14 @@ async fn handle_task_unlink(
     let source_id = require_str(args, "source_id")?;
     let target_id = require_str(args, "target_id")?;
     let link_type = require_str(args, "link_type")?;
-    tasks::unlink_tasks(&state.pool, source_id, target_id, link_type, None).await?;
+    tasks::unlink_tasks(tasks::UnlinkTasksParams {
+        db: &state.pool,
+        source_id,
+        target_id,
+        link_type,
+        actor_id: None,
+    })
+    .await?;
     Ok(serde_json::json!({"unlinked": true}))
 }
 
@@ -496,15 +593,15 @@ async fn handle_task_template_create(
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         });
-    let tmpl = tasks::create_template(
-        &state.pool,
+    let tmpl = tasks::create_template(tasks::CreateTemplateParams {
+        db: &state.pool,
         name,
         title_pattern,
         description_template,
         default_priority,
-        default_labels.as_deref(),
-        checklist.as_deref(),
-    )
+        default_labels: default_labels.as_deref(),
+        checklist: checklist.as_deref(),
+    })
     .await?;
     Ok(serde_json::to_value(tmpl).unwrap())
 }
@@ -548,14 +645,14 @@ async fn handle_task_template_use(
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         });
-    let task = tasks::create_from_template(
-        &state.pool,
+    let task = tasks::create_from_template(tasks::CreateFromTemplateParams {
+        db: &state.pool,
         template_id,
-        title_vars.as_ref(),
-        description,
-        assignee_id,
-        labels.as_deref(),
-    )
+        title_vars: title_vars.as_ref(),
+        overrides_description: description,
+        overrides_assignee: assignee_id,
+        overrides_labels: labels.as_deref(),
+    })
     .await?;
     Ok(serde_json::to_value(task).unwrap())
 }

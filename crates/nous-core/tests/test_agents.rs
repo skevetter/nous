@@ -1,6 +1,6 @@
 mod common;
 
-use nous_core::agents::processes;
+use nous_core::agents::processes::{self, UpdateAgentRequest};
 use nous_core::agents::{
     self, AgentStatus, CreateTemplateRequest, InstantiateRequest,
     ListAgentsFilter, RecordVersionRequest, RegisterAgentRequest,
@@ -1129,9 +1129,19 @@ async fn test_process_type_claude_round_trip() {
 
     assert!(agent.process_type.is_none());
 
-    let updated = processes::update_agent(pool, &agent.id, Some("claude"), None, None, None, None)
-        .await
-        .unwrap();
+    let updated = processes::update_agent(
+        pool,
+        UpdateAgentRequest {
+            id: &agent.id,
+            process_type: Some("claude"),
+            spawn_command: None,
+            working_dir: None,
+            auto_restart: None,
+            metadata_json: None,
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(updated.process_type.as_deref(), Some("claude"));
 

@@ -189,7 +189,14 @@ async fn main() {
             region,
             profile,
         } => {
-            commands::mcp_server::run(tools, model, region, profile, port).await;
+            commands::mcp_server::run(commands::mcp_server::McpServerParams {
+                tools_filter: tools,
+                model,
+                region,
+                profile,
+                port,
+            })
+            .await;
         }
         Commands::Serve {
             model,
@@ -198,14 +205,30 @@ async fn main() {
             daemon,
             foreground_daemon,
         } => {
-            commands::serve::run(model, region, profile, port, daemon, foreground_daemon).await;
+            commands::serve::run(commands::serve::ServeParams {
+                model,
+                region,
+                profile,
+                port,
+                daemon,
+                foreground_daemon,
+            })
+            .await;
         }
         Commands::Start {
             model,
             region,
             profile,
         } => {
-            commands::serve::run(model, region, profile, port, true, false).await;
+            commands::serve::run(commands::serve::ServeParams {
+                model,
+                region,
+                profile,
+                port,
+                daemon: true,
+                foreground_daemon: false,
+            })
+            .await;
         }
         Commands::Reload => {
             commands::reload::run();
