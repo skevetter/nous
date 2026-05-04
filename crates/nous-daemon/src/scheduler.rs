@@ -33,7 +33,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             max_concurrent: 4,
-            allow_shell: true,
+            allow_shell: false,
             default_timeout_secs: 300,
             auth_configured: false,
         }

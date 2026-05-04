@@ -14,7 +14,7 @@ pub fn sanitize_fts5_query(query: &str) -> String {
                     matches!(
                         c,
                         '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+' | '(' | ')' | '*'
-                            | '^'
+                            | '^' | '?'
                     )
                 })
             {
@@ -136,6 +136,11 @@ mod tests {
         assert_eq!(sanitize_fts5_query("foo and bar"), "foo \"and\" bar");
         assert_eq!(sanitize_fts5_query("foo Or bar"), "foo \"Or\" bar");
         assert_eq!(sanitize_fts5_query("not foo"), "\"not\" foo");
+    }
+
+    #[test]
+    fn question_mark_quoted() {
+        assert_eq!(sanitize_fts5_query("what?"), "\"what?\"");
     }
 
     #[test]
