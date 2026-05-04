@@ -137,13 +137,17 @@ impl ToolExecutor {
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         if serialized.len() > max_bytes {
-            let truncated = &serialized[..max_bytes];
+            let mut end = max_bytes;
+            while end > 0 && !serialized.is_char_boundary(end) {
+                end -= 1;
+            }
+            let truncated = &serialized[..end];
             Ok(ToolOutput {
                 content: vec![ToolContent::Text {
                     text: format!(
                         "{}\n\n[Output truncated at {} bytes. Total: {} bytes]",
                         truncated,
-                        max_bytes,
+                        end,
                         serialized.len()
                     ),
                 }],
@@ -314,5 +318,78 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ToolError::NotFound(_))));
+    }
+
+    fn make_output(text: &str) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            content: vec![ToolContent::Text {
+                text: text.to_string(),
+            }],
+            metadata: None,
+        })
+    }
+
+    #[test]
+    fn capture_output_no_truncation() {
+        let registry = ToolRegistry::new();
+        let executor = ToolExecutor::new(Arc::new(registry));
+        let result = executor.capture_output(make_output("short"), 10_000);
+        let output = result.unwrap();
+        if let ToolContent::Text { ref text } = output.content[0] {
+            assert!(!text.contains("[Output truncated"));
+        }
+    }
+
+    #[test]
+    fn capture_output_emoji_no_panic() {
+        let registry = ToolRegistry::new();
+        let executor = ToolExecutor::new(Arc::new(registry));
+        let emoji_text = "🦀".repeat(500);
+        let result = executor.capture_output(make_output(&emoji_text), 100);
+        let output = result.unwrap();
+        if let ToolContent::Text { ref text } = output.content[0] {
+            assert!(text.contains("[Output truncated at 100 bytes"));
+        } else {
+            panic!("expected Text content");
+        }
+    }
+
+    #[test]
+    fn capture_output_cjk_no_panic() {
+        let registry = ToolRegistry::new();
+        let executor = ToolExecutor::new(Arc::new(registry));
+        let cjk_text = "漢字".repeat(500);
+        let result = executor.capture_output(make_output(&cjk_text), 200);
+        let output = result.unwrap();
+        if let ToolContent::Text { ref text } = output.content[0] {
+            assert!(text.contains("[Output truncated at 200 bytes"));
+        } else {
+            panic!("expected Text content");
+        }
+    }
+
+    #[test]
+    fn capture_output_mixed_multibyte_no_panic() {
+        let registry = ToolRegistry::new();
+        let executor = ToolExecutor::new(Arc::new(registry));
+        let mixed = format!("{}🎉{}", "a".repeat(50), "漢".repeat(100));
+        let result = executor.capture_output(make_output(&mixed), 80);
+        let output = result.unwrap();
+        if let ToolContent::Text { ref text } = output.content[0] {
+            assert!(text.contains("[Output truncated at 80 bytes"));
+        } else {
+            panic!("expected Text content");
+        }
+    }
+
+    #[test]
+    fn capture_output_empty_string() {
+        let registry = ToolRegistry::new();
+        let executor = ToolExecutor::new(Arc::new(registry));
+        let result = executor.capture_output(make_output(""), 10_000);
+        let output = result.unwrap();
+        if let ToolContent::Text { ref text } = output.content[0] {
+            assert!(!text.contains("[Output truncated"));
+        }
     }
 }
