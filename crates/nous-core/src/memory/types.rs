@@ -349,8 +349,14 @@ pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
 
 pub(crate) fn truncate_title(s: &str) -> String {
     let first_line = s.lines().next().unwrap_or(s);
-    if first_line.len() > 80 {
-        format!("{}...", &first_line[..77])
+    let char_count = first_line.chars().count();
+    if char_count > 80 {
+        let end = first_line
+            .char_indices()
+            .nth(77)
+            .map(|(i, _)| i)
+            .unwrap_or(first_line.len());
+        format!("{}...", &first_line[..end])
     } else {
         first_line.to_string()
     }
@@ -403,5 +409,61 @@ mod tests {
     fn detect_current_project_returns_none_for_no_markers() {
         let project = detect_current_project("/tmp");
         let _ = project;
+    }
+
+    #[test]
+    fn truncate_title_ascii_short() {
+        assert_eq!(truncate_title("hello world"), "hello world");
+    }
+
+    #[test]
+    fn truncate_title_empty() {
+        assert_eq!(truncate_title(""), "");
+    }
+
+    #[test]
+    fn truncate_title_ascii_exactly_80() {
+        let s = "a".repeat(80);
+        assert_eq!(truncate_title(&s), s);
+    }
+
+    #[test]
+    fn truncate_title_ascii_over_80() {
+        let s = "a".repeat(100);
+        let expected = format!("{}...", "a".repeat(77));
+        assert_eq!(truncate_title(&s), expected);
+    }
+
+    #[test]
+    fn truncate_title_emoji_short() {
+        assert_eq!(truncate_title("🦀🎉🚀"), "🦀🎉🚀");
+    }
+
+    #[test]
+    fn truncate_title_emoji_over_80() {
+        let s = "🦀".repeat(81);
+        let expected = format!("{}...", "🦀".repeat(77));
+        assert_eq!(truncate_title(&s), expected);
+    }
+
+    #[test]
+    fn truncate_title_cjk_over_80() {
+        let s = "漢".repeat(81);
+        let expected = format!("{}...", "漢".repeat(77));
+        assert_eq!(truncate_title(&s), expected);
+    }
+
+    #[test]
+    fn truncate_title_mixed_multibyte() {
+        let s = format!("{}{}{}", "a".repeat(40), "🦀".repeat(20), "漢".repeat(21));
+        let result = truncate_title(&s);
+        assert!(result.ends_with("..."));
+        let without_dots = &result[..result.len() - 3];
+        assert_eq!(without_dots.chars().count(), 77);
+    }
+
+    #[test]
+    fn truncate_title_multiline() {
+        assert_eq!(truncate_title("first line\nsecond line"), "first line");
     }
 }
