@@ -34,6 +34,7 @@ mod m031_schedule_timestamps_iso;
 mod m032_add_agent_fk_constraints;
 mod m033_drop_deprecated_tables;
 mod m034_add_fk_indexes;
+mod m035_restore_agent_type;
 
 pub struct Migrator;
 
@@ -75,6 +76,7 @@ impl MigratorTrait for Migrator {
             Box::new(m032_add_agent_fk_constraints::Migration),
             Box::new(m033_drop_deprecated_tables::Migration),
             Box::new(m034_add_fk_indexes::Migration),
+            Box::new(m035_restore_agent_type::Migration),
         ]
     }
 }

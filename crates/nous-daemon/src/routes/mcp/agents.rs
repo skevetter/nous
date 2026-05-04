@@ -487,6 +487,10 @@ async fn handle_register(
         .get("parent_id")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let agent_type = args
+        .get("agent_type")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let namespace = args
         .get("namespace")
         .and_then(|v| v.as_str())
@@ -506,6 +510,7 @@ async fn handle_register(
         agents::RegisterAgentRequest {
             name,
             parent_id,
+            agent_type,
             namespace,
             room,
             metadata,

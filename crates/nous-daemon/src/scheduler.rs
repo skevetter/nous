@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use nous_core::error::NousError;
 use nous_core::schedules::{
-    advance_next_run_at, list_due_schedules, mark_stale_runs_failed, record_run,
-    update_schedule, Clock, RecordRunParams, Schedule, UpdateScheduleParams,
+    advance_next_run_at, list_due_schedules, mark_stale_runs_failed, record_run, update_schedule,
+    Clock, RecordRunParams, Schedule, UpdateScheduleParams,
 };
 
 use crate::routes::mcp;
@@ -22,6 +22,10 @@ pub struct SchedulerConfig {
     pub max_concurrent: usize,
     pub allow_shell: bool,
     pub default_timeout_secs: u64,
+    /// When true, an API key is configured and the daemon authenticates callers.
+    /// Shell and HTTP actions are only permitted when this is true — without auth,
+    /// those actions would allow unauthenticated remote code execution.
+    pub auth_configured: bool,
 }
 
 impl Default for SchedulerConfig {
@@ -30,6 +34,7 @@ impl Default for SchedulerConfig {
             max_concurrent: 4,
             allow_shell: true,
             default_timeout_secs: 300,
+            auth_configured: false,
         }
     }
 }
@@ -108,9 +113,9 @@ async fn run_loop(
             let schedule_id = schedule.id.clone();
             let schedule_name = schedule.name.clone();
             tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(
-                    execute_schedule(&state, &schedule, &config, &clock),
-                );
+                let result = std::panic::AssertUnwindSafe(execute_schedule(
+                    &state, &schedule, &config, &clock,
+                ));
                 let outcome = futures::FutureExt::catch_unwind(result).await;
                 if let Err(panic_info) = outcome {
                     let msg = panic_info
@@ -279,11 +284,22 @@ struct DispatchResult {
     exit_code: Option<i32>,
 }
 
+fn require_auth_for_action(action_type: &str, config: &SchedulerConfig) -> Result<(), NousError> {
+    if matches!(action_type, "shell" | "http") && !config.auth_configured {
+        return Err(NousError::Validation(format!(
+            "{action_type} actions require API key authentication to be configured"
+        )));
+    }
+    Ok(())
+}
+
 async fn dispatch_action(
     state: &AppState,
     schedule: &Schedule,
     config: &SchedulerConfig,
 ) -> Result<String, NousError> {
+    require_auth_for_action(&schedule.action_type, config)?;
+
     match schedule.action_type.as_str() {
         "mcp_tool" => dispatch_mcp_tool(state, &schedule.action_payload).await,
         "shell" => dispatch_shell(&schedule.action_payload, config).await,

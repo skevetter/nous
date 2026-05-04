@@ -20,6 +20,7 @@ async fn test_register_agent() {
         pool,
         RegisterAgentRequest {
             name: "test-director".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("test-ns".into()),
             room: Some("test-room".into()),
@@ -48,6 +49,7 @@ async fn test_register_agent_with_parent() {
         pool,
         RegisterAgentRequest {
             name: "director".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("ns1".into()),
             room: None,
@@ -62,6 +64,7 @@ async fn test_register_agent_with_parent() {
         pool,
         RegisterAgentRequest {
             name: "manager".into(),
+            agent_type: None,
             parent_id: Some(director.id.clone()),
             namespace: Some("ns1".into()),
             room: None,
@@ -89,6 +92,7 @@ async fn test_register_agent_cross_namespace_parent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "parent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("ns-a".into()),
             room: None,
@@ -103,6 +107,7 @@ async fn test_register_agent_cross_namespace_parent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "child".into(),
+            agent_type: None,
             parent_id: Some(parent.id.clone()),
             namespace: Some("ns-b".into()),
             room: None,
@@ -128,6 +133,7 @@ async fn test_lookup_agent() {
         pool,
         RegisterAgentRequest {
             name: "lookup-me".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -158,6 +164,7 @@ async fn test_list_agents_with_filters() {
         pool,
         RegisterAgentRequest {
             name: "eng-1".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("ns".into()),
             room: None,
@@ -172,6 +179,7 @@ async fn test_list_agents_with_filters() {
         pool,
         RegisterAgentRequest {
             name: "mgr-1".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("ns".into()),
             room: None,
@@ -218,6 +226,7 @@ async fn test_deregister_agent_no_children() {
         pool,
         RegisterAgentRequest {
             name: "solo".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -248,6 +257,7 @@ async fn test_deregister_agent_with_children_no_cascade_fails() {
         pool,
         RegisterAgentRequest {
             name: "parent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -262,6 +272,7 @@ async fn test_deregister_agent_with_children_no_cascade_fails() {
         pool,
         RegisterAgentRequest {
             name: "child".into(),
+            agent_type: None,
             parent_id: Some(parent.id.clone()),
             namespace: None,
             room: None,
@@ -288,6 +299,7 @@ async fn test_deregister_agent_cascade() {
         pool,
         RegisterAgentRequest {
             name: "cascade-parent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -302,6 +314,7 @@ async fn test_deregister_agent_cascade() {
         pool,
         RegisterAgentRequest {
             name: "cascade-child".into(),
+            agent_type: None,
             parent_id: Some(parent.id.clone()),
             namespace: None,
             room: None,
@@ -332,6 +345,7 @@ async fn test_heartbeat() {
         pool,
         RegisterAgentRequest {
             name: "heartbeat-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -364,6 +378,7 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "dir".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("tree-ns".into()),
             room: None,
@@ -378,6 +393,7 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "mgr".into(),
+            agent_type: None,
             parent_id: Some(director.id.clone()),
             namespace: Some("tree-ns".into()),
             room: None,
@@ -392,6 +408,7 @@ async fn test_list_children_and_ancestors() {
         pool,
         RegisterAgentRequest {
             name: "eng".into(),
+            agent_type: None,
             parent_id: Some(manager.id.clone()),
             namespace: Some("tree-ns".into()),
             room: None,
@@ -427,6 +444,7 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "root".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("tree".into()),
             room: None,
@@ -441,6 +459,7 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "leaf-a".into(),
+            agent_type: None,
             parent_id: Some(root.id.clone()),
             namespace: Some("tree".into()),
             room: None,
@@ -455,6 +474,7 @@ async fn test_get_tree() {
         pool,
         RegisterAgentRequest {
             name: "leaf-b".into(),
+            agent_type: None,
             parent_id: Some(root.id.clone()),
             namespace: Some("tree".into()),
             room: None,
@@ -482,6 +502,7 @@ async fn test_search_agents() {
         pool,
         RegisterAgentRequest {
             name: "alpha-engineer".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("search-ns".into()),
             room: None,
@@ -496,6 +517,7 @@ async fn test_search_agents() {
         pool,
         RegisterAgentRequest {
             name: "beta-manager".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("search-ns".into()),
             room: None,
@@ -529,6 +551,7 @@ async fn test_unique_name_namespace_constraint() {
         pool,
         RegisterAgentRequest {
             name: "unique-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("uniq".into()),
             room: None,
@@ -543,6 +566,7 @@ async fn test_unique_name_namespace_constraint() {
         pool,
         RegisterAgentRequest {
             name: "unique-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("uniq".into()),
             room: None,
@@ -566,6 +590,7 @@ async fn test_update_agent_status() {
         pool,
         RegisterAgentRequest {
             name: "status-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -595,6 +620,7 @@ async fn test_record_and_list_versions() {
         pool,
         RegisterAgentRequest {
             name: "versioned-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -657,6 +683,7 @@ async fn test_inspect_agent() {
         pool,
         RegisterAgentRequest {
             name: "inspectable".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -702,6 +729,7 @@ async fn test_rollback_agent() {
         pool,
         RegisterAgentRequest {
             name: "rollback-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -759,6 +787,7 @@ async fn test_rollback_wrong_agent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "agent-a".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -773,6 +802,7 @@ async fn test_rollback_wrong_agent_rejected() {
         pool,
         RegisterAgentRequest {
             name: "agent-b".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -811,6 +841,7 @@ async fn test_upgrade_available_flag() {
         pool,
         RegisterAgentRequest {
             name: "upgrade-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1016,6 +1047,7 @@ async fn test_versions_cascade_on_agent_delete() {
         pool,
         RegisterAgentRequest {
             name: "cascade-v".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1057,6 +1089,7 @@ async fn test_agent_new_fields_default() {
         pool,
         RegisterAgentRequest {
             name: "default-fields".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1083,6 +1116,7 @@ async fn test_process_type_claude_round_trip() {
         pool,
         RegisterAgentRequest {
             name: "claude-rt".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1103,6 +1137,82 @@ async fn test_process_type_claude_round_trip() {
 
     let fetched = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
     assert_eq!(fetched.process_type.as_deref(), Some("claude"));
+
+    pools.close().await;
+}
+
+#[tokio::test]
+async fn test_agent_type_round_trip() {
+    let (pools, _dir) = setup().await;
+    let pool = &pools.fts;
+
+    let agent = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "typed-engineer".into(),
+            agent_type: Some("engineer".into()),
+            parent_id: None,
+            namespace: Some("type-ns".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(agent.agent_type, "engineer");
+
+    let manager = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "typed-manager".into(),
+            agent_type: Some("manager".into()),
+            parent_id: None,
+            namespace: Some("type-ns".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(manager.agent_type, "manager");
+
+    // Default agent_type should be "engineer"
+    let default = agents::register_agent(
+        pool,
+        RegisterAgentRequest {
+            name: "default-type".into(),
+            agent_type: None,
+            parent_id: None,
+            namespace: Some("type-ns".into()),
+            room: None,
+            metadata: None,
+            status: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(default.agent_type, "engineer");
+
+    // Verify lookup round-trip
+    let fetched = agents::get_agent_by_id(pool, &agent.id).await.unwrap();
+    assert_eq!(fetched.agent_type, "engineer");
+
+    // Verify list round-trip
+    let all = agents::list_agents(
+        pool,
+        &ListAgentsFilter {
+            namespace: Some("type-ns".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(all.iter().all(|a| !a.agent_type.is_empty()));
 
     pools.close().await;
 }

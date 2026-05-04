@@ -102,6 +102,7 @@ async fn test_schedule_fires_at_correct_time() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
@@ -147,6 +148,7 @@ async fn test_once_schedule_fires_and_disables() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
@@ -208,6 +210,7 @@ async fn test_disabled_schedule_does_not_fire() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle_no_run(&state, config, &clock, &shutdown).await;
@@ -244,6 +247,7 @@ async fn test_failed_action_recorded() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
@@ -288,6 +292,7 @@ async fn test_shell_timeout() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
@@ -332,6 +337,7 @@ async fn test_desired_outcome_mismatch() {
 
     let config = SchedulerConfig {
         allow_shell: true,
+        auth_configured: true,
         ..Default::default()
     };
     run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
@@ -351,5 +357,192 @@ async fn test_desired_outcome_mismatch() {
             .unwrap_or("")
             .contains("desired outcome"),
         "expected desired outcome mismatch error"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_shell_rejected_without_auth() {
+    let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
+
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "shell-no-auth",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo hello"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
+    .await
+    .unwrap();
+
+    clock.advance(120);
+
+    let config = SchedulerConfig {
+        allow_shell: true,
+        auth_configured: false,
+        ..Default::default()
+    };
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
+
+    let runs = list_runs(&state.pool, &schedule.id, None, None)
+        .await
+        .unwrap();
+    assert!(
+        !runs.is_empty(),
+        "expected a run recorded for rejected shell"
+    );
+    assert_eq!(runs[0].status, "failed");
+    assert!(
+        runs[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("require API key authentication"),
+        "expected auth required error, got: {:?}",
+        runs[0].error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_http_rejected_without_auth() {
+    let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
+
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "http-no-auth",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "http",
+        action_payload: r#"{"method": "GET", "url": "http://localhost:1/noop"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
+    .await
+    .unwrap();
+
+    clock.advance(120);
+
+    let config = SchedulerConfig {
+        allow_shell: true,
+        auth_configured: false,
+        ..Default::default()
+    };
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
+
+    let runs = list_runs(&state.pool, &schedule.id, None, None)
+        .await
+        .unwrap();
+    assert!(
+        !runs.is_empty(),
+        "expected a run recorded for rejected http"
+    );
+    assert_eq!(runs[0].status, "failed");
+    assert!(
+        runs[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("require API key authentication"),
+        "expected auth required error, got: {:?}",
+        runs[0].error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_shell_accepted_with_auth() {
+    let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
+
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "shell-with-auth",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "shell",
+        action_payload: r#"{"command": "echo authed"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
+    .await
+    .unwrap();
+
+    clock.advance(120);
+
+    let config = SchedulerConfig {
+        allow_shell: true,
+        auth_configured: true,
+        ..Default::default()
+    };
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
+
+    let runs = list_runs(&state.pool, &schedule.id, None, None)
+        .await
+        .unwrap();
+    assert!(!runs.is_empty(), "expected a run recorded for authed shell");
+    assert_eq!(runs[0].status, "completed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_http_accepted_with_auth() {
+    let (state, clock, shutdown, _tmp) = setup(BASE_TS).await;
+
+    let schedule = create_schedule(CreateScheduleParams {
+        db: &state.pool,
+        name: "http-with-auth",
+        cron_expr: "* * * * *",
+        trigger_at: None,
+        timezone: None,
+        action_type: "http",
+        action_payload: r#"{"method": "GET", "url": "http://localhost:1/noop"}"#,
+        desired_outcome: None,
+        max_retries: Some(0),
+        timeout_secs: None,
+        max_output_bytes: None,
+        max_runs: None,
+        clock: &*clock,
+    })
+    .await
+    .unwrap();
+
+    clock.advance(120);
+
+    let config = SchedulerConfig {
+        allow_shell: true,
+        auth_configured: true,
+        ..Default::default()
+    };
+    run_scheduler_cycle(&state, config, &clock, &shutdown, &schedule.id).await;
+
+    let runs = list_runs(&state.pool, &schedule.id, None, None)
+        .await
+        .unwrap();
+    assert!(!runs.is_empty(), "expected a run recorded for authed http");
+    // HTTP action will fail (no server at localhost:1) but NOT with an auth error —
+    // it should be a connection error, proving the auth gate passed.
+    assert_eq!(runs[0].status, "failed");
+    assert!(
+        !runs[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("require API key authentication"),
+        "should not get auth error when auth is configured, got: {:?}",
+        runs[0].error
     );
 }
