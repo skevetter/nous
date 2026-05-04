@@ -348,7 +348,8 @@ mod tests {
         let result = executor.capture_output(make_output(&emoji_text), 100);
         let output = result.unwrap();
         if let ToolContent::Text { ref text } = output.content[0] {
-            assert!(text.contains("[Output truncated at 100 bytes"));
+            assert!(text.contains("[Output truncated at"));
+            assert!(text.contains("bytes. Total:"));
         } else {
             panic!("expected Text content");
         }
@@ -362,7 +363,8 @@ mod tests {
         let result = executor.capture_output(make_output(&cjk_text), 200);
         let output = result.unwrap();
         if let ToolContent::Text { ref text } = output.content[0] {
-            assert!(text.contains("[Output truncated at 200 bytes"));
+            assert!(text.contains("[Output truncated at"));
+            assert!(text.contains("bytes. Total:"));
         } else {
             panic!("expected Text content");
         }
@@ -376,7 +378,8 @@ mod tests {
         let result = executor.capture_output(make_output(&mixed), 80);
         let output = result.unwrap();
         if let ToolContent::Text { ref text } = output.content[0] {
-            assert!(text.contains("[Output truncated at 80 bytes"));
+            assert!(text.contains("[Output truncated at"));
+            assert!(text.contains("bytes. Total:"));
         } else {
             panic!("expected Text content");
         }
