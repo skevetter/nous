@@ -10,14 +10,30 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
             | [172, 16..=31, ..]
             | [192, 168, ..]
             | [169, 254, ..]
+            | [100, 64..=127, ..]
     )
 }
 
 fn is_private_ipv6(ip: Ipv6Addr) -> bool {
-    ip.is_loopback()                                     // ::1
-        || ip.is_unspecified()                           // ::
-        || matches!(ip.segments()[0], 0xfc00..=0xfdff)   // fc00::/7 unique local
-        || matches!(ip.segments()[0], 0xfe80..=0xfebf) // fe80::/10 link-local
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return is_private_ipv4(mapped);
+    }
+    let segments = ip.segments();
+    if segments[..6] == [0, 0, 0, 0, 0, 0] {
+        let ipv4 = Ipv4Addr::new(
+            (segments[6] >> 8) as u8,
+            segments[6] as u8,
+            (segments[7] >> 8) as u8,
+            segments[7] as u8,
+        );
+        if is_private_ipv4(ipv4) {
+            return true;
+        }
+    }
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || matches!(segments[0], 0xfc00..=0xfdff)
+        || matches!(segments[0], 0xfe80..=0xfebf)
 }
 
 fn is_private_ip(ip: IpAddr) -> bool {
@@ -57,6 +73,9 @@ pub fn validate_url(url: &str) -> Result<(), NousError> {
         return Ok(());
     }
 
+    // Note: DNS rebinding attacks where a hostname resolves to a private IP between
+    // validation and use are mitigated by checking resolved IPs, but TOCTOU remains
+    // if the resolver cache expires between check and connect.
     let port = parsed.port_or_known_default().unwrap_or(80);
     let socket_addr = format!("{host}:{port}");
     let resolved: Vec<_> = socket_addr
@@ -169,6 +188,18 @@ mod tests {
     #[test]
     fn rejects_zero_network() {
         let err = validate_url("http://0.0.0.0/").unwrap_err();
+        assert!(err.to_string().contains("private IP"));
+    }
+
+    #[test]
+    fn rejects_ipv4_mapped_ipv6_loopback() {
+        let err = validate_url("http://[::ffff:127.0.0.1]/admin").unwrap_err();
+        assert!(err.to_string().contains("private IP"));
+    }
+
+    #[test]
+    fn rejects_cgnat_range() {
+        let err = validate_url("http://100.64.0.1/internal").unwrap_err();
         assert!(err.to_string().contains("private IP"));
     }
 }
