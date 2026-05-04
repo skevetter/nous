@@ -17,7 +17,9 @@ fn check_network_permission(url: &str, ctx: &ToolContext) -> Result<(), ToolErro
 
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| ToolError::InvalidArgs(format!("invalid URL: {e}")))?;
-    let host = parsed.host_str().unwrap_or("");
+    let host = parsed.host_str().ok_or_else(|| {
+        ToolError::InvalidArgs("URL has no host".into())
+    })?;
 
     if net_perm.denied_hosts.iter().any(|d| d == host) {
         return Err(ToolError::PermissionDenied(format!(
@@ -25,9 +27,7 @@ fn check_network_permission(url: &str, ctx: &ToolContext) -> Result<(), ToolErro
         )));
     }
 
-    if !net_perm.allowed_hosts.is_empty()
-        && !net_perm.allowed_hosts.iter().any(|a| a == host || a == "*")
-    {
+    if !net_perm.allowed_hosts.iter().any(|a| a == host || a == "*") {
         return Err(ToolError::PermissionDenied(format!(
             "network access denied: host '{host}' is not in the allowed list"
         )));
