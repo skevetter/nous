@@ -7,6 +7,7 @@ pub mod error;
 pub mod fts;
 pub mod memory;
 pub mod messages;
+pub mod net;
 pub mod notifications;
 pub mod resources;
 pub mod rooms;
