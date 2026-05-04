@@ -1208,6 +1208,7 @@ async fn e2e_agent_heartbeat() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "hb-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -1385,6 +1386,7 @@ async fn mcp_agent_tree_children_ancestors() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-dir".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("mcp-tree".into()),
             room: None,
@@ -1399,6 +1401,7 @@ async fn mcp_agent_tree_children_ancestors() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-eng".into(),
+            agent_type: None,
             parent_id: Some(dir.id.clone()),
             namespace: Some("mcp-tree".into()),
             room: None,
@@ -1693,6 +1696,7 @@ async fn mcp_agent_bulk_deregister() {
             &state.pool,
             nous_core::agents::RegisterAgentRequest {
                 name: name.into(),
+            agent_type: None,
                 parent_id: None,
                 namespace: Some("bulk-ns".into()),
                 room: None,
@@ -2023,6 +2027,7 @@ async fn sandbox_spawn_creates_entry_in_manager() {
         &state.pool,
         RegisterAgentRequest {
             name: "sandbox-test-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -2082,6 +2087,7 @@ async fn e2e_resource_register_list_get_archive_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "res-owner".into(),
+            agent_type: None,
             namespace: None,
             parent_id: None,
             room: None,
@@ -2261,6 +2267,7 @@ async fn mcp_resource_register_list_deregister() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "mcp-res-owner".into(),
+            agent_type: None,
             namespace: None,
             parent_id: None,
             room: None,

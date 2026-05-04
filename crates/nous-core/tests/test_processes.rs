@@ -18,6 +18,7 @@ async fn create_test_agent(db: &sea_orm::DatabaseConnection, name: &str) -> Stri
         db,
         RegisterAgentRequest {
             name: name.into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,

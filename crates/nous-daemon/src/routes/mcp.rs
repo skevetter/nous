@@ -1846,6 +1846,10 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(String::from);
             let room = args.get("room").and_then(|v| v.as_str()).map(String::from);
+            let agent_type = args
+                .get("agent_type")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let metadata = args
                 .get("metadata")
                 .and_then(|v| v.as_str())
@@ -1859,6 +1863,7 @@ pub async fn dispatch(
                 &state.pool,
                 agents::RegisterAgentRequest {
                     name,
+                    agent_type,
                     parent_id,
                     namespace,
                     room,

@@ -104,17 +104,6 @@ async fn main() {
         sandbox_manager: None,
     };
 
-    let scheduler_handle = Scheduler::spawn(
-        state.clone(),
-        SchedulerConfig {
-            max_concurrent: config.scheduler.max_concurrent,
-            allow_shell: config.scheduler.allow_shell,
-            default_timeout_secs: config.scheduler.default_timeout_secs,
-        },
-        Arc::new(SystemClock),
-        shutdown.clone(),
-    );
-
     let api_key = config.resolve_api_key();
     if api_key.is_some() {
         tracing::info!("API key authentication enabled");
@@ -122,18 +111,35 @@ async fn main() {
         tracing::warn!("no API key configured — all endpoints are publicly accessible");
     }
 
+    let scheduler_handle = Scheduler::spawn(
+        state.clone(),
+        SchedulerConfig {
+            max_concurrent: config.scheduler.max_concurrent,
+            allow_shell: config.scheduler.allow_shell,
+            default_timeout_secs: config.scheduler.default_timeout_secs,
+            auth_configured: api_key.is_some(),
+        },
+        Arc::new(SystemClock),
+        shutdown.clone(),
+    );
+
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr)
         .await
         .expect("failed to bind TCP listener");
-    tracing::info!("listening on {}", listener.local_addr().expect("listener has no local address"));
+    tracing::info!(
+        "listening on {}",
+        listener
+            .local_addr()
+            .expect("listener has no local address")
+    );
     axum::serve(
         listener,
         nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref()),
     )
-        .with_graceful_shutdown(async move { shutdown.cancelled().await })
-        .await
-        .expect("axum server exited with error");
+    .with_graceful_shutdown(async move { shutdown.cancelled().await })
+    .await
+    .expect("axum server exited with error");
 
     scheduler_handle.await.expect("scheduler task panicked");
 }

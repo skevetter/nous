@@ -77,6 +77,7 @@ impl std::str::FromStr for AgentStatus {
 pub struct Agent {
     pub id: String,
     pub name: String,
+    pub agent_type: String,
     pub parent_agent_id: Option<String>,
     pub namespace: String,
     pub status: String,
@@ -99,6 +100,7 @@ impl Agent {
         Self {
             id: m.id,
             name: m.name,
+            agent_type: m.agent_type,
             parent_agent_id: m.parent_agent_id,
             namespace: m.namespace,
             status: m.status,
@@ -121,6 +123,7 @@ impl Agent {
         Ok(Self {
             id: row.try_get_by("id")?,
             name: row.try_get_by("name")?,
+            agent_type: row.try_get_by("agent_type")?,
             parent_agent_id: row.try_get_by("parent_agent_id")?,
             namespace: row.try_get_by("namespace")?,
             status: row.try_get_by("status")?,
@@ -153,6 +156,7 @@ pub struct TreeNode {
 pub struct RegisterAgentRequest {
     pub name: String,
     pub parent_id: Option<String>,
+    pub agent_type: Option<String>,
     pub namespace: Option<String>,
     pub room: Option<String>,
     pub metadata: Option<String>,
@@ -178,6 +182,7 @@ pub async fn register_agent(
     }
 
     let namespace = req.namespace.unwrap_or_else(|| "default".to_string());
+    let agent_type = req.agent_type.unwrap_or_else(|| "engineer".to_string());
     let status = req.status.unwrap_or(AgentStatus::Active);
     let id = Uuid::now_v7().to_string();
 
@@ -193,6 +198,7 @@ pub async fn register_agent(
     let model = agent_entity::ActiveModel {
         id: Set(id.clone()),
         name: Set(req.name.trim().to_string()),
+        agent_type: Set(agent_type),
         parent_agent_id: Set(req.parent_id.clone()),
         namespace: Set(namespace.clone()),
         status: Set(status.as_str().to_string()),
@@ -927,6 +933,7 @@ pub async fn instantiate_from_template(
         db,
         RegisterAgentRequest {
             name,
+            agent_type: None,
             parent_id: req.parent_id,
             namespace: req.namespace,
             room: None,
