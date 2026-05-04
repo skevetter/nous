@@ -40,7 +40,9 @@ pub fn validate_embedding_dimensions(
     match read_vec_dimension(vec_pool)? {
         None => Ok(()),
         Some(stored_dim) => {
-            if stored_dim != config.dimensions {
+            if stored_dim == config.dimensions {
+                Ok(())
+            } else {
                 Err(NousError::Config(format!(
                     "embedding dimension mismatch: vec0 table expects float[{stored_dim}] \
                      but configured provider '{}' uses {} dimensions. \
@@ -52,8 +54,6 @@ pub fn validate_embedding_dimensions(
                     },
                     config.dimensions,
                 )))
-            } else {
-                Ok(())
             }
         }
     }
