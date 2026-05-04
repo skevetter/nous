@@ -7,7 +7,10 @@ pub fn sanitize_fts5_query(query: &str) -> String {
     let tokens: Vec<String> = query
         .split_whitespace()
         .map(|token| {
-            if token.chars().any(|c| {
+            let upper = token.to_uppercase();
+            if matches!(upper.as_str(), "AND" | "OR" | "NOT" | "NEAR") {
+                format!("\"{}\"", token)
+            } else if token.chars().any(|c| {
                 matches!(
                     c,
                     '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+' | '(' | ')' | '*' | '^'
@@ -104,5 +107,39 @@ mod tests {
     #[test]
     fn special_token_with_embedded_quotes() {
         assert_eq!(sanitize_fts5_query("pre-\"fix\""), "\"pre-fix\"");
+    }
+
+    #[test]
+    fn and_operator_quoted() {
+        assert_eq!(sanitize_fts5_query("foo AND bar"), "foo \"AND\" bar");
+    }
+
+    #[test]
+    fn or_operator_quoted() {
+        assert_eq!(sanitize_fts5_query("foo OR bar"), "foo \"OR\" bar");
+    }
+
+    #[test]
+    fn not_operator_quoted() {
+        assert_eq!(sanitize_fts5_query("NOT foo"), "\"NOT\" foo");
+    }
+
+    #[test]
+    fn near_operator_quoted() {
+        assert_eq!(sanitize_fts5_query("foo NEAR bar"), "foo \"NEAR\" bar");
+    }
+
+    #[test]
+    fn case_insensitive_operators() {
+        assert_eq!(sanitize_fts5_query("foo and bar"), "foo \"and\" bar");
+        assert_eq!(sanitize_fts5_query("foo Or bar"), "foo \"Or\" bar");
+        assert_eq!(sanitize_fts5_query("not foo"), "\"not\" foo");
+    }
+
+    #[test]
+    fn operators_within_words_not_quoted() {
+        assert_eq!(sanitize_fts5_query("android"), "android");
+        assert_eq!(sanitize_fts5_query("notification"), "notification");
+        assert_eq!(sanitize_fts5_query("fortune"), "fortune");
     }
 }
