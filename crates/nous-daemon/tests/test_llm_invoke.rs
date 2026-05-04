@@ -296,6 +296,10 @@ async fn async_shell_invoke_returns_running_then_completes() {
     );
 }
 
+// This test makes a live call to AWS Bedrock and cannot be converted to a
+// mock-based test because its purpose is to verify actual LLM invocation
+// end-to-end. All mock-based LLM dispatch scenarios are covered by the
+// tests above. Run with: cargo test -- --ignored real_bedrock_claude_invoke
 #[tokio::test]
 #[ignore = "requires AWS_ACCESS_KEY_ID credentials"]
 async fn real_bedrock_claude_invoke() {
