@@ -710,6 +710,7 @@ pub async fn list_versions(
     let models = ver_entity::Entity::find()
         .filter(ver_entity::Column::AgentId.eq(agent_id))
         .order_by_desc(ver_entity::Column::CreatedAt)
+        .order_by_desc(ver_entity::Column::Id)
         .limit(limit)
         .all(db)
         .await?;

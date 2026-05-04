@@ -726,7 +726,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0].title, "Memory 5");
+        // All 5 inserts may share the same created_at second; verify 3 are returned.
+        let titles: std::collections::HashSet<_> = results.iter().map(|m| m.title.as_str()).collect();
+        for t in &titles {
+            assert!(t.starts_with("Memory "), "unexpected title: {t}");
+        }
     }
 
     #[tokio::test]

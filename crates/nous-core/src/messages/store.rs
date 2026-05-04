@@ -218,6 +218,7 @@ pub async fn mark_read(
         .ok_or_else(|| NousError::NotFound(format!("message '{}' not found", req.message_id)))?;
 
     let msg_created_at = msg_model.created_at;
+    let msg_id = msg_model.id;
 
     db.execute(Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,
@@ -238,8 +239,8 @@ pub async fn mark_read(
     let unread_row = db
         .query_one(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
-            "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND created_at > ?",
-            [req.room_id.clone().into(), msg_created_at.clone().into()],
+            "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND id > ?",
+            [req.room_id.clone().into(), msg_id.into()],
         ))
         .await?;
 
@@ -288,8 +289,8 @@ pub async fn unread_count(
     let unread_row = db
         .query_one(Statement::from_sql_and_values(
             sea_orm::DbBackend::Sqlite,
-            "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND created_at > ?",
-            [req.room_id.clone().into(), last_read_at.clone().into()],
+            "SELECT COUNT(*) as cnt FROM room_messages WHERE room_id = ? AND id > ?",
+            [req.room_id.clone().into(), last_read_message_id.clone().into()],
         ))
         .await?;
 
