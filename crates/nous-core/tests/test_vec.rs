@@ -46,11 +46,11 @@ fn insert_and_knn_roundtrip() {
     // Run vec migrations
     {
         let conn = vec_pool.lock().unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[384]);",
-        )
+             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+        ))
         .unwrap();
     }
 
@@ -105,11 +105,11 @@ fn upsert_replaces_embedding() {
 
     {
         let conn = vec_pool.lock().unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[384]);",
-        )
+             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+        ))
         .unwrap();
     }
 
@@ -168,11 +168,11 @@ fn knn_returns_correct_top_k() {
 
     {
         let conn = vec_pool.lock().unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[384]);",
-        )
+             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+        ))
         .unwrap();
     }
 
