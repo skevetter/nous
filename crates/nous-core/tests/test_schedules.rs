@@ -35,7 +35,7 @@ async fn create_schedule_basic() {
     assert_eq!(schedule.action_type, "mcp_tool");
     assert!(schedule.enabled);
     assert!(schedule.next_run_at.is_some());
-    let next_ts = schedules::iso_to_ts(schedule.next_run_at.as_deref().unwrap());
+    let next_ts = schedules::iso_to_ts(schedule.next_run_at.as_deref().unwrap()).unwrap();
     assert!(next_ts > 1_700_000_000);
 }
 
@@ -63,8 +63,8 @@ async fn create_schedule_with_trigger_at() {
     .await
     .unwrap();
 
-    assert_eq!(schedule.trigger_at, Some(schedules::ts_to_iso(trigger)));
-    assert_eq!(schedule.next_run_at, Some(schedules::ts_to_iso(trigger)));
+    assert_eq!(schedule.trigger_at, Some(schedules::ts_to_iso(trigger).unwrap()));
+    assert_eq!(schedule.next_run_at, Some(schedules::ts_to_iso(trigger).unwrap()));
     assert_eq!(schedule.max_runs, 1);
 }
 
@@ -451,7 +451,7 @@ async fn record_run_updates_last_run_at() {
     .unwrap();
 
     let updated = schedules::get_schedule(&pool, &s.id).await.unwrap();
-    assert_eq!(updated.last_run_at, Some(schedules::ts_to_iso(1_700_000_105)));
+    assert_eq!(updated.last_run_at, Some(schedules::ts_to_iso(1_700_000_105).unwrap()));
 }
 
 #[tokio::test]

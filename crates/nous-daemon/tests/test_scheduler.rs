@@ -139,7 +139,7 @@ async fn test_once_schedule_fires_and_disables() {
     assert!(schedule.enabled);
     assert_eq!(
         schedule.next_run_at,
-        Some(nous_core::schedules::ts_to_iso(trigger_at))
+        Some(nous_core::schedules::ts_to_iso(trigger_at).unwrap())
     );
 
     // Advance past trigger_at
