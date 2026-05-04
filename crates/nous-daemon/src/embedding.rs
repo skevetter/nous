@@ -134,7 +134,7 @@ mod tests {
                 let config = resolve_embedding_config(None, None, None);
                 assert_eq!(config.provider, EmbeddingProvider::Local);
                 assert_eq!(config.model, "all-MiniLM-L6-v2");
-                assert_eq!(config.dimensions, nous_core::db::EMBEDDING_DIMENSION);
+                assert_eq!(config.dimensions, 1024);
             },
         );
     }
@@ -188,7 +188,7 @@ mod tests {
             vec![("NOUS_EMBEDDING_DIMENSIONS", Some("not-a-number"))],
             || {
                 let config = resolve_embedding_config(None, None, None);
-                assert_eq!(config.dimensions, nous_core::db::EMBEDDING_DIMENSION);
+                assert_eq!(config.dimensions, 1024);
             },
         );
     }
@@ -204,15 +204,15 @@ mod tests {
 
     #[test]
     fn validate_dimensions_passes_on_matching_table() {
-        use nous_core::db::{create_vec_pool, EMBEDDING_DIMENSION};
+        use nous_core::db::create_vec_pool;
         let tmp = tempfile::TempDir::new().unwrap();
         let pool = create_vec_pool(&tmp.path().join("vec.db")).unwrap();
         {
             let conn = pool.lock().unwrap();
-            conn.execute_batch(&format!(
+            conn.execute_batch(
                 "CREATE VIRTUAL TABLE memory_embeddings USING vec0(\
-                 memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);"
-            ))
+                 memory_id TEXT PRIMARY KEY, embedding float[1024]);",
+            )
             .unwrap();
         }
         let config = resolve_embedding_config(None, None, None);

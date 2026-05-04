@@ -26,7 +26,7 @@ impl Default for EmbeddingConfig {
         Self {
             provider: EmbeddingProvider::Local,
             model: "all-MiniLM-L6-v2".to_string(),
-            dimensions: crate::db::EMBEDDING_DIMENSION,
+            dimensions: 1024,
         }
     }
 }
@@ -90,10 +90,12 @@ impl OnnxEmbeddingModel {
             ))
         })?;
 
+        let dimension = introspect_output_dimension(&session)?;
+
         Ok(Self {
             session: Mutex::new(session),
             tokenizer,
-            dimension: crate::db::EMBEDDING_DIMENSION,
+            dimension,
         })
     }
 
@@ -204,6 +206,27 @@ impl Embedder for OnnxEmbeddingModel {
     }
 }
 
+fn introspect_output_dimension(session: &ort::session::Session) -> Result<usize, NousError> {
+    let outputs = session.outputs();
+    let first = outputs.first().ok_or_else(|| {
+        NousError::Internal("ONNX model has no outputs".into())
+    })?;
+    match first.dtype() {
+        ort::value::ValueType::Tensor { shape, .. } => {
+            // shape is [batch, seq_len, hidden_dim]; last dim is the embedding dimension.
+            // -1 means dynamic (shouldn't happen for hidden_dim, but fall back to 1024).
+            shape.last().copied()
+                .and_then(|d| if d > 0 { usize::try_from(d).ok() } else { None })
+                .ok_or_else(|| NousError::Internal(
+                    "could not determine embedding dimension from ONNX output shape".into()
+                ))
+        }
+        _ => Err(NousError::Internal(
+            "ONNX model first output is not a tensor".into()
+        )),
+    }
+}
+
 fn resolve_model_path(override_path: Option<&str>) -> Result<PathBuf, NousError> {
     if let Some(p) = override_path {
         return Ok(PathBuf::from(p));
@@ -226,9 +249,7 @@ pub struct MockEmbedder {
 #[cfg(any(test, feature = "test-utils"))]
 impl MockEmbedder {
     pub fn new() -> Self {
-        Self {
-            dimension: crate::db::EMBEDDING_DIMENSION,
-        }
+        Self { dimension: 1024 }
     }
 }
 
@@ -344,7 +365,7 @@ mod tests {
         let config = EmbeddingConfig::default();
         assert_eq!(config.provider, EmbeddingProvider::Local);
         assert_eq!(config.model, "all-MiniLM-L6-v2");
-        assert_eq!(config.dimensions, crate::db::EMBEDDING_DIMENSION);
+        assert_eq!(config.dimensions, 1024);
     }
 
     #[test]
@@ -370,7 +391,7 @@ mod tests {
         let embedder = MockEmbedder::new();
         let results = embedder.embed(&["hello world"]).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].len(), crate::db::EMBEDDING_DIMENSION);
+        assert_eq!(results[0].len(), 1024);
     }
 
     #[test]

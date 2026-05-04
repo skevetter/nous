@@ -149,6 +149,7 @@ fn memory_and_resource_routes() -> Router<AppState> {
         .route("/memories/search", get(routes::memory::search))
         .route("/memories/relate", post(routes::memory::relate))
         .route("/memories/decay", patch(routes::memory::decay))
+        .route("/memories/re-embed", post(routes::memory::re_embed))
         .route(
             "/memories/{id}",
             get(routes::memory::get).put(routes::memory::update),

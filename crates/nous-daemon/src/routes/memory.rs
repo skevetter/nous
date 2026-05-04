@@ -1,7 +1,8 @@
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::Json;
-use serde::Deserialize;
+use sea_orm::{ConnectionTrait, Statement};
+use serde::{Deserialize, Serialize};
 
 use super::count_total;
 use crate::error::AppError;
@@ -238,4 +239,127 @@ pub async fn decay(
     let affected =
         nous_core::memory::run_importance_decay(&state.pool, high_days, moderate_days).await?;
     Ok(Json(serde_json::json!({ "decayed": affected })))
+}
+
+#[derive(Deserialize)]
+pub struct ReEmbedBody {
+    pub model_name: String,
+}
+
+#[derive(Serialize)]
+struct ReEmbedResponse {
+    status: &'static str,
+    memories_processed: usize,
+    old_dimension: Option<usize>,
+    new_dimension: usize,
+}
+
+pub async fn re_embed(
+    State(state): State<AppState>,
+    Json(body): Json<ReEmbedBody>,
+) -> Result<impl IntoResponse, AppError> {
+    use nous_core::memory::{Embedder, OnnxEmbeddingModel};
+
+    let model = OnnxEmbeddingModel::load(Some(&body.model_name))
+        .map_err(|e| nous_core::error::NousError::Internal(format!("failed to load model: {e}")))?;
+    let new_dim = model.dimension();
+
+    let old_dim = nous_core::db::read_vec_dimension(&state.vec_pool)?;
+
+    // Fetch all memory (id, content) from fts DB.
+    let rows = state
+        .pool
+        .query_all(Statement::from_string(
+            sea_orm::DbBackend::Sqlite,
+            "SELECT id, title, content FROM memories WHERE archived = 0",
+        ))
+        .await
+        .map_err(nous_core::error::NousError::SeaOrm)?;
+
+    let memories: Vec<(String, String)> = rows
+        .iter()
+        .filter_map(|row| {
+            let id: String = row.try_get_by_index(0).ok()?;
+            let title: String = row.try_get_by_index(1).ok()?;
+            let content: String = row.try_get_by_index(2).ok()?;
+            Some((id, format!("{title}\n{content}")))
+        })
+        .collect();
+
+    // Create staging vec0 table with new dimension.
+    {
+        let conn = state
+            .vec_pool
+            .lock()
+            .map_err(|e| nous_core::error::NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+        conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS memory_embeddings_staging;\
+             CREATE VIRTUAL TABLE memory_embeddings_staging USING vec0(\
+             memory_id TEXT PRIMARY KEY, embedding float[{new_dim}]);"
+        ))
+        .map_err(|e| nous_core::error::NousError::Internal(format!("failed to create staging table: {e}")))?;
+    }
+
+    // Batch embed and insert into staging; drop staging on any error.
+    let result = embed_and_insert_staging(&state, &model, &memories, new_dim).await;
+
+    if let Err(e) = result {
+        // Cleanup staging table on failure.
+        if let Ok(conn) = state.vec_pool.lock() {
+            let _ = conn.execute_batch("DROP TABLE IF EXISTS memory_embeddings_staging;");
+        }
+        return Err(AppError::from(e));
+    }
+
+    // Atomic swap: drop old table, rename staging.
+    {
+        let conn = state
+            .vec_pool
+            .lock()
+            .map_err(|e| nous_core::error::NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS memory_embeddings;\
+             ALTER TABLE memory_embeddings_staging RENAME TO memory_embeddings;",
+        )
+        .map_err(|e| {
+            nous_core::error::NousError::Internal(format!("failed to swap embedding tables: {e}"))
+        })?;
+    }
+
+    Ok(Json(ReEmbedResponse {
+        status: "ok",
+        memories_processed: memories.len(),
+        old_dimension: old_dim,
+        new_dimension: new_dim,
+    }))
+}
+
+async fn embed_and_insert_staging(
+    state: &AppState,
+    model: &nous_core::memory::OnnxEmbeddingModel,
+    memories: &[(String, String)],
+    _new_dim: usize,
+) -> Result<(), nous_core::error::NousError> {
+    use nous_core::memory::Embedder;
+
+    for chunk in memories.chunks(32) {
+        let texts: Vec<&str> = chunk.iter().map(|(_, text)| text.as_str()).collect();
+        let embeddings = model.embed(&texts)?;
+
+        let conn = state
+            .vec_pool
+            .lock()
+            .map_err(|e| nous_core::error::NousError::Internal(format!("vec pool lock poisoned: {e}")))?;
+
+        for ((id, _), embedding) in chunk.iter().zip(embeddings.iter()) {
+            let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+            conn.execute(
+                "INSERT OR REPLACE INTO memory_embeddings_staging(memory_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![id, bytes],
+            )
+            .map_err(|e| nous_core::error::NousError::Internal(format!("failed to insert staging embedding: {e}")))?;
+        }
+    }
+
+    Ok(())
 }

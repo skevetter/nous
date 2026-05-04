@@ -1,6 +1,8 @@
 mod common;
 
-use nous_core::db::{DbPools, EMBEDDING_DIMENSION};
+use nous_core::db::DbPools;
+
+const EMBEDDING_DIMENSION: usize = 1024;
 use nous_core::memory::embed::Embedder;
 use nous_core::memory::{
     self, Chunk, Chunker, Importance, MemoryType, MockEmbedder, SaveMemoryRequest,
