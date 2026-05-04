@@ -16,6 +16,8 @@ pub fn resolve_permissions(
         allowed_paths,
         network_access,
         max_output_bytes: max_output_bytes.unwrap_or(1_048_576),
+        shell: None,
+        network: None,
     }
 }
 
@@ -64,6 +66,8 @@ mod tests {
             allowed_paths: None,
             network_access: NetworkPolicy::Unrestricted,
             max_output_bytes: 1_048_576,
+            shell: None,
+            network: None,
         }
     }
 
@@ -74,6 +78,8 @@ mod tests {
             allowed_paths: None,
             network_access: NetworkPolicy::Unrestricted,
             max_output_bytes: 1_048_576,
+            shell: None,
+            network: None,
         }
     }
 
@@ -84,6 +90,8 @@ mod tests {
             allowed_paths: None,
             network_access: policy,
             max_output_bytes: 1_048_576,
+            shell: None,
+            network: None,
         }
     }
 
@@ -109,6 +117,8 @@ mod tests {
             allowed_paths: None,
             network_access: NetworkPolicy::Unrestricted,
             max_output_bytes: 1_048_576,
+            shell: None,
+            network: None,
         };
         assert!(is_tool_allowed("anything", &perms));
     }
