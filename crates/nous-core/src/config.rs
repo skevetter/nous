@@ -47,7 +47,7 @@ impl SchedulerConfig {
         4
     }
     fn default_allow_shell() -> bool {
-        true
+        false
     }
     fn default_timeout_secs() -> u64 {
         300
@@ -58,7 +58,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             max_concurrent: Self::default_max_concurrent(),
-            allow_shell: true,
+            allow_shell: false,
             default_timeout_secs: Self::default_timeout_secs(),
         }
     }
@@ -236,7 +236,7 @@ mod tests {
     fn scheduler_config_defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.scheduler.max_concurrent, 4);
-        assert!(cfg.scheduler.allow_shell);
+        assert!(!cfg.scheduler.allow_shell);
         assert_eq!(cfg.scheduler.default_timeout_secs, 300);
     }
 
