@@ -4,6 +4,8 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::schedules::{self, SystemClock};
 
+use super::output::{OutputFormat, print_list};
+
 #[derive(Subcommand)]
 pub enum ScheduleCommands {
     /// Create a new schedule
@@ -38,6 +40,9 @@ pub enum ScheduleCommands {
         action: Option<String>,
         #[arg(long, default_value = "50")]
         limit: u32,
+        /// Output format: json (default), table, csv
+        #[arg(short, long, default_value = "json")]
+        output: OutputFormat,
     },
     /// Get schedule details
     Get {
@@ -148,10 +153,12 @@ async fn execute(
             enabled,
             action,
             limit,
+            output,
         } => {
             let list =
                 schedules::list_schedules(pool, enabled, action.as_deref(), Some(limit)).await?;
-            println!("{}", serde_json::to_string_pretty(&list)?);
+            let val = serde_json::to_value(&list)?;
+            print_list(&val, &output, &["id", "name", "cron_expr", "action_type", "enabled", "next_run_at"]);
         }
         ScheduleCommands::Get { id } => {
             let schedule = schedules::get_schedule(pool, &id).await?;

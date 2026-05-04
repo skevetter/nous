@@ -19,6 +19,7 @@ tempfile = "3"
 [dependencies]
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
 dirs = { workspace = true }
 libc = "0.2"
 nous-core = { path = "../nous-core" }

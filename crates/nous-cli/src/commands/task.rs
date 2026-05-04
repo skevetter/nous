@@ -4,6 +4,8 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::tasks;
 
+use super::output::{OutputFormat, print_list};
+
 #[derive(Subcommand)]
 pub enum TaskCommands {
     /// Create a new task
@@ -35,6 +37,9 @@ pub enum TaskCommands {
         limit: u32,
         #[arg(long, default_value = "0")]
         offset: u32,
+        /// Output format: json (default), table, csv
+        #[arg(short, long, default_value = "json")]
+        output: OutputFormat,
     },
     /// Get task details by ID
     Get {
@@ -222,6 +227,7 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
             label,
             limit,
             offset,
+            output,
         } => {
             let tasks = tasks::list_tasks(tasks::ListTasksParams {
                 db: pool,
@@ -234,7 +240,8 @@ async fn execute(cmd: TaskCommands, port: Option<u16>) -> Result<(), Box<dyn std
                 order_dir: None,
             })
             .await?;
-            println!("{}", serde_json::to_string_pretty(&tasks)?);
+            let val = serde_json::to_value(&tasks)?;
+            print_list(&val, &output, &["id", "title", "status", "priority", "assignee_id", "created_at"]);
         }
         TaskCommands::Get { id } => {
             let task = tasks::get_task(pool, &id).await?;

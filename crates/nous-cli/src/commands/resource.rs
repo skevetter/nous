@@ -4,6 +4,8 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::resources;
 
+use super::output::{OutputFormat, print_list};
+
 #[derive(Subcommand)]
 pub enum ResourceCommands {
     /// Register a new resource
@@ -56,6 +58,9 @@ pub enum ResourceCommands {
         /// Max results
         #[arg(long, default_value = "50")]
         limit: u32,
+        /// Output format: json (default), table, csv
+        #[arg(short, long, default_value = "json")]
+        output: OutputFormat,
     },
     /// Show a single resource by ID
     Show {
@@ -204,6 +209,7 @@ async fn execute(
             namespace,
             policy,
             limit,
+            output,
         } => {
             let type_parsed = r#type
                 .as_deref()
@@ -231,7 +237,8 @@ async fn execute(
                 },
             )
             .await?;
-            println!("{}", serde_json::to_string_pretty(&items)?);
+            let val = serde_json::to_value(&items)?;
+            print_list(&val, &output, &["id", "name", "resource_type", "status", "owner_agent_id", "namespace"]);
         }
         ResourceCommands::Show { id } => {
             let resource = resources::get_resource_by_id(pool, &id).await?;

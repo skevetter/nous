@@ -7,6 +7,8 @@ use nous_core::agents;
 use nous_core::config::Config;
 use nous_core::db::DbPools;
 
+use super::output::{OutputFormat, print_list};
+
 #[derive(Subcommand)]
 pub enum AgentCommands {
     /// Add an agent from a TOML definition file
@@ -108,6 +110,9 @@ pub enum AgentCommands {
         namespace: Option<String>,
         #[arg(long, default_value = "50")]
         limit: u32,
+        /// Output format: json (default), table, csv
+        #[arg(short, long, default_value = "json")]
+        output: OutputFormat,
     },
     /// Show the agent tree (hierarchy)
     Tree {
@@ -585,6 +590,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             status,
             namespace,
             limit,
+            output,
         } => {
             let status_parsed = status
                 .as_deref()
@@ -600,7 +606,8 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 },
             )
             .await?;
-            println!("{}", serde_json::to_string_pretty(&list)?);
+            let val = serde_json::to_value(&list)?;
+            print_list(&val, &output, &["id", "name", "agent_type", "status", "namespace", "last_seen_at"]);
         }
         AgentCommands::Tree { root, namespace } => {
             let tree = agents::get_tree(pool, root.as_deref(), namespace.as_deref()).await?;
