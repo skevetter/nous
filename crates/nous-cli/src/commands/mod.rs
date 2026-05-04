@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod output;
 pub mod chat;
 pub mod doctor;
 pub mod mcp_server;
