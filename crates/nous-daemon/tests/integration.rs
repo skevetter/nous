@@ -75,7 +75,10 @@ async fn e2e_create_post_read_search_delete() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
     let body: Value = json_body(response).await;
-    assert_eq!(body["data"]["content"], "Integration test message about deployment");
+    assert_eq!(
+        body["data"]["content"],
+        "Integration test message about deployment"
+    );
     assert_eq!(body["data"]["sender_id"], "test-agent");
     assert_eq!(body["data"]["room_id"], room_id);
 
@@ -356,7 +359,10 @@ async fn error_create_room_duplicate_name() {
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let body: Value = json_body(response).await;
-    assert!(body["error"]["message"].as_str().unwrap().contains("already exists"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("already exists"));
 }
 
 #[tokio::test]
@@ -1493,7 +1499,6 @@ async fn mcp_agent_tree_children_ancestors() {
     assert_eq!(ancestors[0]["name"], "mcp-dir");
 }
 
-
 // --- Tests for zero-coverage MCP tools (R4 eval) ---
 
 #[tokio::test]
@@ -1749,7 +1754,6 @@ async fn mcp_agent_bulk_deregister() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, ids[2]);
 }
-
 
 // --- Agent invoke via MCP tool call ---
 
@@ -2051,8 +2055,6 @@ async fn sandbox_spawn_creates_entry_in_manager() {
             working_dir: None,
             env: None,
             timeout_secs: Some(3600),
-            restart_policy: "never",
-            max_restarts: 0,
         })
         .await;
 

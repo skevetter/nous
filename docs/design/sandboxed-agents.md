@@ -31,7 +31,7 @@ Agent registered in DB
       tokio::spawn(monitor_process(...))
   → monitor waits for child exit
       exit_code == 0 → status: stopped
-      exit_code != 0 → status: crashed (checks restart_policy)
+      exit_code != 0 → status: crashed
   → nous agent stop <agent_id>
       → ProcessRegistry::stop()
           updates status → stopping
@@ -62,7 +62,6 @@ match agent.process_type.as_deref() {
 
 | Gap | Location | Detail |
 |---|---|---|
-| Restart not executed | `process_manager.rs` L252–254 | `monitor_process` logs restart intent but never re-calls `spawn()`; `restart_policy` is stored but not acted on |
 | In-memory handles lost on daemon restart | `ProcessRegistry.handles` (`Mutex<HashMap>`) | DB records survive restart; in-memory `ProcessHandle` entries do not — running processes become orphaned |
 | No health check mechanism | — | No periodic liveness probe; a hung process stays `running` in DB indefinitely |
 

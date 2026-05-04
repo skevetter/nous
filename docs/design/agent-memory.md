@@ -82,7 +82,7 @@ Agents are defined via TOML files (agent forms) that follow the [Agent Skills Sp
 
 ```toml
 [agent]             # REQUIRED: name, type (engineer/manager/director/senior-manager), version
-[process]           # OPTIONAL: type (claude/shell/http/sandbox), spawn_command, working_dir, auto_restart, restart_policy
+[process]           # OPTIONAL: type (claude/shell/http/sandbox), spawn_command, working_dir, auto_restart
 [skills]            # OPTIONAL: refs (Vec<String> of skill names)
 [metadata]          # OPTIONAL: model, timeout, tags
 ```

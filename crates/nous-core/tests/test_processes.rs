@@ -1,10 +1,9 @@
 mod common;
 
 use nous_core::agents::processes::{
-    cleanup_agent_processes, create_invocation, create_process, get_active_process,
-    get_invocation, get_latest_process, get_process_by_id, increment_restart_count,
-    list_all_active_processes, list_invocations, list_processes, update_invocation,
-    update_process_status, CreateProcessParams,
+    cleanup_agent_processes, create_invocation, create_process, get_active_process, get_invocation,
+    get_latest_process, get_process_by_id, list_all_active_processes, list_invocations,
+    list_processes, update_invocation, update_process_status, CreateProcessParams,
 };
 use nous_core::agents::{self, RegisterAgentRequest};
 
@@ -46,8 +45,6 @@ async fn create_and_get_process() {
         working_dir: None,
         env_json: None,
         timeout_secs: Some(30),
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -57,9 +54,6 @@ async fn create_and_get_process() {
     assert_eq!(proc.command, "echo test");
     assert_eq!(proc.status, "pending");
     assert_eq!(proc.timeout_secs, Some(30));
-    assert_eq!(proc.restart_policy, "never");
-    assert_eq!(proc.max_restarts, 3);
-
     let fetched = get_process_by_id(&db, &proc.id).await.unwrap();
     assert_eq!(fetched.id, proc.id);
 }
@@ -76,8 +70,6 @@ async fn create_process_for_nonexistent_agent_fails() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await;
 
@@ -97,15 +89,15 @@ async fn update_process_status_transitions() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
 
     assert_eq!(proc.status, "pending");
 
-    let updated = update_process_status(&db, &proc.id, "running", None, None, Some(1234)).await.unwrap();
+    let updated = update_process_status(&db, &proc.id, "running", None, None, Some(1234))
+        .await
+        .unwrap();
     assert_eq!(updated.status, "running");
     assert_eq!(updated.pid, Some(1234));
     assert!(updated.started_at.is_some());
@@ -132,8 +124,6 @@ async fn get_active_process_returns_running() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -164,8 +154,6 @@ async fn get_latest_process_ordering() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -183,42 +171,12 @@ async fn get_latest_process_ordering() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
 
     let latest = get_latest_process(&db, &agent_id).await.unwrap();
     assert_eq!(latest.unwrap().id, second.id);
-}
-
-#[tokio::test]
-async fn increment_restart_count_works() {
-    let (db, _tmp) = setup().await;
-    let agent_id = create_test_agent(&db, "restart-agent").await;
-
-    let proc = create_process(CreateProcessParams {
-        db: &db,
-        agent_id: &agent_id,
-        process_type: "shell",
-        command: "crasher",
-        working_dir: None,
-        env_json: None,
-        timeout_secs: None,
-        restart_policy: Some("always"),
-        max_restarts: Some(5),
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(proc.restart_count, 0);
-
-    increment_restart_count(&db, &proc.id).await.unwrap();
-    increment_restart_count(&db, &proc.id).await.unwrap();
-
-    let fetched = get_process_by_id(&db, &proc.id).await.unwrap();
-    assert_eq!(fetched.restart_count, 2);
 }
 
 #[tokio::test]
@@ -241,8 +199,6 @@ async fn list_processes_respects_limit() {
             working_dir: None,
             env_json: None,
             timeout_secs: None,
-            restart_policy: None,
-            max_restarts: None,
         })
         .await
         .unwrap();
@@ -270,8 +226,6 @@ async fn list_all_active_processes_filters_correctly() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -284,8 +238,6 @@ async fn list_all_active_processes_filters_correctly() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -312,8 +264,6 @@ async fn cleanup_agent_processes_removes_all() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -331,8 +281,6 @@ async fn cleanup_agent_processes_removes_all() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();
@@ -381,9 +329,16 @@ async fn update_invocation_to_completed() {
         .await
         .unwrap();
 
-    let updated = update_invocation(&db, &inv.id, "completed", Some("result text"), None, Some(150))
-        .await
-        .unwrap();
+    let updated = update_invocation(
+        &db,
+        &inv.id,
+        "completed",
+        Some("result text"),
+        None,
+        Some(150),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(updated.status, "completed");
     assert_eq!(updated.result.as_deref(), Some("result text"));
@@ -400,9 +355,16 @@ async fn update_invocation_to_failed() {
         .await
         .unwrap();
 
-    let updated = update_invocation(&db, &inv.id, "failed", None, Some("something broke"), Some(50))
-        .await
-        .unwrap();
+    let updated = update_invocation(
+        &db,
+        &inv.id,
+        "failed",
+        None,
+        Some("something broke"),
+        Some(50),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(updated.status, "failed");
     assert_eq!(updated.error.as_deref(), Some("something broke"));
@@ -453,8 +415,6 @@ async fn invocation_links_to_active_process() {
         working_dir: None,
         env_json: None,
         timeout_secs: None,
-        restart_policy: None,
-        max_restarts: None,
     })
     .await
     .unwrap();

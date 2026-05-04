@@ -104,8 +104,6 @@ async fn test_sandbox_spawn_and_stop() {
             working_dir: None,
             env: None,
             timeout_secs: None,
-            restart_policy: "never",
-            max_restarts: 3,
         })
         .await
         .unwrap();
@@ -258,8 +256,6 @@ async fn test_sandbox_spawn_does_not_affect_shell() {
             working_dir: None,
             env: None,
             timeout_secs: Some(5),
-            restart_policy: "never",
-            max_restarts: 3,
         })
         .await
         .unwrap();
