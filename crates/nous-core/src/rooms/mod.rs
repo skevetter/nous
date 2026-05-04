@@ -52,7 +52,7 @@ pub async fn create_room(
     }
 
     let id = Uuid::now_v7().to_string();
-    let metadata_json = metadata.map(|m| m.to_string());
+    let metadata_json = metadata.map(std::string::ToString::to_string);
 
     let model = rooms_entity::ActiveModel {
         id: Set(id.clone()),
@@ -178,7 +178,8 @@ pub async fn inspect_room(db: &DatabaseConnection, id: &str) -> Result<RoomStats
     let message_count = crate::entities::room_messages::Entity::find()
         .filter(crate::entities::room_messages::Column::RoomId.eq(id))
         .count(db)
-        .await? as i64;
+        .await?
+        .cast_signed();
 
     let last_message_at: Option<String> = {
         let row = db
@@ -194,7 +195,8 @@ pub async fn inspect_room(db: &DatabaseConnection, id: &str) -> Result<RoomStats
     let subscriber_count = crate::entities::room_subscriptions::Entity::find()
         .filter(crate::entities::room_subscriptions::Column::RoomId.eq(id))
         .count(db)
-        .await? as i64;
+        .await?
+        .cast_signed();
 
     Ok(RoomStats {
         room_id: id.to_string(),

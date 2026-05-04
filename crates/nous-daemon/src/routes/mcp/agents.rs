@@ -501,7 +501,7 @@ async fn handle_register(
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<agents::AgentStatus>())
+        .map(str::parse::<agents::AgentStatus>)
         .transpose()?;
     let agent = agents::register_agent(
         &state.pool,
@@ -526,7 +526,7 @@ async fn handle_deregister(
     let id = require_str(args, "id")?;
     let force = args
         .get("force")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     agents::deregister_agent(&state.pool, id, force).await?;
     Ok(serde_json::json!({"deleted": true}))
@@ -553,9 +553,9 @@ async fn handle_list(
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<agents::AgentStatus>())
+        .map(str::parse::<agents::AgentStatus>)
         .transpose()?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let list = agents::list_agents(
         &state.pool,
         &agents::ListAgentsFilter {
@@ -607,7 +607,7 @@ async fn handle_heartbeat(
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<agents::AgentStatus>())
+        .map(str::parse::<agents::AgentStatus>)
         .transpose()?;
     agents::heartbeat(&state.pool, id, status).await?;
     Ok(serde_json::json!({"ok": true}))
@@ -619,7 +619,7 @@ async fn handle_search(
 ) -> Result<Value, nous_core::error::NousError> {
     let query = require_str(args, "query")?;
     let namespace = args.get("namespace").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let results = agents::search_agents(&state.pool, query, namespace, limit).await?;
     Ok(serde_json::to_value(results).unwrap())
 }
@@ -630,11 +630,11 @@ async fn handle_stale(
 ) -> Result<Value, nous_core::error::NousError> {
     let threshold = args
         .get("threshold")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(900);
     let namespace = args.get("namespace").and_then(|v| v.as_str());
-    let stale = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
-    Ok(serde_json::to_value(stale).unwrap())
+    let stale_agents = agents::list_stale_agents(&state.pool, threshold, namespace).await?;
+    Ok(serde_json::to_value(stale_agents).unwrap())
 }
 
 async fn handle_inspect(
@@ -651,7 +651,7 @@ async fn handle_versions(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let agent_id = require_str(args, "agent_id")?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let versions = agents::list_versions(&state.pool, agent_id, limit).await?;
     Ok(serde_json::to_value(versions).unwrap())
 }
@@ -704,7 +704,7 @@ async fn handle_outdated(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let namespace = args.get("namespace").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let outdated = agents::list_outdated_agents(&state.pool, namespace, limit).await?;
     Ok(serde_json::to_value(outdated).unwrap())
 }
@@ -741,7 +741,7 @@ async fn handle_template_list(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let template_type = args.get("type").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let templates = agents::list_templates(&state.pool, template_type, limit).await?;
     Ok(serde_json::to_value(templates).unwrap())
 }
@@ -802,7 +802,7 @@ async fn handle_bulk_deregister(
         .unwrap_or_default();
     let force = args
         .get("force")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let mut results = serde_json::Map::new();
     for id in &ids {
@@ -855,7 +855,7 @@ async fn handle_spawn(
         .and_then(|v| v.as_str())
         .or(agent.working_dir.as_deref());
     let env = args.get("env").filter(|v| !v.is_null()).cloned();
-    let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64());
+    let timeout_secs = args.get("timeout_secs").and_then(serde_json::Value::as_i64);
     let process = state
         .process_registry
         .spawn(SpawnParams {
@@ -876,10 +876,10 @@ async fn handle_stop(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let agent_id = require_str(args, "agent_id")?;
-    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force = args.get("force").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let grace_secs = args
         .get("grace_secs")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(10);
     let process = state
         .process_registry
@@ -908,9 +908,9 @@ async fn handle_invoke(
 ) -> Result<Value, nous_core::error::NousError> {
     let agent_id = require_str(args, "agent_id")?;
     let prompt = require_str(args, "prompt")?;
-    let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64());
+    let timeout_secs = args.get("timeout_secs").and_then(serde_json::Value::as_i64);
     let metadata = args.get("metadata").filter(|v| !v.is_null()).cloned();
-    let is_async = args.get("async").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_async = args.get("async").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let invocation = state
         .process_registry
         .invoke(state, agent_id, prompt, timeout_secs, metadata, is_async)
@@ -933,7 +933,7 @@ async fn handle_invocations(
 ) -> Result<Value, nous_core::error::NousError> {
     let agent_id = require_str(args, "agent_id")?;
     let status = args.get("status").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let invocations =
         agents::processes::list_invocations(&state.pool, agent_id, status, limit).await?;
     Ok(serde_json::to_value(invocations).unwrap())
@@ -960,7 +960,7 @@ async fn handle_logs(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let agent_id = require_str(args, "agent_id")?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let processes = agents::processes::list_processes(&state.pool, agent_id, limit).await?;
     Ok(serde_json::to_value(processes).unwrap())
 }
@@ -973,7 +973,7 @@ async fn handle_update(
     let process_type = args.get("process_type").and_then(|v| v.as_str());
     let spawn_command = args.get("spawn_command").and_then(|v| v.as_str());
     let working_dir = args.get("working_dir").and_then(|v| v.as_str());
-    let auto_restart = args.get("auto_restart").and_then(|v| v.as_bool());
+    let auto_restart = args.get("auto_restart").and_then(serde_json::Value::as_bool);
     let metadata = args.get("metadata").and_then(|v| v.as_str());
     let agent = agents::processes::update_agent(
         &state.pool,

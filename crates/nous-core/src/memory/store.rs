@@ -178,7 +178,7 @@ pub async fn get_context(
 
     let models = query
         .order_by_desc(mem_entity::Column::CreatedAt)
-        .limit(limit as u64)
+        .limit(u64::from(limit))
         .all(db)
         .await?;
 
@@ -448,7 +448,7 @@ pub fn delete_chunks(vec_pool: &VecPool, memory_id: &str) -> Result<(), NousErro
         let rows = stmt
             .query_map(rusqlite::params![memory_id], |row| row.get(0))
             .map_err(|e| NousError::Internal(format!("failed to query chunks: {e}")))?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(std::result::Result::ok).collect()
     };
 
     for chunk_id in &chunk_ids {
@@ -482,13 +482,17 @@ pub fn get_chunks_for_memory(vec_pool: &VecPool, memory_id: &str) -> Result<Vec<
 
     let rows = stmt
         .query_map(rusqlite::params![memory_id], |row| {
+            // SQLite stores these as i64 but values are always non-negative byte offsets/indices
+            let index = usize::try_from(row.get::<_, i64>(3)?).unwrap_or(0);
+            let start_offset = usize::try_from(row.get::<_, i64>(4)?).unwrap_or(0);
+            let end_offset = usize::try_from(row.get::<_, i64>(5)?).unwrap_or(0);
             Ok(Chunk {
                 id: row.get(0)?,
                 memory_id: row.get(1)?,
                 content: row.get(2)?,
-                index: row.get::<_, i64>(3)? as usize,
-                start_offset: row.get::<_, i64>(4)? as usize,
-                end_offset: row.get::<_, i64>(5)? as usize,
+                index,
+                start_offset,
+                end_offset,
             })
         })
         .map_err(|e| NousError::Internal(format!("failed to query chunks: {e}")))?;

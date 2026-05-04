@@ -28,16 +28,13 @@ fn cell_value(row: &Value, col: &str) -> String {
 }
 
 fn print_table(values: &Value, columns: &[&str]) {
-    let rows = match values.as_array() {
-        Some(arr) => arr,
-        None => {
-            println!("{}", serde_json::to_string_pretty(values).unwrap_or_default());
-            return;
-        }
+    let Some(rows) = values.as_array() else {
+        println!("{}", serde_json::to_string_pretty(values).unwrap_or_default());
+        return;
     };
 
     let mut table = Table::new();
-    table.set_header(columns.iter().map(|c| Cell::new(c)).collect::<Vec<_>>());
+    table.set_header(columns.iter().map(Cell::new).collect::<Vec<_>>());
 
     for row in rows {
         table.add_row(columns.iter().map(|c| Cell::new(cell_value(row, c))).collect::<Vec<_>>());
@@ -47,12 +44,9 @@ fn print_table(values: &Value, columns: &[&str]) {
 }
 
 fn print_csv(values: &Value, columns: &[&str]) {
-    let rows = match values.as_array() {
-        Some(arr) => arr,
-        None => {
-            println!("{}", serde_json::to_string_pretty(values).unwrap_or_default());
-            return;
-        }
+    let Some(rows) = values.as_array() else {
+        println!("{}", serde_json::to_string_pretty(values).unwrap_or_default());
+        return;
     };
 
     println!("{}", columns.join(","));

@@ -31,5 +31,6 @@ pub(crate) async fn count_total(
         .transpose()
         .map_err(nous_core::error::NousError::SeaOrm)?
         .unwrap_or(0);
-    Ok(count as usize)
+    // count is a non-negative DB row count; safe to cast
+    Ok(usize::try_from(count).unwrap_or(0))
 }

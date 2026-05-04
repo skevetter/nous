@@ -112,7 +112,7 @@ async fn handle_room_list(
 ) -> Result<Value, nous_core::error::NousError> {
     let include_archived = args
         .get("include_archived")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let rooms = list_rooms(&state.pool, include_archived).await?;
     Ok(serde_json::to_value(rooms).unwrap())
@@ -132,7 +132,7 @@ async fn handle_room_delete(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
-    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force = args.get("force").and_then(serde_json::Value::as_bool).unwrap_or(false);
     delete_room(&state.pool, id, force).await?;
     Ok(serde_json::json!({"deleted": true}))
 }
@@ -151,6 +151,6 @@ async fn handle_room_inspect(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
-    let stats = nous_core::rooms::inspect_room(&state.pool, id).await?;
-    Ok(serde_json::to_value(stats).unwrap())
+    let room_stats = nous_core::rooms::inspect_room(&state.pool, id).await?;
+    Ok(serde_json::to_value(room_stats).unwrap())
 }

@@ -12,17 +12,14 @@ pub async fn run(port: Option<u16>) {
 
     let mut has_failure = false;
 
-    let config = match check_config() {
-        Ok(mut config) => {
-            if let Some(p) = port {
-                config.port = p;
-            }
-            Some(config)
+    let config = if let Ok(mut config) = check_config() {
+        if let Some(p) = port {
+            config.port = p;
         }
-        Err(()) => {
-            has_failure = true;
-            None
-        }
+        Some(config)
+    } else {
+        has_failure = true;
+        None
     };
 
     if let Some(ref cfg) = config {
@@ -43,7 +40,7 @@ pub async fn run(port: Option<u16>) {
         has_failure = true;
     }
 
-    let daemon_port = config.as_ref().map(|c| c.port).unwrap_or(8377);
+    let daemon_port = config.as_ref().map_or(8377, |c| c.port);
     check_port(daemon_port);
     check_embedding_model();
 

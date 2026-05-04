@@ -15,18 +15,16 @@ pub fn build_embedder(config: &EmbeddingConfig) -> Result<Arc<dyn Embedder>, Nou
             Ok(Arc::new(model))
         }
         EmbeddingProvider::Bedrock => {
-            let rt = tokio::runtime::Handle::current();
             let client = rig_bedrock::client::Client::from_env()
                 .map_err(|e| NousError::Config(format!("failed to create Bedrock client: {e}")))?;
             let model = client.embedding_model_with_ndims(&config.model, config.dimensions);
-            Ok(Arc::new(RigEmbedderAdapter::new(model, rt)))
+            Ok(Arc::new(RigEmbedderAdapter::new(model)))
         }
         EmbeddingProvider::OpenAi => {
-            let rt = tokio::runtime::Handle::current();
             let client = rig::providers::openai::Client::from_env()
                 .map_err(|e| NousError::Config(format!("failed to create OpenAI client: {e}")))?;
             let model = client.embedding_model_with_ndims(&config.model, config.dimensions);
-            Ok(Arc::new(RigEmbedderAdapter::new(model, rt)))
+            Ok(Arc::new(RigEmbedderAdapter::new(model)))
         }
     }
 }
@@ -42,7 +40,9 @@ pub fn validate_embedding_dimensions(
     match read_vec_dimension(vec_pool)? {
         None => Ok(()),
         Some(stored_dim) => {
-            if stored_dim != config.dimensions {
+            if stored_dim == config.dimensions {
+                Ok(())
+            } else {
                 Err(NousError::Config(format!(
                     "embedding dimension mismatch: vec0 table expects float[{stored_dim}] \
                      but configured provider '{}' uses {} dimensions. \
@@ -54,8 +54,6 @@ pub fn validate_embedding_dimensions(
                     },
                     config.dimensions,
                 )))
-            } else {
-                Ok(())
             }
         }
     }

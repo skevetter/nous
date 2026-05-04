@@ -46,17 +46,17 @@ impl Process {
             command: m.command,
             working_dir: m.working_dir,
             env_json: m.env_json,
-            pid: m.pid.map(|v| v as i64),
+            pid: m.pid.map(i64::from),
             status: m.status,
             exit_code: m.exit_code,
             started_at: m.started_at,
             stopped_at: m.stopped_at,
             last_output: m.last_output,
-            max_output_bytes: m.max_output_bytes as i64,
-            timeout_secs: m.timeout_secs.map(|v| v as i64),
+            max_output_bytes: i64::from(m.max_output_bytes),
+            timeout_secs: m.timeout_secs.map(i64::from),
             sandbox_image: m.sandbox_image,
-            sandbox_cpus: m.sandbox_cpus.map(|v| v as i64),
-            sandbox_memory_mib: m.sandbox_memory_mib.map(|v| v as i64),
+            sandbox_cpus: m.sandbox_cpus.map(i64::from),
+            sandbox_memory_mib: m.sandbox_memory_mib.map(i64::from),
             sandbox_network_policy: m.sandbox_network_policy,
             sandbox_volumes_json: m.sandbox_volumes_json,
             sandbox_name: m.sandbox_name,
@@ -94,7 +94,7 @@ impl Invocation {
             error: m.error,
             started_at: m.started_at,
             completed_at: m.completed_at,
-            duration_ms: m.duration_ms.map(|v| v as i64),
+            duration_ms: m.duration_ms.map(i64::from),
             metadata_json: m.metadata_json,
             created_at: m.created_at,
         }
@@ -142,7 +142,7 @@ pub async fn create_process(params: CreateProcessParams<'_>) -> Result<Process, 
         started_at: Set(None),
         stopped_at: Set(None),
         last_output: Set(None),
-        max_output_bytes: Set(1048576),
+        max_output_bytes: Set(1_048_576),
         sandbox_image: Set(None),
         sandbox_cpus: Set(None),
         sandbox_memory_mib: Set(None),
@@ -203,10 +203,12 @@ pub async fn create_sandbox_process(
         started_at: Set(None),
         stopped_at: Set(None),
         last_output: Set(None),
-        max_output_bytes: Set(1048576),
+        max_output_bytes: Set(1_048_576),
         sandbox_image: Set(Some(sandbox_image.to_string())),
-        sandbox_cpus: Set(sandbox_cpus.map(|v| v as i32)),
-        sandbox_memory_mib: Set(sandbox_memory_mib.map(|v| v as i32)),
+        // sandbox_cpus and sandbox_memory_mib are user-supplied values bounded by
+        // reasonable CPU/memory limits (well within i32 range), safe to cast.
+        sandbox_cpus: Set(sandbox_cpus.map(u32::cast_signed)),
+        sandbox_memory_mib: Set(sandbox_memory_mib.map(u32::cast_signed)),
         sandbox_network_policy: Set(sandbox_network_policy.map(String::from)),
         sandbox_volumes_json: Set(sandbox_volumes_json.map(String::from)),
         sandbox_name: Set(Some(name.to_string())),
@@ -359,7 +361,7 @@ pub async fn list_processes(
     agent_id: &str,
     limit: Option<u32>,
 ) -> Result<Vec<Process>, NousError> {
-    let limit = limit.unwrap_or(20).min(100) as u64;
+    let limit = u64::from(limit.unwrap_or(20).min(100));
     let models = proc_entity::Entity::find()
         .filter(proc_entity::Column::AgentId.eq(agent_id))
         .order_by_desc(proc_entity::Column::CreatedAt)
@@ -472,8 +474,8 @@ pub async fn update_invocation(
 
     let bind_values: Vec<sea_orm::Value> = vec![
         status.into(),
-        result.map(|s| s.to_string()).into(),
-        error.map(|s| s.to_string()).into(),
+        result.map(std::string::ToString::to_string).into(),
+        error.map(std::string::ToString::to_string).into(),
         duration_ms.map(|v| v as i32).into(),
         started_at.into(),
         completed_at.into(),
@@ -505,7 +507,7 @@ pub async fn list_invocations(
     status_filter: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<Invocation>, NousError> {
-    let limit = limit.unwrap_or(20).min(100) as u64;
+    let limit = u64::from(limit.unwrap_or(20).min(100));
 
     let mut query = inv_entity::Entity::find().filter(inv_entity::Column::AgentId.eq(agent_id));
 

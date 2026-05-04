@@ -191,8 +191,8 @@ pub async fn list_worktrees(
     let models = wt_entity::Entity::find()
         .filter(condition)
         .order_by_desc(wt_entity::Column::CreatedAt)
-        .limit(limit as u64)
-        .offset(offset as u64)
+        .limit(u64::from(limit))
+        .offset(u64::from(offset))
         .all(db)
         .await?;
 

@@ -25,7 +25,7 @@ pub async fn search_tasks(
              JOIN tasks_fts fts ON t.rowid = fts.rowid \
              WHERE tasks_fts MATCH ?1 \
              LIMIT ?2",
-            [sanitized.into(), (limit as i64).into()],
+            [sanitized.into(), i64::from(limit).into()],
         ))
         .await?;
 

@@ -1,4 +1,4 @@
-/// Sanitize a user-supplied query string for use in an SQLite FTS5 `MATCH` clause.
+/// Sanitize a user-supplied query string for use in an `SQLite` FTS5 `MATCH` clause.
 ///
 /// Tokens containing FTS5 operator characters are wrapped in double quotes
 /// (with any internal double quotes stripped) so the engine treats them as
@@ -9,15 +9,16 @@ pub fn sanitize_fts5_query(query: &str) -> String {
         .map(|token| {
             let stripped = token.replace('"', "");
             let upper = stripped.to_uppercase();
-            if matches!(upper.as_str(), "AND" | "OR" | "NOT" | "NEAR") {
-                format!("\"{}\"", stripped)
-            } else if stripped.chars().any(|c| {
-                matches!(
-                    c,
-                    '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+' | '(' | ')' | '*' | '^'
-                )
-            }) {
-                format!("\"{}\"", stripped)
+            if matches!(upper.as_str(), "AND" | "OR" | "NOT" | "NEAR")
+                || stripped.chars().any(|c| {
+                    matches!(
+                        c,
+                        '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+' | '(' | ')' | '*'
+                            | '^'
+                    )
+                })
+            {
+                format!("\"{stripped}\"")
             } else {
                 stripped
             }

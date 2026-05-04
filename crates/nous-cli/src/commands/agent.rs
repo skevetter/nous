@@ -209,7 +209,7 @@ pub enum AgentCommands {
         /// New status
         status: String,
     },
-    /// List agents with upgrade_available flag set
+    /// List agents with `upgrade_available` flag set
     Outdated {
         /// Namespace
         #[arg(long)]
@@ -255,7 +255,7 @@ pub enum AgentCommands {
         /// Network policy: none, public-only, allow-all. Requires --type sandbox
         #[arg(long)]
         sandbox_network: Option<String>,
-        /// Volume mounts in format 'guest_path:host_path[:ro]' (repeatable). Requires --type sandbox
+        /// Volume mounts in format '`guest_path:host_path`[:ro]' (repeatable). Requires --type sandbox
         #[arg(long)]
         sandbox_volume: Vec<String>,
     },
@@ -535,7 +535,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         } => {
             let agent_status = status
                 .as_deref()
-                .map(|s| s.parse::<agents::AgentStatus>())
+                .map(str::parse::<agents::AgentStatus>)
                 .transpose()?;
             let agent = agents::register_agent(
                 pool,
@@ -594,7 +594,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         } => {
             let status_parsed = status
                 .as_deref()
-                .map(|s| s.parse::<agents::AgentStatus>())
+                .map(str::parse::<agents::AgentStatus>)
                 .transpose()?;
             let list = agents::list_agents(
                 pool,
@@ -616,7 +616,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         AgentCommands::Heartbeat { id, status } => {
             let agent_status = status
                 .as_deref()
-                .map(|s| s.parse::<agents::AgentStatus>())
+                .map(str::parse::<agents::AgentStatus>)
                 .transpose()?;
             agents::heartbeat(pool, &id, agent_status).await?;
             println!("{{\"ok\": true}}");
@@ -918,7 +918,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
             if mcp_resp
                 .get("is_error")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
                 let msg = mcp_resp["content"][0]["text"]
@@ -956,7 +956,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
             if mcp_resp
                 .get("is_error")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
                 let msg = mcp_resp["content"][0]["text"]
@@ -999,7 +999,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
             let mcp_resp: serde_json::Value = serde_json::from_str(&text)?;
             if mcp_resp
                 .get("is_error")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
                 let msg = mcp_resp["content"][0]["text"]

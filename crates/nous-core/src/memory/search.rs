@@ -59,13 +59,13 @@ pub async fn search_memories(
          m.importance, m.topic_key, m.valid_from, m.valid_until, m.archived, \
          m.created_at, m.updated_at FROM memories m \
          INNER JOIN memories_fts f ON f.rowid = m.rowid \
-         WHERE memories_fts MATCH ?{} \
+         WHERE memories_fts MATCH ?{where_clause} \
          ORDER BY rank \
-         LIMIT ?",
-        where_clause
+         LIMIT ?"
     );
 
-    params.push((limit as i32).into());
+    // limit is capped by caller (e.g. 200); safe to cast to i32
+    params.push(limit.cast_signed().into());
 
     let rows = db
         .query_all(Statement::from_sql_and_values(
@@ -157,7 +157,7 @@ pub async fn search_similar(
             })
             .map_err(|e| NousError::Internal(format!("KNN query failed: {e}")))?;
 
-        rows.filter_map(|r| r.ok()).collect()
+        rows.filter_map(std::result::Result::ok).collect()
     };
 
     if memory_ids_and_distances.is_empty() {
@@ -171,9 +171,8 @@ pub async fn search_similar(
             continue;
         }
 
-        let memory = match get_memory_by_id(db, memory_id).await {
-            Ok(m) => m,
-            Err(_) => continue,
+        let Ok(memory) = get_memory_by_id(db, memory_id).await else {
+            continue;
         };
 
         if memory.archived {
@@ -274,8 +273,8 @@ pub async fn search_hybrid_filtered(
         &SearchMemoryRequest {
             query: query.to_string(),
             limit: Some(fts_limit),
-            workspace_id: workspace_id.map(|s| s.to_string()),
-            agent_id: agent_id.map(|s| s.to_string()),
+            workspace_id: workspace_id.map(std::string::ToString::to_string),
+            agent_id: agent_id.map(std::string::ToString::to_string),
             memory_type,
             ..Default::default()
         },
@@ -284,9 +283,13 @@ pub async fn search_hybrid_filtered(
     let fts_results: Vec<SimilarMemory> = fts_memories
         .into_iter()
         .enumerate()
-        .map(|(rank, memory)| SimilarMemory {
-            memory,
-            score: 1.0 / (1.0 + rank as f32),
+        .map(|(rank, memory)| {
+            // rank fits in u16 (result lists are small); u16→f32 is lossless
+            let rank_f = f32::from(u16::try_from(rank).unwrap_or(u16::MAX));
+            SimilarMemory {
+                memory,
+                score: 1.0 / (1.0 + rank_f),
+            }
         })
         .collect();
 

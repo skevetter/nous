@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum ModelCommands {
-    /// Download the embedding model and tokenizer from HuggingFace
+    /// Download the embedding model and tokenizer from `HuggingFace`
     Download,
 }
 
@@ -85,7 +85,10 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size:
 
     let content_length = response.content_length();
     if let Some(len) = content_length {
-        println!("       file size: {:.1} MB", len as f64 / 1_048_576.0);
+        // Divide first to bring value into u32 range; model files are well under 4 TB
+        let mb = f64::from(u32::try_from(len / 1_048_576).unwrap_or(u32::MAX));
+        let frac = f64::from(u32::try_from(len % 1_048_576).unwrap_or(0)) / 1_048_576.0;
+        println!("       file size: {:.1} MB", mb + frac);
     }
 
     let bytes = match response.bytes().await {

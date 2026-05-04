@@ -5,7 +5,7 @@ use crate::memory::SimilarMemory;
 const DEFAULT_K: f32 = 60.0;
 
 /// Reciprocal Rank Fusion: merges results from FTS and vector search.
-/// rrf_score = sum(1 / (k + rank_i)) for each result list containing the item.
+/// `rrf_score` = sum(1 / (k + `rank_i`)) for each result list containing the item.
 pub fn rerank_rrf(
     fts_results: &[SimilarMemory],
     vec_results: &[SimilarMemory],
@@ -15,7 +15,9 @@ pub fn rerank_rrf(
     let mut scores: HashMap<String, (f32, SimilarMemory)> = HashMap::new();
 
     for (rank, result) in fts_results.iter().enumerate() {
-        let rrf_score = 1.0 / (k + rank as f32 + 1.0);
+        // rank fits in u16 (result lists are never 65535+ items); u16→f32 is lossless
+        let rank_f = f32::from(u16::try_from(rank).unwrap_or(u16::MAX));
+        let rrf_score = 1.0 / (k + rank_f + 1.0);
         scores
             .entry(result.memory.id.clone())
             .and_modify(|(score, _)| *score += rrf_score)
@@ -23,7 +25,8 @@ pub fn rerank_rrf(
     }
 
     for (rank, result) in vec_results.iter().enumerate() {
-        let rrf_score = 1.0 / (k + rank as f32 + 1.0);
+        let rank_f = f32::from(u16::try_from(rank).unwrap_or(u16::MAX));
+        let rrf_score = 1.0 / (k + rank_f + 1.0);
         scores
             .entry(result.memory.id.clone())
             .and_modify(|(score, _)| *score += rrf_score)

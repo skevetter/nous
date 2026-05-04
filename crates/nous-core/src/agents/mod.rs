@@ -284,8 +284,8 @@ pub async fn list_agents(
     db: &DatabaseConnection,
     filter: &ListAgentsFilter,
 ) -> Result<Vec<Agent>, NousError> {
-    let limit = filter.limit.unwrap_or(50).min(200) as u64;
-    let offset = filter.offset.unwrap_or(0) as u64;
+    let limit = u64::from(filter.limit.unwrap_or(50).min(200));
+    let offset = u64::from(filter.offset.unwrap_or(0));
 
     let mut query = agent_entity::Entity::find();
 
@@ -517,22 +517,22 @@ pub async fn get_tree(
         }
     }
 
-    fn build_node(
-        agent: Agent,
-        children_map: &mut std::collections::HashMap<String, Vec<Agent>>,
-    ) -> TreeNode {
-        let child_agents = children_map.remove(&agent.id).unwrap_or_default();
-        let children = child_agents
-            .into_iter()
-            .map(|child| build_node(child, children_map))
-            .collect();
-        TreeNode { agent, children }
-    }
-
     Ok(roots
         .into_iter()
-        .map(|root| build_node(root, &mut children_map))
+        .map(|root| build_tree_node(root, &mut children_map))
         .collect())
+}
+
+fn build_tree_node(
+    agent: Agent,
+    children_map: &mut std::collections::HashMap<String, Vec<Agent>>,
+) -> TreeNode {
+    let child_agents = children_map.remove(&agent.id).unwrap_or_default();
+    let children = child_agents
+        .into_iter()
+        .map(|child| build_tree_node(child, children_map))
+        .collect();
+    TreeNode { agent, children }
 }
 
 // --- Search ---
@@ -547,6 +547,7 @@ pub async fn search_agents(
         return Err(NousError::Validation("search query cannot be empty".into()));
     }
 
+    // limit is capped at 100 — safe to cast to i32
     let limit = limit.unwrap_or(20).min(100);
     let sanitized = sanitize_fts5_query(query);
 
@@ -557,7 +558,7 @@ pub async fn search_agents(
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? AND a.namespace = ? \
              LIMIT ?",
-            [sanitized.clone().into(), ns.into(), (limit as i32).into()],
+            [sanitized.clone().into(), ns.into(), limit.cast_signed().into()],
         ))
         .await?
     } else {
@@ -567,7 +568,7 @@ pub async fn search_agents(
              INNER JOIN agents_fts f ON f.rowid = a.rowid \
              WHERE agents_fts MATCH ? \
              LIMIT ?",
-            [sanitized.into(), (limit as i32).into()],
+            [sanitized.into(), limit.cast_signed().into()],
         ))
         .await?
     };
@@ -693,7 +694,7 @@ pub async fn list_versions(
     limit: Option<u32>,
 ) -> Result<Vec<AgentVersion>, NousError> {
     let _agent = get_agent_by_id(db, agent_id).await?;
-    let limit = limit.unwrap_or(20).min(100) as u64;
+    let limit = u64::from(limit.unwrap_or(20).min(100));
 
     let models = ver_entity::Entity::find()
         .filter(ver_entity::Column::AgentId.eq(agent_id))
@@ -761,7 +762,8 @@ pub async fn inspect_agent(
     let version_count = ver_entity::Entity::find()
         .filter(ver_entity::Column::AgentId.eq(id))
         .count(db)
-        .await? as i64;
+        .await?
+        .cast_signed();
 
     let active_process = processes::get_active_process(db, id).await?;
     let recent_invocations = processes::list_invocations(db, id, None, Some(5)).await?;
@@ -822,7 +824,7 @@ pub async fn list_outdated_agents(
     namespace: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<Agent>, NousError> {
-    let limit = limit.unwrap_or(50).min(200) as u64;
+    let limit = u64::from(limit.unwrap_or(50).min(200));
 
     let mut query =
         agent_entity::Entity::find().filter(agent_entity::Column::UpgradeAvailable.eq(true));
@@ -895,7 +897,7 @@ pub async fn list_templates(
     template_type: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<AgentTemplate>, NousError> {
-    let limit = limit.unwrap_or(50).min(200) as u64;
+    let limit = u64::from(limit.unwrap_or(50).min(200));
 
     let mut query = tmpl_entity::Entity::find();
 
@@ -960,7 +962,7 @@ pub async fn instantiate_from_template(
         let process_type = config_val.get("process_type").and_then(|v| v.as_str());
         let spawn_command = config_val.get("spawn_command").and_then(|v| v.as_str());
         let working_dir = config_val.get("working_dir").and_then(|v| v.as_str());
-        let auto_restart = config_val.get("auto_restart").and_then(|v| v.as_bool());
+        let auto_restart = config_val.get("auto_restart").and_then(serde_json::Value::as_bool);
 
         if process_type.is_some()
             || spawn_command.is_some()
@@ -1011,7 +1013,8 @@ pub async fn list_stale_agents(
     namespace: Option<&str>,
 ) -> Result<Vec<Agent>, NousError> {
     let ns = namespace.unwrap_or("default");
-    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(threshold_secs as i64);
+    // threshold_secs is a small duration, safe to cast to i64
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(threshold_secs.cast_signed());
     let cutoff_str = cutoff.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
     // Skip agents with running processes — they are alive even if heartbeat is stale

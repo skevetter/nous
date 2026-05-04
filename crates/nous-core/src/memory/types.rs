@@ -332,9 +332,7 @@ pub fn detect_current_project(cwd: &str) -> Option<DetectedProject> {
         for (marker, project_type) in &markers {
             if dir.join(marker).exists() {
                 let name = dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".into());
+                    .file_name().map_or_else(|| "unknown".into(), |n| n.to_string_lossy().to_string());
                 return Some(DetectedProject {
                     name,
                     project_type: String::from(*project_type),
@@ -354,8 +352,7 @@ pub(crate) fn truncate_title(s: &str) -> String {
         let end = first_line
             .char_indices()
             .nth(77)
-            .map(|(i, _)| i)
-            .unwrap_or(first_line.len());
+            .map_or(first_line.len(), |(i, _)| i);
         format!("{}...", &first_line[..end])
     } else {
         first_line.to_string()

@@ -179,8 +179,7 @@ fn validate_definition(def: &AgentDefinition) -> Result<(), NousError> {
         for entry in &memory.auto_save {
             if !VALID_MEMORY_TYPES.contains(&entry.as_str()) {
                 return Err(NousError::Validation(format!(
-                    "invalid auto_save type '{}': must be one of {:?}",
-                    entry, VALID_MEMORY_TYPES
+                    "invalid auto_save type '{entry}': must be one of {VALID_MEMORY_TYPES:?}"
                 )));
             }
         }

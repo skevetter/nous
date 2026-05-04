@@ -8,8 +8,8 @@ pub enum SkillCommands {
     List,
 }
 
-pub async fn run(cmd: SkillCommands, _port: Option<u16>) {
-    if let Err(e) = execute(cmd).await {
+pub fn run(cmd: &SkillCommands, _port: Option<u16>) {
+    if let Err(e) = execute(cmd) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -30,7 +30,7 @@ pub fn list_skills_in_dir(dir: &Path) -> Result<Vec<(String, PathBuf)>, std::io:
     Ok(skills)
 }
 
-async fn execute(cmd: SkillCommands) -> Result<(), Box<dyn std::error::Error>> {
+fn execute(cmd: &SkillCommands) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         SkillCommands::List => {
             let skills_dir = dirs::config_dir()

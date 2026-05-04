@@ -5,6 +5,7 @@ use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::SystemClock;
+use nous_daemon::llm_client::{build_client, LlmConfig};
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
@@ -50,14 +51,14 @@ pub async fn run(
     foreground_daemon: bool,
 ) {
     if daemon && !foreground_daemon {
-        if let Err(e) = daemonize(model, region, profile, port) {
+        if let Err(e) = daemonize(model.as_deref(), region.as_deref(), profile.as_deref(), port) {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
         return;
     }
 
-    if let Err(e) = execute(model, region, profile, port, foreground_daemon).await {
+    if let Err(e) = execute(model.as_deref(), region.as_deref(), profile.as_deref(), port, foreground_daemon).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -66,26 +67,26 @@ pub async fn run(
 // Daemon process intentionally outlives parent
 #[allow(clippy::zombie_processes)]
 fn daemonize(
-    model: Option<String>,
-    region: Option<String>,
-    profile: Option<String>,
+    model: Option<&str>,
+    region: Option<&str>,
+    profile: Option<&str>,
     port: Option<u16>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
 
     let mut args = vec!["serve".to_string(), "--foreground-daemon".to_string()];
 
-    if let Some(ref m) = model {
+    if let Some(m) = model {
         args.push("--model".to_string());
-        args.push(m.clone());
+        args.push(m.to_string());
     }
-    if let Some(ref r) = region {
+    if let Some(r) = region {
         args.push("--region".to_string());
-        args.push(r.clone());
+        args.push(r.to_string());
     }
-    if let Some(ref p) = profile {
+    if let Some(p) = profile {
         args.push("--profile".to_string());
-        args.push(p.clone());
+        args.push(p.to_string());
     }
     if let Some(p) = port {
         args.insert(0, p.to_string());
@@ -109,28 +110,25 @@ fn daemonize(
 
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    match child.try_wait()? {
-        Some(status) => {
-            let log_path = log_dir.join("nous-daemon.log");
-            eprintln!("daemon exited immediately with {status}");
-            eprintln!("check log: {}", log_path.display());
-            std::process::exit(1);
-        }
-        None => {
-            let pid = child.id();
-            eprintln!("nous daemon started (pid: {pid})");
-            eprintln!("PID file: {}", pid_file_path().display());
-            eprintln!("Log file: {}", log_dir.join("nous-daemon.log").display());
-        }
+    if let Some(status) = child.try_wait()? {
+        let log_path = log_dir.join("nous-daemon.log");
+        eprintln!("daemon exited immediately with {status}");
+        eprintln!("check log: {}", log_path.display());
+        std::process::exit(1);
+    } else {
+        let pid = child.id();
+        eprintln!("nous daemon started (pid: {pid})");
+        eprintln!("PID file: {}", pid_file_path().display());
+        eprintln!("Log file: {}", log_dir.join("nous-daemon.log").display());
     }
 
     Ok(())
 }
 
 async fn execute(
-    model: Option<String>,
-    region: Option<String>,
-    profile: Option<String>,
+    model: Option<&str>,
+    region: Option<&str>,
+    profile: Option<&str>,
     port: Option<u16>,
     is_daemon: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -156,9 +154,7 @@ async fn execute(
             }
         };
 
-    use nous_daemon::llm_client::{build_client, LlmConfig};
-
-    let llm_config = LlmConfig::resolve(model, region, profile);
+    let llm_config = LlmConfig::resolve(model.map(str::to_owned), region.map(str::to_owned), profile.map(str::to_owned));
 
     let has_credentials = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
         || std::env::var("AWS_PROFILE").is_ok()

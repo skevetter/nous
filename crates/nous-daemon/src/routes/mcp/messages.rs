@@ -185,7 +185,7 @@ async fn handle_post_message(
     let message_type = args
         .get("message_type")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<MessageType>())
+        .map(str::parse::<MessageType>)
         .transpose()
         .map_err(nous_core::error::NousError::Validation)?;
     let msg = post_message(
@@ -214,7 +214,7 @@ async fn handle_read_messages(
         .get("before")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let messages = read_messages(
         &state.pool,
         ReadMessagesRequest {
@@ -237,7 +237,7 @@ async fn handle_search(
         .get("room_id")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let results = search_messages(
         &state.pool,
         SearchMessagesRequest {
@@ -255,7 +255,7 @@ async fn handle_wait(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let room_id = require_str(args, "room_id")?;
-    let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64());
+    let timeout_ms = args.get("timeout_ms").and_then(serde_json::Value::as_u64);
     let topics: Option<Vec<String>> =
         args.get("topics").and_then(|v| v.as_array()).map(|arr| {
             arr.iter()
@@ -311,7 +311,7 @@ async fn handle_mentions(
 ) -> Result<Value, nous_core::error::NousError> {
     let room_id = require_str(args, "room_id")?;
     let agent_id = require_str(args, "agent_id")?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let messages = list_mentions(&state.pool, room_id, agent_id, limit).await?;
     Ok(serde_json::to_value(messages).unwrap())
 }

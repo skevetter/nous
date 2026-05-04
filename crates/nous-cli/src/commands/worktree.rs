@@ -104,7 +104,7 @@ async fn execute(
         } => {
             let status_parsed = status
                 .as_deref()
-                .map(|s| s.parse::<worktrees::WorktreeStatus>())
+                .map(str::parse::<worktrees::WorktreeStatus>)
                 .transpose()?;
             let wts = worktrees::list(
                 pool,

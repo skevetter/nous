@@ -5,10 +5,12 @@ use nous_core::db::DbPools;
 use nous_core::notifications::NotificationRegistry;
 use nous_core::schedules::SystemClock;
 use nous_daemon::embedding::{build_embedder, resolve_embedding_config, validate_embedding_dimensions};
+use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::scheduler::{Scheduler, SchedulerConfig};
 use nous_daemon::state::AppState;
 use nous_daemon::vector_store::resolve_vector_store_config;
+use rig::client::ProviderClient;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -42,9 +44,6 @@ async fn main() {
                 None
             }
         };
-
-    use nous_daemon::llm_client::{LlmClient, DEFAULT_MODEL};
-    use rig::client::ProviderClient;
 
     let (llm_client, default_model) = match LlmClient::from_env() {
         Ok(client) => {

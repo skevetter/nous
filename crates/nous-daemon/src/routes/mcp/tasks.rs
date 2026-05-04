@@ -315,7 +315,7 @@ async fn handle_task_create(
     let room_id = args.get("room_id").and_then(|v| v.as_str());
     let create_room_flag = args
         .get("create_room")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let task = tasks::create_task(tasks::CreateTaskParams {
         db: &state.pool,
@@ -340,10 +340,10 @@ async fn handle_task_list(
     let status = args.get("status").and_then(|v| v.as_str());
     let assignee_id = args.get("assignee_id").and_then(|v| v.as_str());
     let label = args.get("label").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let offset = args
         .get("offset")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .map(|v| v as u32);
     let result = tasks::list_tasks(tasks::ListTasksParams {
         db: &state.pool,
@@ -513,7 +513,7 @@ async fn handle_task_template_list(
     args: &Value,
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let templates = tasks::list_templates(&state.pool, limit).await?;
     Ok(serde_json::to_value(templates).unwrap())
 }

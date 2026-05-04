@@ -75,9 +75,9 @@ async fn run_loop(
         let sleep_dur = next_wake_duration(&state.pool, &*clock).await;
 
         tokio::select! {
-            _ = tokio::time::sleep(sleep_dur) => {}
-            _ = state.schedule_notify.notified() => {}
-            _ = shutdown.cancelled() => { break; }
+            () = tokio::time::sleep(sleep_dur) => {}
+            () = state.schedule_notify.notified() => {}
+            () = shutdown.cancelled() => { break; }
         }
 
         if shutdown.is_cancelled() {
@@ -101,9 +101,8 @@ async fn run_loop(
             guard.insert(schedule.id.clone());
             drop(guard);
 
-            let permit = match semaphore.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => break,
+            let Ok(permit) = semaphore.clone().acquire_owned().await else {
+                break;
             };
 
             let state = state.clone();
@@ -122,7 +121,7 @@ async fn run_loop(
                     let msg = panic_info
                         .downcast_ref::<&str>()
                         .copied()
-                        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                        .or_else(|| panic_info.downcast_ref::<String>().map(std::string::String::as_str))
                         .unwrap_or("unknown panic");
                     tracing::error!(
                         schedule_id = %schedule.id,
@@ -162,7 +161,7 @@ async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Dur
                 Ok(ts) => ts,
                 Err(e) => {
                     tracing::error!("failed to parse next_run_at ISO timestamp: {e}");
-                    return Duration::from_secs(60);
+                    return Duration::from_mins(1);
                 }
             };
             let now = clock.now_utc();
@@ -170,10 +169,11 @@ async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Dur
             if diff <= 0 {
                 Duration::from_secs(1)
             } else {
-                Duration::from_secs(diff as u64)
+                // diff > 0 at this point; cast_unsigned() is safe
+                Duration::from_secs(diff.cast_unsigned())
             }
         }
-        None => Duration::from_secs(60),
+        None => Duration::from_mins(1),
     }
 }
 
@@ -184,11 +184,13 @@ async fn execute_schedule(
     clock: &Arc<dyn Clock>,
 ) {
     let started_at = clock.now_utc();
+    // Schedule timeout: use schedule value if set, else fallback to config default.
+    // Both are non-negative; i32.cast_unsigned() is safe for positive values.
     let timeout_secs = schedule
         .timeout_secs
-        .unwrap_or(config.default_timeout_secs as i32) as u64;
+        .map_or(config.default_timeout_secs, |s| u64::from(s.cast_unsigned()));
 
-    let max_retries = schedule.max_retries.max(0) as u32;
+    let max_retries = schedule.max_retries.max(0).cast_unsigned();
     let mut last_result: DispatchResult = DispatchResult {
         status: "failed".to_string(),
         output: None,
@@ -205,8 +207,12 @@ async fn execute_schedule(
 
         last_result = match result {
             Ok(Ok(output)) => {
-                let truncated = truncate_output(&output, schedule.max_output_bytes as usize);
-                evaluate_outcome(truncated, &schedule.desired_outcome)
+                // max_output_bytes is always non-negative; safe to cast
+                let truncated = truncate_output(
+                    &output,
+                    usize::try_from(schedule.max_output_bytes).unwrap_or(usize::MAX),
+                );
+                evaluate_outcome(truncated, schedule.desired_outcome.as_ref())
             }
             Ok(Err(e)) => DispatchResult {
                 status: "failed".to_string(),
@@ -458,7 +464,7 @@ fn truncate_output(output: &str, max_bytes: usize) -> String {
     }
 }
 
-fn evaluate_outcome(output: String, desired_outcome: &Option<String>) -> DispatchResult {
+fn evaluate_outcome(output: String, desired_outcome: Option<&String>) -> DispatchResult {
     let Some(pattern) = desired_outcome else {
         return DispatchResult {
             status: "completed".to_string(),

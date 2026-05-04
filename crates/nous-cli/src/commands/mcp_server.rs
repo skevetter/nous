@@ -4,6 +4,7 @@ use nous_core::config::Config;
 use nous_core::db::DbPools;
 use nous_core::memory::OnnxEmbeddingModel;
 use nous_core::notifications::NotificationRegistry;
+use nous_daemon::llm_client::{build_client, LlmConfig};
 use nous_daemon::process_manager::ProcessRegistry;
 use nous_daemon::routes::mcp::{dispatch, get_tool_schemas};
 use nous_daemon::state::AppState;
@@ -65,8 +66,6 @@ async fn execute(
                 None
             }
         };
-
-    use nous_daemon::llm_client::{build_client, LlmConfig};
 
     let llm_config = LlmConfig::resolve(model, region, profile);
 

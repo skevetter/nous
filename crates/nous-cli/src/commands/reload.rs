@@ -8,7 +8,7 @@ fn pid_file_path() -> PathBuf {
         .join("nous.pid")
 }
 
-pub async fn run() {
+pub fn run() {
     let pid_path = pid_file_path();
 
     let pid_str = match fs::read_to_string(&pid_path) {

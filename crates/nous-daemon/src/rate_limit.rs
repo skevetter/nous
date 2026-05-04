@@ -6,7 +6,7 @@ use nous_core::config::RateLimitConfig;
 use tower_governor::{governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor};
 
 pub fn apply(config: &RateLimitConfig, router: Router) -> Router {
-    let period = Duration::from_secs(60) / config.requests_per_minute;
+    let period = Duration::from_mins(1) / config.requests_per_minute;
     let governor_config = Arc::new(
         GovernorConfigBuilder::default()
             .per_nanosecond(period.as_nanos() as u64)

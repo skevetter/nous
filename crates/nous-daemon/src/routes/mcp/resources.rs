@@ -364,7 +364,7 @@ async fn handle_worktree_list(
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<worktrees::WorktreeStatus>())
+        .map(str::parse::<worktrees::WorktreeStatus>)
         .transpose()?;
     let agent_id = args
         .get("agent_id")
@@ -374,7 +374,7 @@ async fn handle_worktree_list(
         .get("task_id")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let wts = worktrees::list(
         &state.pool,
         worktrees::ListWorktreesFilter {
@@ -445,7 +445,7 @@ async fn handle_resource_register(
     let ownership_policy = args
         .get("ownership_policy")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .map(str::parse::<resources::OwnershipPolicy>)
         .transpose()?;
     let resource = resources::register_resource(
         &state.pool,
@@ -471,12 +471,12 @@ async fn handle_resource_list(
     let resource_type = args
         .get("type")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::ResourceType>())
+        .map(str::parse::<resources::ResourceType>)
         .transpose()?;
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::ResourceStatus>())
+        .map(str::parse::<resources::ResourceStatus>)
         .transpose()?;
     let owner_agent_id = args
         .get("owner_agent_id")
@@ -486,13 +486,13 @@ async fn handle_resource_list(
         .get("namespace")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let orphaned = args.get("orphaned").and_then(|v| v.as_bool());
+    let orphaned = args.get("orphaned").and_then(serde_json::Value::as_bool);
     let ownership_policy = args
         .get("ownership_policy")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .map(str::parse::<resources::OwnershipPolicy>)
         .transpose()?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let items = resources::list_resources(
         &state.pool,
         &resources::ListResourcesFilter {
@@ -538,12 +538,12 @@ async fn handle_resource_update(
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::ResourceStatus>())
+        .map(str::parse::<resources::ResourceStatus>)
         .transpose()?;
     let ownership_policy = args
         .get("ownership_policy")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .map(str::parse::<resources::OwnershipPolicy>)
         .transpose()?;
     let resource = resources::update_resource(
         &state.pool,
@@ -577,18 +577,18 @@ async fn handle_resource_search(
     let resource_type = args
         .get("type")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::ResourceType>())
+        .map(str::parse::<resources::ResourceType>)
         .transpose()?;
     let status = args
         .get("status")
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<resources::ResourceStatus>())
+        .map(str::parse::<resources::ResourceStatus>)
         .transpose()?;
     let namespace = args
         .get("namespace")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let items = resources::search_by_tags(
         &state.pool,
         &resources::SearchResourcesRequest {
@@ -617,7 +617,7 @@ async fn handle_resource_deregister(
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
     let id = require_str(args, "id")?;
-    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force = args.get("force").and_then(serde_json::Value::as_bool).unwrap_or(false);
     resources::deregister_resource(&state.pool, id, force).await?;
     Ok(serde_json::json!({"deleted": true}))
 }
@@ -650,20 +650,20 @@ async fn handle_schedule_create(
     let cron_expr = require_str(args, "cron_expr")?;
     let action_type = require_str(args, "action_type")?;
     let action_payload = require_str(args, "action_payload")?;
-    let trigger_at = args.get("trigger_at").and_then(|v| v.as_i64());
+    let trigger_at = args.get("trigger_at").and_then(serde_json::Value::as_i64);
     let timezone = args.get("timezone").and_then(|v| v.as_str());
     let desired_outcome = args.get("desired_outcome").and_then(|v| v.as_str());
     let max_retries = args
         .get("max_retries")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let timeout_secs = args
         .get("timeout_secs")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let max_runs = args
         .get("max_runs")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
         db: &state.pool,
@@ -697,9 +697,9 @@ async fn handle_schedule_list(
     args: &Value,
     state: &AppState,
 ) -> Result<Value, nous_core::error::NousError> {
-    let enabled = args.get("enabled").and_then(|v| v.as_bool());
+    let enabled = args.get("enabled").and_then(serde_json::Value::as_bool);
     let action_type = args.get("action_type").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let list = schedules::list_schedules(&state.pool, enabled, action_type, limit).await?;
     Ok(serde_json::to_value(list).unwrap())
 }
@@ -718,7 +718,7 @@ async fn handle_schedule_update(
     } else {
         None
     };
-    let enabled = args.get("enabled").and_then(|v| v.as_bool());
+    let enabled = args.get("enabled").and_then(serde_json::Value::as_bool);
     let action_type = args.get("action_type").and_then(|v| v.as_str());
     let action_payload = args.get("action_payload").and_then(|v| v.as_str());
     let desired_outcome = if args.get("desired_outcome").is_some() {
@@ -728,15 +728,15 @@ async fn handle_schedule_update(
     };
     let max_retries = args
         .get("max_retries")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let timeout_secs = args
         .get("timeout_secs")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let max_runs = args
         .get("max_runs")
-        .and_then(|v| v.as_i64())
+        .and_then(serde_json::Value::as_i64)
         .map(|v| v as i32);
     let schedule = schedules::update_schedule(schedules::UpdateScheduleParams {
         db: &state.pool,
@@ -772,7 +772,7 @@ async fn handle_schedule_runs_list(
 ) -> Result<Value, nous_core::error::NousError> {
     let schedule_id = require_str(args, "schedule_id")?;
     let status = args.get("status").and_then(|v| v.as_str());
-    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let limit = args.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as u32);
     let runs = schedules::list_runs(&state.pool, schedule_id, status, limit).await?;
     Ok(serde_json::to_value(runs).unwrap())
 }

@@ -69,7 +69,7 @@ pub async fn register(
     let agent_status = body
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::agents::AgentStatus>())
+        .map(str::parse::<nous_core::agents::AgentStatus>)
         .transpose()?;
 
     let agent = nous_core::agents::register_agent(
@@ -106,7 +106,7 @@ pub async fn list(
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::agents::AgentStatus>())
+        .map(str::parse::<nous_core::agents::AgentStatus>)
         .transpose()?;
 
     let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM agents");
@@ -157,7 +157,7 @@ pub async fn heartbeat(
     let status = body
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::agents::AgentStatus>())
+        .map(str::parse::<nous_core::agents::AgentStatus>)
         .transpose()?;
     nous_core::agents::heartbeat(&state.pool, &id, status).await?;
     Ok(ApiResponse::ok(serde_json::json!({ "ok": true })))

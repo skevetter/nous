@@ -74,7 +74,7 @@ pub async fn register(
     let ownership_policy = body
         .ownership_policy
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::OwnershipPolicy>())
+        .map(str::parse::<nous_core::resources::OwnershipPolicy>)
         .transpose()?;
     let resource = nous_core::resources::register_resource(
         &state.pool,
@@ -100,17 +100,17 @@ pub async fn list(
     let resource_type = params
         .resource_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::ResourceType>())
+        .map(str::parse::<nous_core::resources::ResourceType>)
         .transpose()?;
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::ResourceStatus>())
+        .map(str::parse::<nous_core::resources::ResourceStatus>)
         .transpose()?;
     let ownership_policy = params
         .ownership_policy
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::OwnershipPolicy>())
+        .map(str::parse::<nous_core::resources::OwnershipPolicy>)
         .transpose()?;
 
     let limit = clamp_limit(params.limit.unwrap_or(50));
@@ -183,12 +183,12 @@ pub async fn update(
     let status = body
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::ResourceStatus>())
+        .map(str::parse::<nous_core::resources::ResourceStatus>)
         .transpose()?;
     let ownership_policy = body
         .ownership_policy
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::OwnershipPolicy>())
+        .map(str::parse::<nous_core::resources::OwnershipPolicy>)
         .transpose()?;
 
     let resource = nous_core::resources::update_resource(
@@ -246,12 +246,12 @@ pub async fn search(
     let resource_type = params
         .resource_type
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::ResourceType>())
+        .map(str::parse::<nous_core::resources::ResourceType>)
         .transpose()?;
     let status = params
         .status
         .as_deref()
-        .map(|s| s.parse::<nous_core::resources::ResourceStatus>())
+        .map(str::parse::<nous_core::resources::ResourceStatus>)
         .transpose()?;
 
     let resources = nous_core::resources::search_by_tags(

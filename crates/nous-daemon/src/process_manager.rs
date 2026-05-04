@@ -36,9 +36,9 @@ pub struct ProcessHandle {
 
 pub struct ProcessRegistry {
     handles: Mutex<HashMap<String, ProcessHandle>>, // keyed by agent_id
-    /// Tracks agent_ids currently in the process of being spawned.
-    /// Prevents TOCTOU races where concurrent spawn() calls for the same
-    /// agent_id could both pass the `handles` check before either inserts.
+    /// Tracks `agent_ids` currently in the process of being spawned.
+    /// Prevents TOCTOU races where concurrent `spawn()` calls for the same
+    /// `agent_id` could both pass the `handles` check before either inserts.
     spawning: Mutex<HashSet<String>>,
 }
 
@@ -48,14 +48,14 @@ impl Default for ProcessRegistry {
     }
 }
 
-/// Guard that removes an agent_id from the `spawning` set on drop,
+/// Guard that removes an `agent_id` from the `spawning` set on drop,
 /// ensuring the reservation is released even if the spawn fails.
 struct SpawnReservation<'a> {
     registry: &'a ProcessRegistry,
     agent_id: Option<String>,
 }
 
-impl<'a> SpawnReservation<'a> {
+impl SpawnReservation<'_> {
     /// Consume the reservation without removing from the spawning set
     /// (caller has successfully inserted into handles).
     fn defuse(mut self) {
@@ -194,7 +194,7 @@ impl ProcessRegistry {
             .spawn()
             .map_err(|e| NousError::Internal(format!("failed to spawn process: {e}")))?;
 
-        let pid = child.id().map(|p| p as i64);
+        let pid = child.id().map(i64::from);
 
         // Update to running with PID
         let process =
@@ -239,7 +239,7 @@ impl ProcessRegistry {
                 let msg = panic_info
                     .downcast_ref::<&str>()
                     .copied()
-                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .or_else(|| panic_info.downcast_ref::<String>().map(std::string::String::as_str))
                     .unwrap_or("unknown panic");
                 tracing::error!(
                     agent_id = %monitor_agent_id,
@@ -481,35 +481,32 @@ impl ProcessRegistry {
 
         let result = if let Some(duration) = timeout_duration {
             tokio::select! {
-                _ = cancel.cancelled() => {
+                () = cancel.cancelled() => {
                     // Intentional stop
                     None
                 }
                 result = tokio::time::timeout(duration, Self::wait_for_exit(&state, &agent_id)) => {
-                    match result {
-                        Ok(exit_result) => Some(exit_result),
-                        Err(_) => {
-                            // Timeout
-                            if let Err(e) = processes::update_process_status(
-                                &state.pool, &process_id, "failed", None,
-                                Some("process timed out"), None,
-                            ).await {
-                                tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to failed on timeout");
-                            }
-                            // Kill the child from handles
-                            if let Some(mut handle) = state.process_registry.handles.lock().await.remove(&agent_id) {
-                                if let Some(mut child) = handle.child.take() {
-                                    let _ = child.kill().await;
-                                }
-                            }
-                            return;
+                    if let Ok(exit_result) = result { Some(exit_result) } else {
+                        // Timeout
+                        if let Err(e) = processes::update_process_status(
+                            &state.pool, &process_id, "failed", None,
+                            Some("process timed out"), None,
+                        ).await {
+                            tracing::warn!(process_id = %process_id, error = %e, "failed to update process status to failed on timeout");
                         }
+                        // Kill the child from handles
+                        if let Some(mut handle) = state.process_registry.handles.lock().await.remove(&agent_id) {
+                            if let Some(mut child) = handle.child.take() {
+                                let _ = child.kill().await;
+                            }
+                        }
+                        return;
                     }
                 }
             }
         } else {
             tokio::select! {
-                _ = cancel.cancelled() => None,
+                () = cancel.cancelled() => None,
                 result = Self::wait_for_exit(&state, &agent_id) => Some(result),
             }
         };
@@ -618,7 +615,8 @@ impl ProcessRegistry {
                 {
                     if let Some(pid) = child.id() {
                         unsafe {
-                            libc::kill(pid as i32, libc::SIGTERM);
+                            // PIDs are always < 2^31 on all supported platforms
+                            libc::kill(pid.cast_signed(), libc::SIGTERM);
                         }
                     }
                 }
@@ -747,13 +745,13 @@ impl ProcessRegistry {
         };
 
         let result = match agent.process_type.as_deref() {
-            Some("claude") | Some("sandbox") => {
+            Some("claude" | "sandbox") => {
                 self.invoke_claude(
                     state,
                     &invocation,
                     prompt,
                     timeout_secs,
-                    &metadata,
+                    metadata.as_ref(),
                     is_async,
                 )
                 .await
@@ -950,7 +948,7 @@ impl ProcessRegistry {
         invocation: &Invocation,
         prompt: &str,
         timeout_secs: Option<i64>,
-        metadata: &Option<serde_json::Value>,
+        metadata: Option<&serde_json::Value>,
         is_async: bool,
     ) -> Result<Invocation, NousError> {
         use rig::client::completion::CompletionClient;
@@ -961,14 +959,12 @@ impl ProcessRegistry {
         })?;
 
         let model = metadata
-            .as_ref()
             .and_then(|m| m.get("model"))
             .and_then(|v| v.as_str())
             .unwrap_or(&state.default_model)
             .to_string();
 
         let preamble = metadata
-            .as_ref()
             .and_then(|m| m.get("preamble"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -1090,7 +1086,7 @@ impl ProcessRegistry {
             Some(ProcessStatus {
                 process_id: handle.process_id.clone(),
                 agent_id: handle.agent_id.clone(),
-                pid: handle.child.as_ref().and_then(|c| c.id()),
+                pid: handle.child.as_ref().and_then(tokio::process::Child::id),
                 uptime_secs: uptime.num_seconds(),
             })
         } else {

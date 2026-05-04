@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use sea_orm::entity::prelude::*;
@@ -258,8 +259,7 @@ pub fn should_notify_agent(
     }
 
     match topics {
-        None => true,
-        Some([]) => true,
+        None | Some([]) => true,
         Some(t) => notification.topics.iter().any(|nt| t.contains(nt)),
     }
 }
@@ -318,10 +318,11 @@ pub async fn dequeue_notification(
                 // Filter notifications that have at least one matching topic.
                 // Topics are stored as JSON arrays, so we use json_each to check membership.
                 let placeholders: Vec<&str> = filter.iter().map(|_| "?").collect();
-                sql.push_str(&format!(
+                let _ = write!(
+                    sql,
                     " AND EXISTS (SELECT 1 FROM json_each(notification_queue.topics) AS je WHERE je.value IN ({}))",
                     placeholders.join(", ")
-                ));
+                );
                 for t in filter {
                     values.push(t.clone().into());
                 }
