@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -100,13 +101,30 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
     let status = params
         .status
         .as_deref()
         .map(|s| s.parse::<nous_core::agents::AgentStatus>())
         .transpose()?;
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM agents");
+    let mut count_conds: Vec<String> = Vec::new();
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref ns) = params.namespace {
+        count_conds.push("namespace = ?".into());
+        count_vals.push(ns.clone().into());
+    }
+    if let Some(ref s) = status {
+        count_conds.push("status = ?".into());
+        count_vals.push(s.as_str().to_string().into());
+    }
+    if !count_conds.is_empty() {
+        count_sql.push_str(" WHERE ");
+        count_sql.push_str(&count_conds.join(" AND "));
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
 
     let agents = nous_core::agents::list_agents(
         &state.pool,
@@ -119,7 +137,7 @@ pub async fn list(
     )
     .await?;
 
-    Ok(crate::response::paginated(agents, limit, offset))
+    Ok(crate::response::paginated(agents, limit, offset, total_count))
 }
 
 pub async fn deregister(
@@ -226,10 +244,16 @@ pub async fn list_versions(
     Path(id): Path<String>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
+    let total_count = count_total(
+        &state.pool,
+        "SELECT COUNT(*) as cnt FROM agent_versions WHERE agent_id = ?",
+        vec![id.clone().into()],
+    )
+    .await?;
     let versions = nous_core::agents::list_versions(&state.pool, &id, Some(limit + 1)).await?;
-    Ok(crate::response::paginated(versions, limit, offset))
+    Ok(crate::response::paginated(versions, limit, offset, total_count))
 }
 
 pub async fn record_version(
@@ -275,15 +299,25 @@ pub async fn list_outdated(
     State(state): State<AppState>,
     Query(params): Query<ListAgentsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
+
+    let mut count_sql =
+        String::from("SELECT COUNT(*) as cnt FROM agents WHERE upgrade_available = 1");
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref ns) = params.namespace {
+        count_sql.push_str(" AND namespace = ?");
+        count_vals.push(ns.clone().into());
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let agents = nous_core::agents::list_outdated_agents(
         &state.pool,
         params.namespace.as_deref(),
         Some(limit + 1),
     )
     .await?;
-    Ok(crate::response::paginated(agents, limit, offset))
+    Ok(crate::response::paginated(agents, limit, offset, total_count))
 }
 
 // --- Template routes ---
@@ -334,15 +368,24 @@ pub async fn list_templates(
     State(state): State<AppState>,
     Query(params): Query<ListTemplatesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset: u32 = 0;
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM agent_templates");
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref t) = params.template_type {
+        count_sql.push_str(" WHERE template_type = ?");
+        count_vals.push(t.clone().into());
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let templates = nous_core::agents::list_templates(
         &state.pool,
         params.template_type.as_deref(),
         Some(limit + 1),
     )
     .await?;
-    Ok(crate::response::paginated(templates, limit, offset))
+    Ok(crate::response::paginated(templates, limit, offset, total_count))
 }
 
 pub async fn get_template(

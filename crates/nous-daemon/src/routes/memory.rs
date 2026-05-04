@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -159,7 +160,24 @@ pub async fn context(
     State(state): State<AppState>,
     Query(params): Query<ContextQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit_val = params.limit.unwrap_or(20);
+    let limit_val = clamp_limit(params.limit.unwrap_or(20));
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM memories WHERE archived = 0");
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref ws) = params.workspace_id {
+        count_sql.push_str(" AND workspace_id = ?");
+        count_vals.push(ws.clone().into());
+    }
+    if let Some(ref agent) = params.agent_id {
+        count_sql.push_str(" AND agent_id = ?");
+        count_vals.push(agent.clone().into());
+    }
+    if let Some(ref topic) = params.topic_key {
+        count_sql.push_str(" AND topic_key = ?");
+        count_vals.push(topic.clone().into());
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let results = nous_core::memory::get_context(
         &state.pool,
         &nous_core::memory::ContextRequest {
@@ -170,7 +188,7 @@ pub async fn context(
         },
     )
     .await?;
-    Ok(crate::response::paginated(results, limit_val, 0))
+    Ok(crate::response::paginated(results, limit_val, 0, total_count))
 }
 
 pub async fn relate(

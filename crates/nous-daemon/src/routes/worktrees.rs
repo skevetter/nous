@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -52,13 +53,35 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListWorktreesQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
     let status = params
         .status
         .as_deref()
         .map(|s| s.parse::<nous_core::worktrees::WorktreeStatus>())
         .transpose()?;
+
+    let mut count_sql = String::from("SELECT COUNT(*) as cnt FROM worktrees");
+    let mut count_conds: Vec<String> = Vec::new();
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref s) = status {
+        count_conds.push("status = ?".into());
+        count_vals.push(s.as_str().to_string().into());
+    }
+    if let Some(ref a) = params.agent_id {
+        count_conds.push("agent_id = ?".into());
+        count_vals.push(a.clone().into());
+    }
+    if let Some(ref t) = params.task_id {
+        count_conds.push("task_id = ?".into());
+        count_vals.push(t.clone().into());
+    }
+    if !count_conds.is_empty() {
+        count_sql.push_str(" WHERE ");
+        count_sql.push_str(&count_conds.join(" AND "));
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let wts = nous_core::worktrees::list(
         &state.pool,
         nous_core::worktrees::ListWorktreesFilter {
@@ -71,7 +94,7 @@ pub async fn list(
         },
     )
     .await?;
-    Ok(crate::response::paginated(wts, limit, offset))
+    Ok(crate::response::paginated(wts, limit, offset, total_count))
 }
 
 pub async fn get(

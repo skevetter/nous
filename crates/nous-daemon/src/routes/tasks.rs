@@ -3,8 +3,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
+use super::count_total;
 use crate::error::AppError;
-use crate::response::ApiResponse;
+use crate::response::{clamp_limit, ApiResponse};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -79,8 +80,34 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListTasksQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let limit = params.limit.unwrap_or(50);
+    let limit = clamp_limit(params.limit.unwrap_or(50));
     let offset = params.offset.unwrap_or(0);
+
+    let mut count_sql = if params.label.is_some() {
+        String::from("SELECT COUNT(*) as cnt FROM tasks, json_each(tasks.labels) AS je")
+    } else {
+        String::from("SELECT COUNT(*) as cnt FROM tasks")
+    };
+    let mut count_conds: Vec<String> = Vec::new();
+    let mut count_vals: Vec<sea_orm::Value> = Vec::new();
+    if let Some(ref s) = params.status {
+        count_conds.push("tasks.status = ?".into());
+        count_vals.push(s.clone().into());
+    }
+    if let Some(ref a) = params.assignee_id {
+        count_conds.push("tasks.assignee_id = ?".into());
+        count_vals.push(a.clone().into());
+    }
+    if let Some(ref l) = params.label {
+        count_conds.push("je.value = ?".into());
+        count_vals.push(l.clone().into());
+    }
+    if !count_conds.is_empty() {
+        count_sql.push_str(" WHERE ");
+        count_sql.push_str(&count_conds.join(" AND "));
+    }
+    let total_count = count_total(&state.pool, &count_sql, count_vals).await?;
+
     let tasks = nous_core::tasks::list_tasks(nous_core::tasks::ListTasksParams {
         db: &state.pool,
         status: params.status.as_deref(),
@@ -92,7 +119,7 @@ pub async fn list(
         order_dir: None,
     })
     .await?;
-    Ok(crate::response::paginated(tasks, limit, offset))
+    Ok(crate::response::paginated(tasks, limit, offset, total_count))
 }
 
 pub async fn get(
