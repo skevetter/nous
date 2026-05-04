@@ -42,6 +42,9 @@ pub enum AgentCommands {
         /// Agent name (must be unique within namespace)
         #[arg(long)]
         name: String,
+        /// Agent type (engineer, manager, director, senior-manager)
+        #[arg(long)]
+        agent_type: Option<String>,
         /// Parent agent ID
         #[arg(long)]
         parent: Option<String>,
@@ -419,6 +422,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 pool,
                 agents::RegisterAgentRequest {
                     name: def.agent.name,
+                    agent_type: None,
                     parent_id: None,
                     namespace: def.agent.namespace,
                     room: None,
@@ -520,6 +524,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
         }
         AgentCommands::Register {
             name,
+            agent_type,
             parent,
             namespace,
             room,
@@ -534,6 +539,7 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
                 pool,
                 agents::RegisterAgentRequest {
                     name,
+                    agent_type,
                     parent_id: parent,
                     namespace,
                     room,

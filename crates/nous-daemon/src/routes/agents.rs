@@ -10,6 +10,7 @@ use crate::state::AppState;
 #[derive(Deserialize)]
 pub struct RegisterAgentBody {
     pub name: String,
+    pub agent_type: Option<String>,
     pub parent_id: Option<String>,
     pub namespace: Option<String>,
     pub room: Option<String>,
@@ -74,6 +75,7 @@ pub async fn register(
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: body.name,
+            agent_type: body.agent_type,
             parent_id: body.parent_id,
             namespace: body.namespace,
             room: body.room,

@@ -739,6 +739,7 @@ mod tests {
             db,
             crate::agents::RegisterAgentRequest {
                 name: name.to_string(),
+                agent_type: None,
                 namespace: None,
                 parent_id: None,
                 room: None,
@@ -1444,6 +1445,7 @@ mod tests {
             &db,
             crate::agents::RegisterAgentRequest {
                 name: "child-agent".into(),
+                agent_type: None,
                 namespace: None,
                 parent_id: Some(parent_id.clone()),
                 room: None,
@@ -1502,6 +1504,7 @@ mod tests {
         let child = crate::agents::register_agent(
             &db,
             crate::agents::RegisterAgentRequest {
+                agent_type: None,
                 name: "mixed-child".into(),
                 namespace: None,
                 parent_id: Some(parent_id.clone()),

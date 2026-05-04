@@ -19,6 +19,7 @@ async fn concurrent_register_agents_same_name() {
                 &db,
                 RegisterAgentRequest {
                     name: "dup-agent".to_string(),
+            agent_type: None,
                     parent_id: None,
                     namespace: Some("default".to_string()),
                     room: None,
@@ -73,6 +74,7 @@ async fn concurrent_delete_same_agent() {
         db,
         RegisterAgentRequest {
             name: "doomed-agent".to_string(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".to_string()),
             room: None,
@@ -233,6 +235,7 @@ async fn concurrent_cascade_delete_parent_agent() {
         db,
         RegisterAgentRequest {
             name: "parent-agent".to_string(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".to_string()),
             room: None,
@@ -248,6 +251,7 @@ async fn concurrent_cascade_delete_parent_agent() {
             db,
             RegisterAgentRequest {
                 name: format!("child-{i}"),
+            agent_type: None,
                 parent_id: Some(parent.id.clone()),
                 namespace: Some("default".to_string()),
                 room: None,
@@ -304,6 +308,7 @@ async fn concurrent_register_and_delete_interleaved() {
                     &db,
                     RegisterAgentRequest {
                         name: format!("ephemeral-{i}"),
+            agent_type: None,
                         parent_id: None,
                         namespace: Some("default".to_string()),
                         room: None,
@@ -338,6 +343,7 @@ async fn concurrent_register_and_delete_interleaved() {
                 &db,
                 RegisterAgentRequest {
                     name: format!("ephemeral-{i}"),
+            agent_type: None,
                     parent_id: None,
                     namespace: Some("default".to_string()),
                     room: None,

@@ -116,6 +116,7 @@ async fn agent_name_with_emoji_and_special_chars() {
         pool,
         RegisterAgentRequest {
             name: "🤖 agent/special@chars!".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("test".into()),
             room: None,
@@ -148,6 +149,7 @@ async fn agent_name_unicode_normalization_distinction() {
         pool,
         RegisterAgentRequest {
             name: nfc_name.into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("norm-test".into()),
             room: None,
@@ -162,6 +164,7 @@ async fn agent_name_unicode_normalization_distinction() {
         pool,
         RegisterAgentRequest {
             name: nfd_name.into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("norm-test".into()),
             room: None,
@@ -344,6 +347,7 @@ async fn search_agents_fts5_injection_attempts() {
         pool,
         RegisterAgentRequest {
             name: "normal-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("fts-test".into()),
             room: None,
