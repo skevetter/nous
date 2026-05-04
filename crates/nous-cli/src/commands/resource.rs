@@ -163,147 +163,42 @@ async fn execute(
     pools.run_migrations().await?;
     let pool = &pools.fts;
 
+    dispatch(pool, cmd).await?;
+
+    pools.close().await;
+    Ok(())
+}
+
+async fn dispatch(
+    pool: &sea_orm::DatabaseConnection,
+    cmd: ResourceCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         ResourceCommands::Register {
-            name,
-            r#type,
-            owner,
-            path,
-            namespace,
-            tags,
-            metadata,
-            policy,
-        } => {
-            let resource_type: resources::ResourceType = r#type.parse()?;
-            let ownership_policy = policy
-                .as_deref()
-                .map(str::parse::<resources::OwnershipPolicy>)
-                .transpose()?;
-            let tags_vec = tags.map(|t| {
-                t.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            });
-            let resource = resources::register_resource(
-                pool,
-                resources::RegisterResourceRequest {
-                    name,
-                    resource_type,
-                    owner_agent_id: owner,
-                    namespace,
-                    path,
-                    metadata,
-                    tags: tags_vec,
-                    ownership_policy,
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&resource)?);
-        }
+            name, r#type, owner, path, namespace, tags, metadata, policy,
+        } => cmd_register(pool, RegisterArgs { name, resource_type: r#type, owner, path, namespace, tags, metadata, policy }).await?,
         ResourceCommands::List {
-            r#type,
-            status,
-            owner,
-            orphaned,
-            namespace,
-            policy,
-            limit,
-            output,
-        } => {
-            let type_parsed = r#type
-                .as_deref()
-                .map(str::parse::<resources::ResourceType>)
-                .transpose()?;
-            let status_parsed = status
-                .as_deref()
-                .map(str::parse::<resources::ResourceStatus>)
-                .transpose()?;
-            let policy_parsed = policy
-                .as_deref()
-                .map(str::parse::<resources::OwnershipPolicy>)
-                .transpose()?;
-            let items = resources::list_resources(
-                pool,
-                &resources::ListResourcesFilter {
-                    resource_type: type_parsed,
-                    status: status_parsed,
-                    owner_agent_id: owner,
-                    namespace,
-                    orphaned: if orphaned { Some(true) } else { None },
-                    ownership_policy: policy_parsed,
-                    limit: Some(limit),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            let val = serde_json::to_value(&items)?;
-            print_list(&val, &output, &["id", "name", "resource_type", "status", "owner_agent_id", "namespace"]);
+            r#type, status, owner, orphaned, namespace, policy, limit, output,
+        } => cmd_list(pool, ListArgs { resource_type: r#type, status, owner, orphaned, namespace, policy, limit, output }).await?,
+        ResourceCommands::Update { id, name, path, tags, metadata, policy } => {
+            cmd_update(pool, UpdateArgs { id, name, path, tags, metadata, policy }).await?;
         }
+        ResourceCommands::Search { tags, r#type, status, namespace, limit } => {
+            cmd_search(pool, SearchArgs { tags, resource_type: r#type, status, namespace, limit }).await?;
+        }
+        other => dispatch_resource_cmd(pool, other).await?,
+    }
+    Ok(())
+}
+
+async fn dispatch_resource_cmd(
+    pool: &sea_orm::DatabaseConnection,
+    cmd: ResourceCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
         ResourceCommands::Show { id } => {
             let resource = resources::get_resource_by_id(pool, &id).await?;
             println!("{}", serde_json::to_string_pretty(&resource)?);
-        }
-        ResourceCommands::Update {
-            id,
-            name,
-            path,
-            tags,
-            metadata,
-            policy,
-        } => {
-            let tags_vec = tags.map(|t| {
-                t.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            });
-            let ownership_policy = policy
-                .as_deref()
-                .map(str::parse::<resources::OwnershipPolicy>)
-                .transpose()?;
-            let resource = resources::update_resource(
-                pool,
-                resources::UpdateResourceRequest {
-                    id,
-                    name,
-                    path,
-                    metadata,
-                    tags: tags_vec,
-                    status: None,
-                    ownership_policy,
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&resource)?);
-        }
-        ResourceCommands::Search {
-            tags,
-            r#type,
-            status,
-            namespace,
-            limit,
-        } => {
-            let type_parsed = r#type
-                .as_deref()
-                .map(str::parse::<resources::ResourceType>)
-                .transpose()?;
-            let status_parsed = status
-                .as_deref()
-                .map(str::parse::<resources::ResourceStatus>)
-                .transpose()?;
-            let items = resources::search_by_tags(
-                pool,
-                &resources::SearchResourcesRequest {
-                    tags,
-                    resource_type: type_parsed,
-                    status: status_parsed,
-                    namespace,
-                    limit: Some(limit),
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&items)?);
         }
         ResourceCommands::Archive { id } => {
             let resource = resources::archive_resource(pool, &id).await?;
@@ -321,8 +216,172 @@ async fn execute(
             let count = resources::transfer_ownership(pool, &from, to.as_deref()).await?;
             println!("{{\"transferred\": {count}}}");
         }
+        _ => unreachable!("handled by dispatch"),
     }
+    Ok(())
+}
 
-    pools.close().await;
+struct RegisterArgs {
+    name: String,
+    resource_type: String,
+    owner: Option<String>,
+    path: Option<String>,
+    namespace: Option<String>,
+    tags: Option<String>,
+    metadata: Option<String>,
+    policy: Option<String>,
+}
+
+async fn cmd_register(
+    pool: &sea_orm::DatabaseConnection,
+    args: RegisterArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rtype: resources::ResourceType = args.resource_type.parse()?;
+    let ownership_policy = args.policy
+        .as_deref()
+        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .transpose()?;
+    let tags_vec = args.tags.map(|t| {
+        t.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    let resource = resources::register_resource(
+        pool,
+        resources::RegisterResourceRequest {
+            name: args.name,
+            resource_type: rtype,
+            owner_agent_id: args.owner,
+            namespace: args.namespace,
+            path: args.path,
+            metadata: args.metadata,
+            tags: tags_vec,
+            ownership_policy,
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&resource)?);
+    Ok(())
+}
+
+struct ListArgs {
+    resource_type: Option<String>,
+    status: Option<String>,
+    owner: Option<String>,
+    orphaned: bool,
+    namespace: Option<String>,
+    policy: Option<String>,
+    limit: u32,
+    output: OutputFormat,
+}
+
+async fn cmd_list(
+    pool: &sea_orm::DatabaseConnection,
+    args: ListArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let type_parsed = args.resource_type
+        .as_deref()
+        .map(|s| s.parse::<resources::ResourceType>())
+        .transpose()?;
+    let status_parsed = args.status
+        .as_deref()
+        .map(|s| s.parse::<resources::ResourceStatus>())
+        .transpose()?;
+    let policy_parsed = args.policy
+        .as_deref()
+        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .transpose()?;
+    let items = resources::list_resources(
+        pool,
+        &resources::ListResourcesFilter {
+            resource_type: type_parsed,
+            status: status_parsed,
+            owner_agent_id: args.owner,
+            namespace: args.namespace,
+            orphaned: if args.orphaned { Some(true) } else { None },
+            ownership_policy: policy_parsed,
+            limit: Some(args.limit),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let val = serde_json::to_value(&items)?;
+    print_list(&val, &args.output, &["id", "name", "resource_type", "status", "owner_agent_id", "namespace"]);
+    Ok(())
+}
+
+struct UpdateArgs {
+    id: String,
+    name: Option<String>,
+    path: Option<String>,
+    tags: Option<String>,
+    metadata: Option<String>,
+    policy: Option<String>,
+}
+
+async fn cmd_update(
+    pool: &sea_orm::DatabaseConnection,
+    args: UpdateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tags_vec = args.tags.map(|t| {
+        t.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    let ownership_policy = args.policy
+        .as_deref()
+        .map(|s| s.parse::<resources::OwnershipPolicy>())
+        .transpose()?;
+    let resource = resources::update_resource(
+        pool,
+        resources::UpdateResourceRequest {
+            id: args.id,
+            name: args.name,
+            path: args.path,
+            metadata: args.metadata,
+            tags: tags_vec,
+            status: None,
+            ownership_policy,
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&resource)?);
+    Ok(())
+}
+
+struct SearchArgs {
+    tags: Vec<String>,
+    resource_type: Option<String>,
+    status: Option<String>,
+    namespace: Option<String>,
+    limit: u32,
+}
+
+async fn cmd_search(
+    pool: &sea_orm::DatabaseConnection,
+    args: SearchArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let type_parsed = args.resource_type
+        .as_deref()
+        .map(|s| s.parse::<resources::ResourceType>())
+        .transpose()?;
+    let status_parsed = args.status
+        .as_deref()
+        .map(|s| s.parse::<resources::ResourceStatus>())
+        .transpose()?;
+    let items = resources::search_by_tags(
+        pool,
+        &resources::SearchResourcesRequest {
+            tags: args.tags,
+            resource_type: type_parsed,
+            status: status_parsed,
+            namespace: args.namespace,
+            limit: Some(args.limit),
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&items)?);
     Ok(())
 }

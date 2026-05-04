@@ -77,14 +77,14 @@ impl AgentTool for MemorySaveTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .save_memory(
-                None,
-                ctx.agent_id.clone(),
-                content.to_string(),
-                memory_type.to_string(),
-                "moderate".to_string(),
+            .save_memory(crate::tools::SaveMemoryParams {
+                workspace_id: None,
+                agent_id: ctx.agent_id.clone(),
+                content: content.to_string(),
+                memory_type: memory_type.to_string(),
+                importance: "moderate".to_string(),
                 tags,
-            )
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -152,13 +152,13 @@ impl AgentTool for MemorySearchTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .search_memories(
-                query.to_string(),
-                Some(ctx.agent_id.clone()),
-                None,
-                None,
+            .search_memories(crate::tools::SearchMemoriesParams {
+                query: query.to_string(),
+                agent_id: Some(ctx.agent_id.clone()),
+                workspace_id: None,
+                memory_type: None,
                 limit,
-            )
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -228,12 +228,12 @@ impl AgentTool for MemorySearchHybridTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .search_memories_hybrid(
-                query.to_string(),
-                Some(ctx.agent_id.clone()),
+            .search_memories_hybrid(crate::tools::SearchMemoriesHybridParams {
+                query: query.to_string(),
+                agent_id: Some(ctx.agent_id.clone()),
                 limit,
                 fts_weight,
-            )
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -295,7 +295,12 @@ impl AgentTool for MemoryGetContextTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .get_memory_context(Some(ctx.agent_id.clone()), None, None, limit)
+            .get_memory_context(crate::tools::GetMemoryContextParams {
+                agent_id: Some(ctx.agent_id.clone()),
+                workspace_id: None,
+                topic_key: None,
+                limit,
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -473,15 +478,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolServices for MockToolServices {
-        async fn save_memory(
-            &self,
-            _workspace_id: Option<String>,
-            agent_id: String,
-            content: String,
-            memory_type: String,
-            _importance: String,
-            tags: Vec<String>,
-        ) -> Result<Value, ToolError> {
+        async fn save_memory(&self, params: crate::tools::SaveMemoryParams) -> Result<Value, ToolError> {
+            let crate::tools::SaveMemoryParams { agent_id, content, memory_type, tags, .. } = params;
             Ok(json!({
                 "id": "mem-001",
                 "agent_id": agent_id,
@@ -493,12 +491,9 @@ mod tests {
 
         async fn search_memories(
             &self,
-            query: String,
-            _agent_id: Option<String>,
-            _workspace_id: Option<String>,
-            _memory_type: Option<String>,
-            limit: Option<u32>,
+            params: crate::tools::SearchMemoriesParams,
         ) -> Result<Value, ToolError> {
+            let crate::tools::SearchMemoriesParams { query, limit, .. } = params;
             Ok(json!({
                 "query": query,
                 "limit": limit.unwrap_or(10),
@@ -508,11 +503,9 @@ mod tests {
 
         async fn search_memories_hybrid(
             &self,
-            query: String,
-            _agent_id: Option<String>,
-            limit: Option<u32>,
-            fts_weight: Option<f64>,
+            params: crate::tools::SearchMemoriesHybridParams,
         ) -> Result<Value, ToolError> {
+            let crate::tools::SearchMemoriesHybridParams { query, limit, fts_weight, .. } = params;
             Ok(json!({
                 "query": query,
                 "limit": limit.unwrap_or(10),
@@ -523,11 +516,9 @@ mod tests {
 
         async fn get_memory_context(
             &self,
-            _agent_id: Option<String>,
-            _workspace_id: Option<String>,
-            _topic_key: Option<String>,
-            limit: Option<u32>,
+            params: crate::tools::GetMemoryContextParams,
         ) -> Result<Value, ToolError> {
+            let limit = params.limit;
             Ok(json!({
                 "limit": limit.unwrap_or(20),
                 "memories": [],
@@ -562,10 +553,7 @@ mod tests {
 
         async fn post_to_room(
             &self,
-            _room: String,
-            _sender_id: String,
-            _content: String,
-            _reply_to: Option<String>,
+            _params: crate::tools::PostToRoomParams,
         ) -> Result<Value, ToolError> {
             Ok(json!({}))
         }
@@ -592,10 +580,7 @@ mod tests {
 
         async fn create_task(
             &self,
-            _title: String,
-            _description: Option<String>,
-            _assignee: Option<String>,
-            _priority: Option<String>,
+            _params: crate::tools::ToolCreateTaskParams,
         ) -> Result<Value, ToolError> {
             Ok(json!({}))
         }

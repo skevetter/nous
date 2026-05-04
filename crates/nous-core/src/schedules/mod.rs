@@ -270,99 +270,157 @@ pub struct UpdateScheduleParams<'a> {
     pub clock: &'a dyn Clock,
 }
 
-pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedule, NousError> {
-    let UpdateScheduleParams {
-        db,
-        id,
-        name,
-        cron_expr,
-        trigger_at,
-        enabled,
-        action_type,
-        action_payload,
-        desired_outcome,
-        max_retries,
-        timeout_secs,
-        max_runs,
-        clock,
-    } = params;
-    let existing = get_schedule(db, id).await?;
-
-    if let Some(expr) = cron_expr {
-        if expr != "@once" {
-            CronExpr::parse(expr)?;
-        }
+fn validate_action_type(action_type: &str) -> Result<(), NousError> {
+    let valid_actions = ["mcp_tool", "shell", "http"];
+    if valid_actions.contains(&action_type) {
+        Ok(())
+    } else {
+        Err(NousError::Validation(format!("invalid action_type: {action_type}")))
     }
+}
 
-    let final_cron = cron_expr.unwrap_or(&existing.cron_expr);
-    let final_trigger_at = match trigger_at {
-        Some(t) => t,
-        None => existing.trigger_at_ts()?,
-    };
-    let final_enabled = enabled.unwrap_or(existing.enabled);
+fn push_nullable_ts_set(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    column: &str,
+    ts: Option<i64>,
+) -> Result<(), NousError> {
+    match ts {
+        Some(v) => {
+            sets.push(format!("{column} = ?"));
+            values.push(ts_to_iso(v)?.into());
+        }
+        None => sets.push(format!("{column} = NULL")),
+    }
+    Ok(())
+}
 
+fn push_nullable_str_set(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    column: &str,
+    val: Option<&str>,
+) {
+    match val {
+        Some(v) => {
+            sets.push(format!("{column} = ?"));
+            values.push(v.to_string().into());
+        }
+        None => sets.push(format!("{column} = NULL")),
+    }
+}
+
+fn push_nullable_i32_set(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    column: &str,
+    val: Option<i32>,
+) {
+    match val {
+        Some(v) => {
+            sets.push(format!("{column} = ?"));
+            values.push(v.into());
+        }
+        None => sets.push(format!("{column} = NULL")),
+    }
+}
+
+fn push_string_set(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    column: &str,
+    val: &str,
+) {
+    sets.push(format!("{column} = ?"));
+    values.push(val.to_string().into());
+}
+
+fn push_bool_set(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    column: &str,
+    val: bool,
+) {
+    sets.push(format!("{column} = ?"));
+    values.push(if val { 1i32.into() } else { 0i32.into() });
+}
+
+fn push_i32_set(sets: &mut Vec<String>, values: &mut Vec<sea_orm::Value>, column: &str, val: i32) {
+    sets.push(format!("{column} = ?"));
+    values.push(val.into());
+}
+
+fn apply_simple_schedule_fields(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    params: &UpdateScheduleParams<'_>,
+) {
+    if let Some(n) = params.name {
+        push_string_set(sets, values, "name", n);
+    }
+    if let Some(c) = params.cron_expr {
+        push_string_set(sets, values, "cron_expr", c);
+    }
+    if let Some(e) = params.enabled {
+        push_bool_set(sets, values, "enabled", e);
+    }
+    if let Some(ap) = params.action_payload {
+        push_string_set(sets, values, "action_payload", ap);
+    }
+    if let Some(mr) = params.max_retries {
+        push_i32_set(sets, values, "max_retries", mr);
+    }
+    if let Some(mr) = params.max_runs {
+        push_i32_set(sets, values, "max_runs", mr);
+    }
+}
+
+fn apply_nullable_schedule_fields(
+    sets: &mut Vec<String>,
+    values: &mut Vec<sea_orm::Value>,
+    params: &UpdateScheduleParams<'_>,
+) -> Result<(), NousError> {
+    if let Some(t) = params.trigger_at {
+        push_nullable_ts_set(sets, values, "trigger_at", t)?;
+    }
+    if let Some(at) = params.action_type {
+        validate_action_type(at)?;
+        push_string_set(sets, values, "action_type", at);
+    }
+    if let Some(d) = params.desired_outcome {
+        push_nullable_str_set(sets, values, "desired_outcome", d);
+    }
+    if let Some(ts) = params.timeout_secs {
+        push_nullable_i32_set(sets, values, "timeout_secs", ts);
+    }
+    Ok(())
+}
+
+fn build_schedule_field_sets(
+    params: &UpdateScheduleParams<'_>,
+) -> Result<(Vec<String>, Vec<sea_orm::Value>), NousError> {
     let mut sets: Vec<String> = Vec::new();
     let mut values: Vec<sea_orm::Value> = Vec::new();
 
-    if let Some(n) = name {
-        sets.push("name = ?".to_string());
-        values.push(n.to_string().into());
-    }
-    if let Some(c) = cron_expr {
-        sets.push("cron_expr = ?".to_string());
-        values.push(c.to_string().into());
-    }
-    if let Some(t) = trigger_at {
-        if let Some(ts) = t {
-            sets.push("trigger_at = ?".to_string());
-            values.push(ts_to_iso(ts)?.into());
-        } else {
-            sets.push("trigger_at = NULL".to_string());
-        }
-    }
-    if let Some(e) = enabled {
-        sets.push("enabled = ?".to_string());
-        values.push(if e { 1i32.into() } else { 0i32.into() });
-    }
-    if let Some(at) = action_type {
-        let valid_actions = ["mcp_tool", "shell", "http"];
-        if !valid_actions.contains(&at) {
-            return Err(NousError::Validation(format!("invalid action_type: {at}")));
-        }
-        sets.push("action_type = ?".to_string());
-        values.push(at.to_string().into());
-    }
-    if let Some(ap) = action_payload {
-        sets.push("action_payload = ?".to_string());
-        values.push(ap.to_string().into());
-    }
-    if let Some(d) = desired_outcome {
-        if let Some(val) = d {
-            sets.push("desired_outcome = ?".to_string());
-            values.push(val.to_string().into());
-        } else {
-            sets.push("desired_outcome = NULL".to_string());
-        }
-    }
-    if let Some(mr) = max_retries {
-        sets.push("max_retries = ?".to_string());
-        values.push(mr.into());
-    }
-    if let Some(ts) = timeout_secs {
-        if let Some(val) = ts {
-            sets.push("timeout_secs = ?".to_string());
-            values.push(val.into());
-        } else {
-            sets.push("timeout_secs = NULL".to_string());
-        }
-    }
-    if let Some(mr) = max_runs {
-        sets.push("max_runs = ?".to_string());
-        values.push(mr.into());
-    }
+    apply_simple_schedule_fields(&mut sets, &mut values, params);
+    apply_nullable_schedule_fields(&mut sets, &mut values, params)?;
 
+    Ok((sets, values))
+}
+
+struct NextRunSetParams<'a> {
+    sets: &'a mut Vec<String>,
+    values: &'a mut Vec<sea_orm::Value>,
+    final_enabled: bool,
+    final_cron: &'a str,
+    final_trigger_at: Option<i64>,
+    now: i64,
+}
+
+fn append_next_run_set(params: NextRunSetParams<'_>) -> Result<(), NousError> {
+    let NextRunSetParams { sets, values, final_enabled, final_cron, final_trigger_at, now } = params;
     if final_enabled {
-        let next = compute_next_run(final_cron, final_trigger_at, clock.now_utc());
+        let next = compute_next_run(final_cron, final_trigger_at, now);
         if let Some(n) = next {
             sets.push("next_run_at = ?".to_string());
             values.push(ts_to_iso(n)?.into());
@@ -372,6 +430,45 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     } else {
         sets.push("next_run_at = NULL".to_string());
     }
+    Ok(())
+}
+
+pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedule, NousError> {
+    let UpdateScheduleParams {
+        db,
+        id,
+        cron_expr,
+        trigger_at,
+        enabled,
+        clock,
+        ..
+    } = &params;
+
+    let existing = get_schedule(db, id).await?;
+
+    if let Some(expr) = cron_expr {
+        if *expr != "@once" {
+            CronExpr::parse(expr)?;
+        }
+    }
+
+    let final_cron = cron_expr.unwrap_or(&existing.cron_expr);
+    let final_trigger_at = match trigger_at {
+        Some(t) => *t,
+        None => existing.trigger_at_ts()?,
+    };
+    let final_enabled = enabled.unwrap_or(existing.enabled);
+
+    let (mut sets, mut values) = build_schedule_field_sets(&params)?;
+
+    append_next_run_set(NextRunSetParams {
+        sets: &mut sets,
+        values: &mut values,
+        final_enabled,
+        final_cron,
+        final_trigger_at,
+        now: clock.now_utc(),
+    })?;
 
     sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')".to_string());
 
@@ -380,7 +477,7 @@ pub async fn update_schedule(params: UpdateScheduleParams<'_>) -> Result<Schedul
     }
 
     let sql = format!("UPDATE schedules SET {} WHERE id = ?", sets.join(", "));
-    values.push(id.to_string().into());
+    values.push(ToString::to_string(id).into());
 
     db.execute(Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,

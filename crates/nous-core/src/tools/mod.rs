@@ -85,41 +85,65 @@ impl<T: AgentTool> AgentToolDyn for T {
     }
 }
 
+pub struct SaveMemoryParams {
+    pub workspace_id: Option<String>,
+    pub agent_id: String,
+    pub content: String,
+    pub memory_type: String,
+    pub importance: String,
+    pub tags: Vec<String>,
+}
+
+pub struct SearchMemoriesParams {
+    pub query: String,
+    pub agent_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub memory_type: Option<String>,
+    pub limit: Option<u32>,
+}
+
+pub struct SearchMemoriesHybridParams {
+    pub query: String,
+    pub agent_id: Option<String>,
+    pub limit: Option<u32>,
+    pub fts_weight: Option<f64>,
+}
+
+pub struct GetMemoryContextParams {
+    pub agent_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub topic_key: Option<String>,
+    pub limit: Option<u32>,
+}
+
+pub struct PostToRoomParams {
+    pub room: String,
+    pub sender_id: String,
+    pub content: String,
+    pub reply_to: Option<String>,
+}
+
+pub struct ToolCreateTaskParams {
+    pub title: String,
+    pub description: Option<String>,
+    pub assignee: Option<String>,
+    pub priority: Option<String>,
+}
+
 #[async_trait::async_trait]
 pub trait ToolServices: Send + Sync {
-    async fn save_memory(
-        &self,
-        workspace_id: Option<String>,
-        agent_id: String,
-        content: String,
-        memory_type: String,
-        importance: String,
-        tags: Vec<String>,
-    ) -> Result<Value, ToolError>;
+    async fn save_memory(&self, params: SaveMemoryParams) -> Result<Value, ToolError>;
 
-    async fn search_memories(
-        &self,
-        query: String,
-        agent_id: Option<String>,
-        workspace_id: Option<String>,
-        memory_type: Option<String>,
-        limit: Option<u32>,
-    ) -> Result<Value, ToolError>;
+    async fn search_memories(&self, params: SearchMemoriesParams) -> Result<Value, ToolError>;
 
     async fn search_memories_hybrid(
         &self,
-        query: String,
-        agent_id: Option<String>,
-        limit: Option<u32>,
-        fts_weight: Option<f64>,
+        params: SearchMemoriesHybridParams,
     ) -> Result<Value, ToolError>;
 
     async fn get_memory_context(
         &self,
-        agent_id: Option<String>,
-        workspace_id: Option<String>,
-        topic_key: Option<String>,
-        limit: Option<u32>,
+        params: GetMemoryContextParams,
     ) -> Result<Value, ToolError>;
 
     async fn relate_memories(
@@ -136,13 +160,7 @@ pub trait ToolServices: Send + Sync {
         importance: Option<String>,
     ) -> Result<Value, ToolError>;
 
-    async fn post_to_room(
-        &self,
-        room: String,
-        sender_id: String,
-        content: String,
-        reply_to: Option<String>,
-    ) -> Result<Value, ToolError>;
+    async fn post_to_room(&self, params: PostToRoomParams) -> Result<Value, ToolError>;
 
     async fn read_room(&self, room: String, limit: Option<u32>) -> Result<Value, ToolError>;
 
@@ -150,13 +168,7 @@ pub trait ToolServices: Send + Sync {
 
     async fn wait_for_message(&self, room: String, timeout_secs: u64) -> Result<Value, ToolError>;
 
-    async fn create_task(
-        &self,
-        title: String,
-        description: Option<String>,
-        assignee: Option<String>,
-        priority: Option<String>,
-    ) -> Result<Value, ToolError>;
+    async fn create_task(&self, params: ToolCreateTaskParams) -> Result<Value, ToolError>;
 
     async fn update_task(
         &self,

@@ -47,6 +47,29 @@ pub struct Subscription {
     pub created_at: String,
 }
 
+fn parse_subscription_topics(topics_json: Option<&str>) -> Option<Vec<String>> {
+    topics_json.and_then(|s| serde_json::from_str(s).ok())
+}
+
+fn log_enqueue_failure(agent_id: &str, e: &crate::error::NousError) {
+    tracing::warn!(agent_id = %agent_id, error = %e, "failed to enqueue notification");
+}
+
+async fn notify_subscriber_if_matches(
+    db: &DatabaseConnection,
+    notification: &Notification,
+    agent_id: &str,
+    topics_json: Option<&str>,
+) {
+    let sub_topics = parse_subscription_topics(topics_json);
+    if !should_notify_agent(notification, agent_id, sub_topics.as_deref()) {
+        return;
+    }
+    if let Err(e) = enqueue_notification(db, agent_id, notification).await {
+        log_enqueue_failure(agent_id, &e);
+    }
+}
+
 pub struct NotificationRegistry {
     channels: Arc<RwLock<HashMap<String, broadcast::Sender<Notification>>>>,
 }
@@ -92,16 +115,7 @@ impl NotificationRegistry {
 
         if let Ok(rows) = rows {
             for row in &rows {
-                let sub_topics: Option<Vec<String>> = row
-                    .topics
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok());
-
-                if should_notify_agent(&notification, &row.agent_id, sub_topics.as_deref()) {
-                    if let Err(e) = enqueue_notification(db, &row.agent_id, &notification).await {
-                        tracing::warn!(agent_id = %row.agent_id, error = %e, "failed to enqueue notification");
-                    }
-                }
+                notify_subscriber_if_matches(db, &notification, &row.agent_id, row.topics.as_deref()).await;
             }
         }
     }
@@ -376,14 +390,25 @@ pub async fn dequeue_notification(
     }))
 }
 
-pub async fn room_wait_persistent(
-    db: &DatabaseConnection,
-    registry: &NotificationRegistry,
-    room_id: &str,
-    agent_id: &str,
-    timeout_ms: Option<u64>,
-    topics: Option<&[String]>,
-) -> Result<WaitResult, NousError> {
+pub struct RoomWaitPersistentParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub registry: &'a NotificationRegistry,
+    pub room_id: &'a str,
+    pub agent_id: &'a str,
+    pub timeout_ms: Option<u64>,
+    pub topics: Option<&'a [String]>,
+}
+
+pub async fn room_wait_persistent(params: RoomWaitPersistentParams<'_>) -> Result<WaitResult, NousError> {
+    let RoomWaitPersistentParams {
+        db,
+        registry,
+        room_id,
+        agent_id,
+        timeout_ms,
+        topics,
+    } = params;
+
     if let Some(notification) = dequeue_notification(db, agent_id, Some(room_id), topics).await? {
         return Ok(WaitResult {
             notification: Some(notification),
@@ -695,14 +720,14 @@ mod tests {
             .await
             .unwrap();
 
-        let result = room_wait_persistent(
-            &db,
-            &registry,
-            "persist-room",
-            "persist-agent",
-            Some(50),
-            None,
-        )
+        let result = room_wait_persistent(RoomWaitPersistentParams {
+            db: &db,
+            registry: &registry,
+            room_id: "persist-room",
+            agent_id: "persist-agent",
+            timeout_ms: Some(50),
+            topics: None,
+        })
         .await
         .unwrap();
 

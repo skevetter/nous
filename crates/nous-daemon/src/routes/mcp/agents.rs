@@ -3,12 +3,26 @@ use serde_json::Value;
 use nous_core::agents;
 use nous_core::messages::{post_message, MessageType, PostMessageRequest};
 
-use crate::process_manager::SpawnParams;
+use crate::process_manager::{InvokeParams, RestartParams, SpawnParams, StopParams};
 use crate::state::AppState;
 
 use super::{require_str, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
+    let mut all = agent_lifecycle_schemas();
+    all.extend(agent_version_schemas());
+    all.extend(agent_process_schemas());
+    all.extend(agent_coordination_schemas());
+    all
+}
+
+fn agent_lifecycle_schemas() -> Vec<ToolSchema> {
+    let mut schemas = agent_lifecycle_core_schemas();
+    schemas.extend(agent_lifecycle_search_schemas());
+    schemas
+}
+
+fn agent_lifecycle_core_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {
             name: "agent_register",
@@ -86,6 +100,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+    ]
+}
+
+fn agent_lifecycle_search_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "agent_tree",
             description: "Get the agent tree (hierarchy)",
@@ -144,6 +163,17 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+    ]
+}
+
+fn agent_version_schemas() -> Vec<ToolSchema> {
+    let mut schemas = agent_version_history_schemas();
+    schemas.extend(agent_template_schemas());
+    schemas
+}
+
+fn agent_version_history_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "agent_versions",
             description: "List version history for an agent (newest first)",
@@ -205,6 +235,35 @@ pub fn schemas() -> Vec<ToolSchema> {
             }),
         },
         ToolSchema {
+            name: "agent_bulk_deregister",
+            description: "Deregister multiple agents by ID list",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "string" }, "description": "List of agent IDs to deregister" },
+                    "force": { "type": "boolean", "description": "Force delete (cascade children, default: false)" }
+                },
+                "required": ["ids"]
+            }),
+        },
+        ToolSchema {
+            name: "agent_update_status",
+            description: "Update an agent's status field directly",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "status": { "type": "string", "description": "New status: active, inactive, archived, running, idle, blocked, done" }
+                },
+                "required": ["id", "status"]
+            }),
+        },
+    ]
+}
+
+fn agent_template_schemas() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
             name: "agent_template_create",
             description: "Create an immutable agent template (blueprint for spawning agents)",
             input_schema: serde_json::json!({
@@ -255,30 +314,17 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["template_id"]
             }),
         },
-        ToolSchema {
-            name: "agent_bulk_deregister",
-            description: "Deregister multiple agents by ID list",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "ids": { "type": "array", "items": { "type": "string" }, "description": "List of agent IDs to deregister" },
-                    "force": { "type": "boolean", "description": "Force delete (cascade children, default: false)" }
-                },
-                "required": ["ids"]
-            }),
-        },
-        ToolSchema {
-            name: "agent_update_status",
-            description: "Update an agent's status field directly",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Agent ID" },
-                    "status": { "type": "string", "description": "New status: active, inactive, archived, running, idle, blocked, done" }
-                },
-                "required": ["id", "status"]
-            }),
-        },
+    ]
+}
+
+fn agent_process_schemas() -> Vec<ToolSchema> {
+    let mut schemas = agent_spawn_control_schemas();
+    schemas.extend(agent_invocation_schemas());
+    schemas
+}
+
+fn agent_spawn_control_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "agent_spawn",
             description: "Spawn an agent process (claude, shell, or http)",
@@ -321,6 +367,27 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["agent_id"]
             }),
         },
+        ToolSchema {
+            name: "agent_update",
+            description: "Update agent config (process_type, spawn_command, working_dir, auto_restart, metadata)",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Agent ID" },
+                    "process_type": { "type": "string", "description": "Process type: claude, shell, http" },
+                    "spawn_command": { "type": "string", "description": "Default spawn command" },
+                    "working_dir": { "type": "string", "description": "Default working directory" },
+                    "auto_restart": { "type": "boolean", "description": "Auto-restart on crash" },
+                    "metadata": { "type": "string", "description": "JSON metadata string" }
+                },
+                "required": ["id"]
+            }),
+        },
+    ]
+}
+
+fn agent_invocation_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "agent_invoke",
             description: "Send work to an agent (executes prompt synchronously or async)",
@@ -383,22 +450,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["agent_id"]
             }),
         },
-        ToolSchema {
-            name: "agent_update",
-            description: "Update agent config (process_type, spawn_command, working_dir, auto_restart, metadata)",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Agent ID" },
-                    "process_type": { "type": "string", "description": "Process type: claude, shell, http" },
-                    "spawn_command": { "type": "string", "description": "Default spawn command" },
-                    "working_dir": { "type": "string", "description": "Default working directory" },
-                    "auto_restart": { "type": "boolean", "description": "Auto-restart on crash" },
-                    "metadata": { "type": "string", "description": "JSON metadata string" }
-                },
-                "required": ["id"]
-            }),
-        },
+    ]
+}
+
+fn agent_coordination_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "agent_presence",
             description: "Post a presence status update for an agent to their registered room",
@@ -438,6 +494,34 @@ pub async fn dispatch(
     args: &Value,
     state: &AppState,
 ) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_lifecycle(name, args, state).await {
+        return Some(r);
+    }
+    if let Some(r) = dispatch_version_and_templates(name, args, state).await {
+        return Some(r);
+    }
+    if let Some(r) = dispatch_process(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_coordination(name, args, state).await
+}
+
+async fn dispatch_lifecycle(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_lifecycle_crud(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_lifecycle_query(name, args, state).await
+}
+
+async fn dispatch_lifecycle_crud(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
     match name {
         "agent_register" => Some(handle_register(args, state).await),
         "agent_deregister" => Some(handle_deregister(args, state).await),
@@ -445,31 +529,113 @@ pub async fn dispatch(
         "agent_list" => Some(handle_list(args, state).await),
         "agent_list_children" => Some(handle_list_children(args, state).await),
         "agent_list_ancestors" => Some(handle_list_ancestors(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_lifecycle_query(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_tree" => Some(handle_tree(args, state).await),
         "agent_heartbeat" => Some(handle_heartbeat(args, state).await),
         "agent_search" => Some(handle_search(args, state).await),
         "agent_stale" => Some(handle_stale(args, state).await),
         "agent_inspect" => Some(handle_inspect(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_version_and_templates(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_versions(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_templates(name, args, state).await
+}
+
+async fn dispatch_versions(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_versions" => Some(handle_versions(args, state).await),
         "agent_record_version" => Some(handle_record_version(args, state).await),
         "agent_rollback" => Some(handle_rollback(args, state).await),
         "agent_notify_upgrade" => Some(handle_notify_upgrade(args, state).await),
         "agent_outdated" => Some(handle_outdated(args, state).await),
+        "agent_bulk_deregister" => Some(handle_bulk_deregister(args, state).await),
+        "agent_update_status" => Some(handle_update_status(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_templates(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_template_create" => Some(handle_template_create(args, state).await),
         "agent_template_list" => Some(handle_template_list(args, state).await),
         "agent_template_get" => Some(handle_template_get(args, state).await),
         "agent_instantiate" => Some(handle_instantiate(args, state).await),
-        "agent_bulk_deregister" => Some(handle_bulk_deregister(args, state).await),
-        "agent_update_status" => Some(handle_update_status(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_process(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_spawn_control(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_invocations(name, args, state).await
+}
+
+async fn dispatch_spawn_control(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_spawn" => Some(handle_spawn(args, state).await),
         "agent_stop" => Some(handle_stop(args, state).await),
         "agent_restart" => Some(handle_restart(args, state).await),
+        "agent_update" => Some(handle_update(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_invocations(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_invoke" => Some(handle_invoke(args, state).await),
         "agent_invoke_result" => Some(handle_invoke_result(args, state).await),
         "agent_invocations" => Some(handle_invocations(args, state).await),
         "agent_process_status" => Some(handle_process_status(args, state).await),
         "agent_logs" => Some(handle_logs(args, state).await),
-        "agent_update" => Some(handle_update(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_coordination(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "agent_presence" => Some(handle_presence(args, state).await),
         "agent_handoff" => Some(handle_handoff(args, state).await),
         _ => None,
@@ -883,7 +1049,7 @@ async fn handle_stop(
         .unwrap_or(10);
     let process = state
         .process_registry
-        .stop(state, agent_id, force, grace_secs)
+        .stop(StopParams { state, agent_id, force, grace_secs })
         .await?;
     Ok(serde_json::to_value(process).unwrap())
 }
@@ -897,7 +1063,7 @@ async fn handle_restart(
     let working_dir = args.get("working_dir").and_then(|v| v.as_str());
     let process = state
         .process_registry
-        .restart(state, agent_id, command, working_dir)
+        .restart(RestartParams { state, agent_id, command, working_dir })
         .await?;
     Ok(serde_json::to_value(process).unwrap())
 }
@@ -913,7 +1079,7 @@ async fn handle_invoke(
     let is_async = args.get("async").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let invocation = state
         .process_registry
-        .invoke(state, agent_id, prompt, timeout_secs, metadata, is_async)
+        .invoke(InvokeParams { state, agent_id, prompt, timeout_secs, metadata, is_async })
         .await?;
     Ok(serde_json::to_value(invocation).unwrap())
 }
@@ -977,12 +1143,14 @@ async fn handle_update(
     let metadata = args.get("metadata").and_then(|v| v.as_str());
     let agent = agents::processes::update_agent(
         &state.pool,
-        id,
-        process_type,
-        spawn_command,
-        working_dir,
-        auto_restart,
-        metadata,
+        agents::processes::UpdateAgentRequest {
+            id,
+            process_type,
+            spawn_command,
+            working_dir,
+            auto_restart,
+            metadata_json: metadata,
+        },
     )
     .await?;
     Ok(serde_json::to_value(agent).unwrap())
@@ -1063,10 +1231,12 @@ async fn handle_handoff(
     let msg = agents::coordination::post_handoff(
         &state.pool,
         Some(&state.registry),
-        &room_id,
-        &from_agent,
-        &to_agent,
-        payload,
+        agents::coordination::PostHandoffRequest {
+            room_id: &room_id,
+            from_agent: &from_agent,
+            to_agent: &to_agent,
+            payload,
+        },
     )
     .await?;
     Ok(serde_json::to_value(msg).unwrap())

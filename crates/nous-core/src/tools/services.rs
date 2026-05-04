@@ -41,15 +41,8 @@ fn map_err(e: impl std::fmt::Display) -> ToolError {
 
 #[async_trait::async_trait]
 impl ToolServices for DaemonToolServices {
-    async fn save_memory(
-        &self,
-        workspace_id: Option<String>,
-        agent_id: String,
-        content: String,
-        memory_type: String,
-        importance: String,
-        _tags: Vec<String>,
-    ) -> Result<Value, ToolError> {
+    async fn save_memory(&self, params: super::SaveMemoryParams) -> Result<Value, ToolError> {
+        let super::SaveMemoryParams { workspace_id, agent_id, content, memory_type, importance, .. } = params;
         let memory_type: memory::MemoryType =
             memory_type.parse().map_err(|e: crate::error::NousError| ToolError::InvalidArgs(e.to_string()))?;
         let importance: memory::Importance =
@@ -75,12 +68,10 @@ impl ToolServices for DaemonToolServices {
 
     async fn search_memories(
         &self,
-        query: String,
-        agent_id: Option<String>,
-        workspace_id: Option<String>,
-        memory_type: Option<String>,
-        limit: Option<u32>,
+        params: super::SearchMemoriesParams,
     ) -> Result<Value, ToolError> {
+        let super::SearchMemoriesParams { query, agent_id, workspace_id, memory_type, limit } =
+            params;
         let memory_type = memory_type
             .map(|s| s.parse::<memory::MemoryType>())
             .transpose()
@@ -121,11 +112,9 @@ impl ToolServices for DaemonToolServices {
 
     async fn search_memories_hybrid(
         &self,
-        query: String,
-        agent_id: Option<String>,
-        limit: Option<u32>,
-        _fts_weight: Option<f64>,
+        params: super::SearchMemoriesHybridParams,
     ) -> Result<Value, ToolError> {
+        let super::SearchMemoriesHybridParams { query, agent_id, limit, fts_weight: _ } = params;
         let limit = limit.unwrap_or(10) as usize;
         let start = std::time::Instant::now();
 
@@ -202,11 +191,9 @@ impl ToolServices for DaemonToolServices {
 
     async fn get_memory_context(
         &self,
-        agent_id: Option<String>,
-        workspace_id: Option<String>,
-        topic_key: Option<String>,
-        limit: Option<u32>,
+        params: super::GetMemoryContextParams,
     ) -> Result<Value, ToolError> {
+        let super::GetMemoryContextParams { agent_id, workspace_id, topic_key, limit } = params;
         let results = memory::get_context(
             &self.pool,
             &memory::ContextRequest {
@@ -271,13 +258,8 @@ impl ToolServices for DaemonToolServices {
         Ok(serde_json::to_value(mem).unwrap())
     }
 
-    async fn post_to_room(
-        &self,
-        room: String,
-        sender_id: String,
-        content: String,
-        reply_to: Option<String>,
-    ) -> Result<Value, ToolError> {
+    async fn post_to_room(&self, params: super::PostToRoomParams) -> Result<Value, ToolError> {
+        let super::PostToRoomParams { room, sender_id, content, reply_to } = params;
         let room_obj = rooms::get_room(&self.pool, &room)
             .await
             .map_err(map_err)?;
@@ -371,13 +353,8 @@ impl ToolServices for DaemonToolServices {
         }
     }
 
-    async fn create_task(
-        &self,
-        title: String,
-        description: Option<String>,
-        assignee: Option<String>,
-        priority: Option<String>,
-    ) -> Result<Value, ToolError> {
+    async fn create_task(&self, params: super::ToolCreateTaskParams) -> Result<Value, ToolError> {
+        let super::ToolCreateTaskParams { title, description, assignee, priority } = params;
         let task = tasks::create_task(tasks::CreateTaskParams {
             db: &self.pool,
             title: &title,
@@ -455,20 +432,26 @@ mod tests {
     async fn save_and_search_memory() {
         let (svc, _tmp) = setup().await;
         let result = svc
-            .save_memory(
-                None,
-                "test-agent".into(),
-                "Rust async patterns with tokio".into(),
-                "convention".into(),
-                "high".into(),
-                vec![],
-            )
+            .save_memory(crate::tools::SaveMemoryParams {
+                workspace_id: None,
+                agent_id: "test-agent".into(),
+                content: "Rust async patterns with tokio".into(),
+                memory_type: "convention".into(),
+                importance: "high".into(),
+                tags: vec![],
+            })
             .await
             .unwrap();
         assert!(result.get("id").is_some());
 
         let results = svc
-            .search_memories("tokio".into(), None, None, None, Some(10))
+            .search_memories(crate::tools::SearchMemoriesParams {
+                query: "tokio".into(),
+                agent_id: None,
+                workspace_id: None,
+                memory_type: None,
+                limit: Some(10),
+            })
             .await
             .unwrap();
         let arr = results.as_array().unwrap();
@@ -478,19 +461,24 @@ mod tests {
     #[tokio::test]
     async fn hybrid_search_with_embedder() {
         let (svc, _tmp) = setup().await;
-        svc.save_memory(
-            None,
-            "test-agent".into(),
-            "Database connection pooling strategies".into(),
-            "architecture".into(),
-            "moderate".into(),
-            vec![],
-        )
+        svc.save_memory(crate::tools::SaveMemoryParams {
+            workspace_id: None,
+            agent_id: "test-agent".into(),
+            content: "Database connection pooling strategies".into(),
+            memory_type: "architecture".into(),
+            importance: "moderate".into(),
+            tags: vec![],
+        })
         .await
         .unwrap();
 
         let results = svc
-            .search_memories_hybrid("database pooling".into(), None, Some(10), None)
+            .search_memories_hybrid(crate::tools::SearchMemoriesHybridParams {
+                query: "database pooling".into(),
+                agent_id: None,
+                limit: Some(10),
+                fts_weight: None,
+            })
             .await
             .unwrap();
         assert!(results.get("results").is_some() || results.as_array().is_some());
@@ -499,19 +487,24 @@ mod tests {
     #[tokio::test]
     async fn get_context() {
         let (svc, _tmp) = setup().await;
-        svc.save_memory(
-            Some("ws-1".into()),
-            "test-agent".into(),
-            "Context memory content".into(),
-            "decision".into(),
-            "high".into(),
-            vec![],
-        )
+        svc.save_memory(crate::tools::SaveMemoryParams {
+            workspace_id: Some("ws-1".into()),
+            agent_id: "test-agent".into(),
+            content: "Context memory content".into(),
+            memory_type: "decision".into(),
+            importance: "high".into(),
+            tags: vec![],
+        })
         .await
         .unwrap();
 
         let results = svc
-            .get_memory_context(Some("test-agent".into()), Some("ws-1".into()), None, Some(5))
+            .get_memory_context(crate::tools::GetMemoryContextParams {
+                agent_id: Some("test-agent".into()),
+                workspace_id: Some("ws-1".into()),
+                topic_key: None,
+                limit: Some(5),
+            })
             .await
             .unwrap();
         let arr = results.as_array().unwrap();
@@ -522,25 +515,25 @@ mod tests {
     async fn relate_and_update_memory() {
         let (svc, _tmp) = setup().await;
         let mem1 = svc
-            .save_memory(
-                None,
-                "test-agent".into(),
-                "First memory".into(),
-                "convention".into(),
-                "high".into(),
-                vec![],
-            )
+            .save_memory(crate::tools::SaveMemoryParams {
+                workspace_id: None,
+                agent_id: "test-agent".into(),
+                content: "First memory".into(),
+                memory_type: "convention".into(),
+                importance: "high".into(),
+                tags: vec![],
+            })
             .await
             .unwrap();
         let mem2 = svc
-            .save_memory(
-                None,
-                "test-agent".into(),
-                "Second memory".into(),
-                "convention".into(),
-                "high".into(),
-                vec![],
-            )
+            .save_memory(crate::tools::SaveMemoryParams {
+                workspace_id: None,
+                agent_id: "test-agent".into(),
+                content: "Second memory".into(),
+                memory_type: "convention".into(),
+                importance: "high".into(),
+                tags: vec![],
+            })
             .await
             .unwrap();
 
@@ -570,12 +563,12 @@ mod tests {
         assert_eq!(room["name"], "test-room");
 
         let msg = svc
-            .post_to_room(
-                "test-room".into(),
-                "test-agent".into(),
-                "Hello world".into(),
-                None,
-            )
+            .post_to_room(crate::tools::PostToRoomParams {
+                room: "test-room".into(),
+                sender_id: "test-agent".into(),
+                content: "Hello world".into(),
+                reply_to: None,
+            })
             .await
             .unwrap();
         assert_eq!(msg["content"], "Hello world");
@@ -589,12 +582,12 @@ mod tests {
     async fn task_operations() {
         let (svc, _tmp) = setup().await;
         let task = svc
-            .create_task(
-                "Test task".into(),
-                Some("A test task description".into()),
-                None,
-                Some("high".into()),
-            )
+            .create_task(crate::tools::ToolCreateTaskParams {
+                title: "Test task".into(),
+                description: Some("A test task description".into()),
+                assignee: None,
+                priority: Some("high".into()),
+            })
             .await
             .unwrap();
         assert_eq!(task["title"], "Test task");

@@ -1,12 +1,26 @@
 use serde_json::Value;
 
 use nous_core::memory;
+use nous_core::memory::store::{SavePromptRequest, SessionSummaryRequest};
 
 use crate::state::AppState;
 
 use super::{require_str, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
+    let mut all = memory_core_schemas();
+    all.extend(memory_embedding_schemas());
+    all.extend(memory_session_schemas());
+    all
+}
+
+fn memory_core_schemas() -> Vec<ToolSchema> {
+    let mut schemas = memory_crud_schemas();
+    schemas.extend(memory_relation_schemas());
+    schemas
+}
+
+fn memory_crud_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {
             name: "memory_save",
@@ -73,6 +87,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+    ]
+}
+
+fn memory_relation_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "memory_relate",
             description: "Create a relation between two memories (supersedes, conflicts_with, related, compatible, scoped, not_conflict)",
@@ -110,6 +129,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+    ]
+}
+
+fn memory_embedding_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "memory_store_embedding",
             description: "Store a pre-computed embedding vector for a memory",
@@ -198,6 +222,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 }
             }),
         },
+    ]
+}
+
+fn memory_session_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "memory_session_start",
             description: "Start a new memory session (creates a session record for grouping memories)",
@@ -266,6 +295,20 @@ pub async fn dispatch(
     args: &Value,
     state: &AppState,
 ) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_core_memory(name, args, state).await {
+        return Some(r);
+    }
+    if let Some(r) = dispatch_embedding_memory(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_session_memory(name, args, state).await
+}
+
+async fn dispatch_core_memory(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
     match name {
         "memory_save" => Some(handle_save(args, state).await),
         "memory_search" => Some(handle_search(args, state).await),
@@ -274,6 +317,16 @@ pub async fn dispatch(
         "memory_relate" => Some(handle_relate(args, state).await),
         "memory_context" => Some(handle_context(args, state).await),
         "memory_relations" => Some(handle_relations(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_embedding_memory(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "memory_store_embedding" => Some(handle_store_embedding(args, state).await),
         "memory_search_similar" => Some(handle_search_similar(args, state).await),
         "memory_chunk" => Some(handle_chunk(args, state).await),
@@ -281,6 +334,16 @@ pub async fn dispatch(
         "memory_search_hybrid" => Some(handle_search_hybrid(args, state).await),
         "memory_store_with_embedding" => Some(handle_store_with_embedding(args, state).await),
         "memory_search_stats" => Some(handle_search_stats(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_session_memory(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "memory_session_start" => Some(handle_session_start(args, state).await),
         "memory_session_end" => Some(handle_session_end(args, state).await),
         "memory_session_summary" => Some(handle_session_summary(args, state).await),
@@ -341,6 +404,46 @@ async fn handle_save(
     Ok(serde_json::to_value(mem).unwrap())
 }
 
+struct SearchAnalyticsParams {
+    query_text: String,
+    search_type: String,
+    result_count: i64,
+    latency_ms: i64,
+    workspace_id: Option<String>,
+    agent_id: Option<String>,
+}
+
+async fn record_search_analytics(
+    pool: &nous_core::db::DatabaseConnection,
+    params: SearchAnalyticsParams,
+) {
+    if let Err(e) = memory::analytics::record_search_event(
+        pool,
+        &memory::analytics::SearchEvent {
+            query_text: params.query_text,
+            search_type: params.search_type,
+            result_count: params.result_count,
+            latency_ms: params.latency_ms,
+            workspace_id: params.workspace_id,
+            agent_id: params.agent_id,
+        },
+    )
+    .await
+    {
+        tracing::debug!(error = %e, "failed to record search analytics");
+    }
+}
+
+async fn log_access_for_results(
+    pool: &nous_core::db::DatabaseConnection,
+    results: &[memory::Memory],
+    access_type: &str,
+) {
+    for mem in results {
+        let _ = memory::log_access(pool, &mem.id, access_type, None).await;
+    }
+}
+
 async fn handle_search(
     args: &Value,
     state: &AppState,
@@ -384,9 +487,9 @@ async fn handle_search(
     )
     .await?;
     let latency_ms = start.elapsed().as_millis() as i64;
-    if let Err(e) = memory::analytics::record_search_event(
+    record_search_analytics(
         &state.pool,
-        &memory::analytics::SearchEvent {
+        SearchAnalyticsParams {
             query_text: query,
             search_type: "fts".to_string(),
             result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
@@ -395,13 +498,8 @@ async fn handle_search(
             agent_id,
         },
     )
-    .await
-    {
-        tracing::debug!(error = %e, "failed to record fts search analytics");
-    }
-    for mem in &results {
-        let _ = memory::log_access(&state.pool, &mem.id, "search", None).await;
-    }
+    .await;
+    log_access_for_results(&state.pool, &results, "search").await;
     Ok(serde_json::to_value(results).unwrap())
 }
 
@@ -507,9 +605,7 @@ async fn handle_context(
         },
     )
     .await?;
-    for mem in &results {
-        let _ = memory::log_access(&state.pool, &mem.id, "context", None).await;
-    }
+    log_access_for_results(&state.pool, &results, "context").await;
     Ok(serde_json::to_value(results).unwrap())
 }
 
@@ -573,19 +669,19 @@ async fn handle_search_similar(
         .and_then(serde_json::Value::as_f64)
         .map(|f| f as f32);
     let start = std::time::Instant::now();
-    let results = memory::search_similar(
-        &state.pool,
-        &state.vec_pool,
-        &embedding,
+    let results = memory::search_similar(memory::SearchSimilarParams {
+        db: &state.pool,
+        vec_pool: &state.vec_pool,
+        query_embedding: &embedding,
         limit,
         workspace_id,
         threshold,
-    )
+    })
     .await?;
     let latency_ms = start.elapsed().as_millis() as i64;
-    if let Err(e) = memory::analytics::record_search_event(
+    record_search_analytics(
         &state.pool,
-        &memory::analytics::SearchEvent {
+        SearchAnalyticsParams {
             query_text: String::new(),
             search_type: "vector".to_string(),
             result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
@@ -594,10 +690,7 @@ async fn handle_search_similar(
             agent_id: None,
         },
     )
-    .await
-    {
-        tracing::debug!(error = %e, "failed to record vector search analytics");
-    }
+    .await;
     Ok(serde_json::to_value(results).unwrap())
 }
 
@@ -657,6 +750,92 @@ fn handle_embed(
     }))
 }
 
+struct HybridSearchParams {
+    query: String,
+    embedding: Vec<f32>,
+    limit: usize,
+    workspace_id: Option<String>,
+    agent_id: Option<String>,
+    memory_type: Option<memory::MemoryType>,
+}
+
+struct FtsFallbackParams {
+    query: String,
+    limit: usize,
+    workspace_id: Option<String>,
+    agent_id: Option<String>,
+    memory_type: Option<memory::MemoryType>,
+}
+
+async fn search_hybrid_with_embedding(
+    state: &AppState,
+    params: HybridSearchParams,
+) -> Result<Value, nous_core::error::NousError> {
+    let start = std::time::Instant::now();
+    let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
+        fts_db: &state.pool,
+        vec_pool: &state.vec_pool,
+        query: &params.query,
+        query_embedding: &params.embedding,
+        limit: params.limit,
+        workspace_id: params.workspace_id.as_deref(),
+        agent_id: params.agent_id.as_deref(),
+        memory_type: params.memory_type,
+    })
+    .await?;
+    let latency_ms = start.elapsed().as_millis() as i64;
+    record_search_analytics(
+        &state.pool,
+        SearchAnalyticsParams {
+            query_text: params.query,
+            search_type: "hybrid".to_string(),
+            result_count: results.len() as i64,
+            latency_ms,
+            workspace_id: params.workspace_id,
+            agent_id: params.agent_id,
+        },
+    )
+    .await;
+    Ok(serde_json::to_value(results).unwrap())
+}
+
+async fn search_hybrid_fts_fallback(
+    state: &AppState,
+    params: FtsFallbackParams,
+) -> Result<Value, nous_core::error::NousError> {
+    let start = std::time::Instant::now();
+    let fts_results = memory::search_memories(
+        &state.pool,
+        &memory::SearchMemoryRequest {
+            query: params.query.clone(),
+            workspace_id: params.workspace_id.clone(),
+            agent_id: params.agent_id.clone(),
+            memory_type: params.memory_type,
+            importance: None,
+            include_archived: false,
+            limit: Some(params.limit as u32),
+        },
+    )
+    .await?;
+    let latency_ms = start.elapsed().as_millis() as i64;
+    record_search_analytics(
+        &state.pool,
+        SearchAnalyticsParams {
+            query_text: params.query,
+            search_type: "fts5_fallback".to_string(),
+            result_count: fts_results.len() as i64,
+            latency_ms,
+            workspace_id: params.workspace_id,
+            agent_id: params.agent_id,
+        },
+    )
+    .await;
+    Ok(serde_json::json!({
+        "results": fts_results,
+        "_warning": "embedding unavailable, fell back to FTS5-only search"
+    }))
+}
+
 async fn handle_search_hybrid(
     args: &Value,
     state: &AppState,
@@ -685,71 +864,31 @@ async fn handle_search_hybrid(
         .and_then(|embedder| embedder.embed(&[query]).ok())
         .and_then(|mut vecs| vecs.pop());
 
-    let start = std::time::Instant::now();
-
     if let Some(embedding) = query_embedding {
-        let results = memory::search_hybrid_filtered(memory::SearchHybridFilteredParams {
-            fts_db: &state.pool,
-            vec_pool: &state.vec_pool,
-            query,
-            query_embedding: &embedding,
-            limit,
-            workspace_id: workspace_id.as_deref(),
-            agent_id: agent_id.as_deref(),
-            memory_type,
-        })
-        .await?;
-        let latency_ms = start.elapsed().as_millis() as i64;
-        if let Err(e) = memory::analytics::record_search_event(
-            &state.pool,
-            &memory::analytics::SearchEvent {
-                query_text: query.to_string(),
-                search_type: "hybrid".to_string(),
-                result_count: i64::try_from(results.len()).unwrap_or(i64::MAX),
-                latency_ms,
-                workspace_id,
-                agent_id,
-            },
-        )
-        .await
-        {
-            tracing::debug!(error = %e, "failed to record hybrid search analytics");
-        }
-        Ok(serde_json::to_value(results).unwrap())
-    } else {
-        let fts_results = memory::search_memories(
-            &state.pool,
-            &memory::SearchMemoryRequest {
+        search_hybrid_with_embedding(
+            state,
+            HybridSearchParams {
                 query: query.to_string(),
-                workspace_id: workspace_id.clone(),
-                agent_id: agent_id.clone(),
-                memory_type,
-                importance: None,
-                include_archived: false,
-                limit: Some(limit as u32),
-            },
-        )
-        .await?;
-        let latency_ms = start.elapsed().as_millis() as i64;
-        if let Err(e) = memory::analytics::record_search_event(
-            &state.pool,
-            &memory::analytics::SearchEvent {
-                query_text: query.to_string(),
-                search_type: "fts5_fallback".to_string(),
-                result_count: i64::try_from(fts_results.len()).unwrap_or(i64::MAX),
-                latency_ms,
+                embedding,
+                limit,
                 workspace_id,
                 agent_id,
+                memory_type,
             },
         )
         .await
-        {
-            tracing::debug!(error = %e, "failed to record fts5_fallback search analytics");
-        }
-        Ok(serde_json::json!({
-            "results": fts_results,
-            "_warning": "embedding unavailable, fell back to FTS5-only search"
-        }))
+    } else {
+        search_hybrid_fts_fallback(
+            state,
+            FtsFallbackParams {
+                query: query.to_string(),
+                limit,
+                workspace_id,
+                agent_id,
+                memory_type,
+            },
+        )
+        .await
     }
 }
 
@@ -835,8 +974,16 @@ async fn handle_session_summary(
     let summary = require_str(args, "summary")?;
     let agent_id = args.get("agent_id").and_then(|v| v.as_str());
     let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
-    let session =
-        memory::session_summary(&state.pool, session_id, summary, agent_id, workspace_id).await?;
+    let session = memory::session_summary(
+        &state.pool,
+        SessionSummaryRequest {
+            session_id,
+            summary,
+            agent_id,
+            workspace_id,
+        },
+    )
+    .await?;
     Ok(serde_json::to_value(session).unwrap())
 }
 
@@ -848,8 +995,16 @@ async fn handle_save_prompt(
     let session_id = args.get("session_id").and_then(|v| v.as_str());
     let agent_id = args.get("agent_id").and_then(|v| v.as_str());
     let workspace_id = args.get("workspace_id").and_then(|v| v.as_str());
-    let mem =
-        memory::save_prompt(&state.pool, session_id, agent_id, workspace_id, prompt).await?;
+    let mem = memory::save_prompt(
+        &state.pool,
+        SavePromptRequest {
+            session_id,
+            agent_id,
+            workspace_id,
+            prompt,
+        },
+    )
+    .await?;
     Ok(serde_json::to_value(mem).unwrap())
 }
 

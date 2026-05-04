@@ -13,14 +13,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-pub async fn run(
-    tools_filter: Option<String>,
-    model: Option<String>,
-    region: Option<String>,
-    profile: Option<String>,
-    port: Option<u16>,
-) {
-    if let Err(e) = execute(tools_filter, model, region, profile, port).await {
+pub struct McpServerParams {
+    pub tools_filter: Option<String>,
+    pub model: Option<String>,
+    pub region: Option<String>,
+    pub profile: Option<String>,
+    pub port: Option<u16>,
+}
+
+pub async fn run(params: McpServerParams) {
+    if let Err(e) = execute(params).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -42,45 +44,54 @@ fn build_prefixes(filter: &str) -> Vec<&str> {
     filter.split(',').map(prefix_to_tool_prefix).collect()
 }
 
-async fn execute(
-    tools_filter: Option<String>,
+fn load_embedder() -> Option<Arc<dyn nous_core::memory::Embedder>> {
+    match OnnxEmbeddingModel::load(None) {
+        Ok(m) => Some(Arc::new(m)),
+        Err(e) => {
+            tracing::warn!("embedding model not available, vector/hybrid search disabled: {e}");
+            None
+        }
+    }
+}
+
+fn has_aws_credentials() -> bool {
+    std::env::var("AWS_ACCESS_KEY_ID").is_ok()
+        || std::env::var("AWS_PROFILE").is_ok()
+        || std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_ok()
+}
+
+async fn build_bedrock_client(
+    llm_config: &nous_daemon::llm_client::LlmConfig,
+) -> Arc<nous_daemon::llm_client::LlmClient> {
+    use nous_daemon::llm_client::build_client;
+    let client = build_client(llm_config).await;
+    tracing::info!(region = %llm_config.region, model = %llm_config.model, "LLM client configured for Bedrock");
+    Arc::new(client)
+}
+
+async fn build_llm_client(
+    llm_config: &nous_daemon::llm_client::LlmConfig,
+) -> (Option<Arc<nous_daemon::llm_client::LlmClient>>, String) {
+    if has_aws_credentials() {
+        let client = build_bedrock_client(llm_config).await;
+        (Some(client), llm_config.model.clone())
+    } else {
+        tracing::warn!("LLM client not available (no AWS credentials found in environment)");
+        (None, llm_config.model.clone())
+    }
+}
+
+async fn build_app_state(
+    pools: &DbPools,
     model: Option<String>,
     region: Option<String>,
     profile: Option<String>,
-    port: Option<u16>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = Config::load()?;
-    if let Some(p) = port {
-        config.port = p;
-    }
-    config.ensure_dirs()?;
+) -> AppState {
+    use nous_daemon::llm_client::LlmConfig;
 
-    let pools = DbPools::connect(&config.data_dir).await?;
-    pools.run_migrations().await?;
-
-    let embedder: Option<Arc<dyn nous_core::memory::Embedder>> =
-        match OnnxEmbeddingModel::load(None) {
-            Ok(model) => Some(Arc::new(model)),
-            Err(e) => {
-                tracing::warn!("embedding model not available, vector/hybrid search disabled: {e}");
-                None
-            }
-        };
-
+    let embedder = load_embedder();
     let llm_config = LlmConfig::resolve(model, region, profile);
-
-    let has_credentials = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
-        || std::env::var("AWS_PROFILE").is_ok()
-        || std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_ok();
-
-    let (llm_client, default_model) = if has_credentials {
-        let client = build_client(&llm_config).await;
-        tracing::info!(region = %llm_config.region, model = %llm_config.model, "LLM client configured for Bedrock");
-        (Some(Arc::new(client)), llm_config.model)
-    } else {
-        tracing::warn!("LLM client not available (no AWS credentials found in environment)");
-        (None, llm_config.model)
-    };
+    let (llm_client, default_model) = build_llm_client(&llm_config).await;
 
     let registry = Arc::new(NotificationRegistry::new());
     let tool_services = AppState::build_tool_services(
@@ -90,7 +101,7 @@ async fn execute(
         registry.clone(),
     );
 
-    let state = AppState {
+    AppState {
         pool: pools.fts.clone(),
         vec_pool: pools.vec.clone(),
         registry,
@@ -105,10 +116,140 @@ async fn execute(
         tool_services,
         #[cfg(feature = "sandbox")]
         sandbox_manager: None,
-    };
+    }
+}
+
+async fn execute(params: McpServerParams) -> Result<(), Box<dyn std::error::Error>> {
+    let McpServerParams { tools_filter, model, region, profile, port } = params;
+
+    let mut config = Config::load()?;
+    if let Some(p) = port {
+        config.port = p;
+    }
+    config.ensure_dirs()?;
+
+    let pools = DbPools::connect(&config.data_dir).await?;
+    pools.run_migrations().await?;
+
+    let state = build_app_state(&pools, model, region, profile).await;
 
     let prefixes: Option<Vec<&str>> = tools_filter.as_deref().map(build_prefixes);
 
+    run_stdio_loop(&state, prefixes.as_ref(), pools).await
+}
+
+struct ToolsCallContext<'a> {
+    state: &'a AppState,
+    stdout: &'a mut tokio::io::Stdout,
+    id: Value,
+    prefixes: Option<&'a Vec<&'a str>>,
+    params: &'a Value,
+}
+
+async fn handle_tools_call_filtered(
+    ctx: ToolsCallContext<'_>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let ToolsCallContext { state, stdout, id, prefixes, params } = ctx;
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+
+    if let Some(pfs) = prefixes {
+        if !pfs.iter().any(|p| tool_name.starts_with(p)) {
+            let out = serde_json::to_string(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32601,
+                    "message": format!("tool not available: {tool_name}")
+                }
+            }))? + "\n";
+            stdout.write_all(out.as_bytes()).await?;
+            stdout.flush().await?;
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(handle_tools_call(state, id, tool_name, &arguments).await))
+}
+
+async fn parse_request_line(
+    line: &str,
+    stdout: &mut tokio::io::Stdout,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    match serde_json::from_str(line) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            let err_resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": { "code": -32700, "message": format!("parse error: {e}") }
+            });
+            let out = serde_json::to_string(&err_resp)? + "\n";
+            stdout.write_all(out.as_bytes()).await?;
+            stdout.flush().await?;
+            Ok(None)
+        }
+    }
+}
+
+async fn dispatch_request(
+    state: &AppState,
+    stdout: &mut tokio::io::Stdout,
+    request: Value,
+    prefixes: Option<&Vec<&str>>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+
+    if method == "notifications/initialized" {
+        return Ok(None);
+    }
+
+    let response = match method {
+        "initialize" => Some(handle_initialize(&id)),
+        "tools/list" => Some(handle_tools_list(&id, prefixes)),
+        "tools/call" => {
+            let params = request.get("params").cloned().unwrap_or(Value::Null);
+            handle_tools_call_filtered(ToolsCallContext {
+                state,
+                stdout,
+                id,
+                prefixes,
+                params: &params,
+            })
+            .await?
+        }
+        _ => Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("method not found: {method}")
+            }
+        })),
+    };
+
+    Ok(response)
+}
+
+async fn write_response(
+    stdout: &mut tokio::io::Stdout,
+    resp: &Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let out = serde_json::to_string(resp)? + "\n";
+    stdout.write_all(out.as_bytes()).await?;
+    stdout.flush().await?;
+    Ok(())
+}
+
+async fn run_stdio_loop(
+    state: &AppState,
+    prefixes: Option<&Vec<&str>>,
+    pools: DbPools,
+) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let mut reader = BufReader::new(stdin);
@@ -121,141 +262,94 @@ async fn execute(
             break;
         }
 
-        let trimmed = line.trim();
+        let trimmed = line.trim().to_owned();
         if trimmed.is_empty() {
             continue;
         }
 
-        let request: Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(e) => {
-                let err_resp = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": { "code": -32700, "message": format!("parse error: {e}") }
-                });
-                let out = serde_json::to_string(&err_resp)? + "\n";
-                stdout.write_all(out.as_bytes()).await?;
-                stdout.flush().await?;
-                continue;
-            }
+        let Some(request) = parse_request_line(&trimmed, &mut stdout).await? else {
+            continue;
         };
 
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let response = dispatch_request(state, &mut stdout, request, prefixes).await?;
 
-        let response = match method {
-            "initialize" => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": { "listChanged": false }
-                        },
-                        "serverInfo": {
-                            "name": "nous",
-                            "version": env!("CARGO_PKG_VERSION")
-                        }
-                    }
-                })
-            }
-            "notifications/initialized" => continue,
-            "tools/list" => {
-                let schemas = get_tool_schemas();
-                let tools: Vec<Value> = schemas
-                    .iter()
-                    .filter(|t| match &prefixes {
-                        None => true,
-                        Some(pfs) => pfs.iter().any(|p| t.name.starts_with(p)),
-                    })
-                    .map(|t| {
-                        serde_json::json!({
-                            "name": t.name,
-                            "description": t.description,
-                            "inputSchema": t.input_schema
-                        })
-                    })
-                    .collect();
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": { "tools": tools }
-                })
-            }
-            "tools/call" => {
-                let params = request.get("params").cloned().unwrap_or(Value::Null);
-                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let arguments = params
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({}));
-
-                // Enforce --tools filter: reject calls to tools not in the allowed set
-                if let Some(ref pfs) = prefixes {
-                    if !pfs.iter().any(|p| tool_name.starts_with(p)) {
-                        let out = serde_json::to_string(&serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "error": {
-                                "code": -32601,
-                                "message": format!("tool not available: {tool_name}")
-                            }
-                        }))? + "\n";
-                        stdout.write_all(out.as_bytes()).await?;
-                        stdout.flush().await?;
-                        continue;
-                    }
-                }
-
-                match dispatch(&state, tool_name, &arguments).await {
-                    Ok(result) => {
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": {
-                                "content": [{
-                                    "type": "text",
-                                    "text": serde_json::to_string(&result).unwrap_or_default()
-                                }]
-                            }
-                        })
-                    }
-                    Err(e) => {
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": {
-                                "content": [{
-                                    "type": "text",
-                                    "text": e.to_string()
-                                }],
-                                "isError": true
-                            }
-                        })
-                    }
-                }
-            }
-            _ => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": {
-                        "code": -32601,
-                        "message": format!("method not found: {method}")
-                    }
-                })
-            }
-        };
-
-        let out = serde_json::to_string(&response)? + "\n";
-        stdout.write_all(out.as_bytes()).await?;
-        stdout.flush().await?;
+        if let Some(resp) = response {
+            write_response(&mut stdout, &resp).await?;
+        }
     }
 
     pools.close().await;
     Ok(())
+}
+
+fn handle_initialize(id: &Value) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": { "listChanged": false }
+            },
+            "serverInfo": {
+                "name": "nous",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        }
+    })
+}
+
+fn handle_tools_list(id: &Value, prefixes: Option<&Vec<&str>>) -> Value {
+    let schemas = get_tool_schemas();
+    let tools: Vec<Value> = schemas
+        .iter()
+        .filter(|t| match prefixes {
+            None => true,
+            Some(pfs) => pfs.iter().any(|p| t.name.starts_with(p)),
+        })
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": t.input_schema
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": { "tools": tools }
+    })
+}
+
+async fn handle_tools_call(state: &AppState, id: Value, tool_name: &str, arguments: &Value) -> Value {
+    match dispatch(state, tool_name, arguments).await {
+        Ok(result) => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{
+                        "type": "text",
+                        "text": serde_json::to_string(&result).unwrap_or_default()
+                    }]
+                }
+            })
+        }
+        Err(e) => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{
+                        "type": "text",
+                        "text": e.to_string()
+                    }],
+                    "isError": true
+                }
+            })
+        }
+    }
 }
 
 #[cfg(test)]

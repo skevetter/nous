@@ -118,16 +118,28 @@ pub async fn store_embedding(
     Ok(())
 }
 
+pub struct SearchSimilarParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub vec_pool: &'a crate::db::VecPool,
+    pub query_embedding: &'a [f32],
+    pub limit: u32,
+    pub workspace_id: Option<&'a str>,
+    pub threshold: Option<f32>,
+}
+
 /// Search memories by KNN using sqlite-vec's vec0 virtual table.
 /// Returns top-K memories with similarity scores, ordered by distance ascending.
 pub async fn search_similar(
-    db: &DatabaseConnection,
-    vec_pool: &crate::db::VecPool,
-    query_embedding: &[f32],
-    limit: u32,
-    workspace_id: Option<&str>,
-    threshold: Option<f32>,
+    params: SearchSimilarParams<'_>,
 ) -> Result<Vec<SimilarMemory>, NousError> {
+    let SearchSimilarParams {
+        db,
+        vec_pool,
+        query_embedding,
+        limit,
+        workspace_id,
+        threshold,
+    } = params;
     if query_embedding.is_empty() {
         return Err(NousError::Validation("embedding cannot be empty".into()));
     }
@@ -221,19 +233,21 @@ pub fn store_chunk_embedding(
     Ok(())
 }
 
-pub async fn search_hybrid(
-    fts_db: &DatabaseConnection,
-    vec_pool: &VecPool,
-    query: &str,
-    query_embedding: &[f32],
-    limit: usize,
-) -> Result<Vec<SimilarMemory>, NousError> {
+pub struct SearchHybridRequest<'a> {
+    pub fts_db: &'a DatabaseConnection,
+    pub vec_pool: &'a VecPool,
+    pub query: &'a str,
+    pub query_embedding: &'a [f32],
+    pub limit: usize,
+}
+
+pub async fn search_hybrid(req: SearchHybridRequest<'_>) -> Result<Vec<SimilarMemory>, NousError> {
     search_hybrid_filtered(SearchHybridFilteredParams {
-        fts_db,
-        vec_pool,
-        query,
-        query_embedding,
-        limit,
+        fts_db: req.fts_db,
+        vec_pool: req.vec_pool,
+        query: req.query,
+        query_embedding: req.query_embedding,
+        limit: req.limit,
         workspace_id: None,
         agent_id: None,
         memory_type: None,
@@ -293,14 +307,14 @@ pub async fn search_hybrid_filtered(
         })
         .collect();
 
-    let vec_results = search_similar(
-        fts_db,
+    let vec_results = search_similar(SearchSimilarParams {
+        db: fts_db,
         vec_pool,
         query_embedding,
-        vec_limit,
+        limit: vec_limit,
         workspace_id,
-        None,
-    )
+        threshold: None,
+    })
     .await?;
 
     let vec_results: Vec<SimilarMemory> = vec_results
@@ -520,9 +534,16 @@ mod tests {
         let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
         query[0] = 0.9;
         query[1] = 0.1;
-        let results = search_similar(&db, &vec_pool, &query, 10, None, None)
-            .await
-            .unwrap();
+        let results = search_similar(SearchSimilarParams {
+            db: &db,
+            vec_pool: &vec_pool,
+            query_embedding: &query,
+            limit: 10,
+            workspace_id: None,
+            threshold: None,
+        })
+        .await
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].score > 0.0);
         assert_eq!(results[0].memory.id, mem.id);
@@ -558,9 +579,16 @@ mod tests {
 
         let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
         query[1] = 1.0;
-        let results = search_similar(&db, &vec_pool, &query, 10, None, Some(0.9))
-            .await
-            .unwrap();
+        let results = search_similar(SearchSimilarParams {
+            db: &db,
+            vec_pool: &vec_pool,
+            query_embedding: &query,
+            limit: 10,
+            workspace_id: None,
+            threshold: Some(0.9),
+        })
+        .await
+        .unwrap();
         assert_eq!(results.len(), 0);
     }
 

@@ -118,6 +118,17 @@ async fn execute(
     let pool = &pools.fts;
     let clock = SystemClock;
 
+    dispatch(pool, &clock, cmd).await?;
+
+    pools.close().await;
+    Ok(())
+}
+
+async fn dispatch(
+    pool: &sea_orm::DatabaseConnection,
+    clock: &SystemClock,
+    cmd: ScheduleCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         ScheduleCommands::Create {
             name,
@@ -131,34 +142,26 @@ async fn execute(
             desired_outcome,
             trigger_at,
         } => {
-            let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
-                db: pool,
-                name: &name,
-                cron_expr: &cron,
-                trigger_at,
-                timezone: tz.as_deref(),
-                action_type: &action,
-                action_payload: &payload,
-                desired_outcome: desired_outcome.as_deref(),
-                max_retries,
-                timeout_secs: timeout,
-                max_output_bytes: None,
-                max_runs,
-                clock: &clock,
-            })
+            cmd_create(
+                pool,
+                clock,
+                CreateArgs {
+                    name,
+                    cron,
+                    action,
+                    payload,
+                    tz,
+                    timeout,
+                    max_retries,
+                    max_runs,
+                    desired_outcome,
+                    trigger_at,
+                },
+            )
             .await?;
-            println!("{}", serde_json::to_string_pretty(&schedule)?);
         }
-        ScheduleCommands::List {
-            enabled,
-            action,
-            limit,
-            output,
-        } => {
-            let list =
-                schedules::list_schedules(pool, enabled, action.as_deref(), Some(limit)).await?;
-            let val = serde_json::to_value(&list)?;
-            print_list(&val, &output, &["id", "name", "cron_expr", "action_type", "enabled", "next_run_at"]);
+        ScheduleCommands::List { enabled, action, limit, output } => {
+            cmd_list(pool, ListArgs { enabled, action, limit, output }).await?;
         }
         ScheduleCommands::Get { id } => {
             let schedule = schedules::get_schedule(pool, &id).await?;
@@ -178,34 +181,25 @@ async fn execute(
             max_retries,
             timeout,
         } => {
-            let timeout_opt = timeout.map(Some);
-            let trigger_at_opt = if clear_trigger {
-                Some(None)
-            } else {
-                trigger_at.map(Some)
-            };
-            let desired_outcome_opt = if clear_desired_outcome {
-                Some(None)
-            } else {
-                desired_outcome.as_deref().map(Some)
-            };
-            let schedule = schedules::update_schedule(schedules::UpdateScheduleParams {
-                db: pool,
-                id: &id,
-                name: name.as_deref(),
-                cron_expr: cron.as_deref(),
-                trigger_at: trigger_at_opt,
-                enabled,
-                action_type: action.as_deref(),
-                action_payload: payload.as_deref(),
-                desired_outcome: desired_outcome_opt,
-                max_retries,
-                timeout_secs: timeout_opt,
-                max_runs: None,
-                clock: &clock,
-            })
+            cmd_update(
+                pool,
+                clock,
+                UpdateArgs {
+                    id,
+                    name,
+                    cron,
+                    trigger_at,
+                    clear_trigger,
+                    enabled,
+                    action,
+                    payload,
+                    desired_outcome,
+                    clear_desired_outcome,
+                    max_retries,
+                    timeout,
+                },
+            )
             .await?;
-            println!("{}", serde_json::to_string_pretty(&schedule)?);
         }
         ScheduleCommands::Delete { id } => {
             schedules::delete_schedule(pool, &id).await?;
@@ -220,7 +214,117 @@ async fn execute(
             println!("{}", serde_json::to_string_pretty(&health)?);
         }
     }
+    Ok(())
+}
 
-    pools.close().await;
+struct CreateArgs {
+    name: String,
+    cron: String,
+    action: String,
+    payload: String,
+    tz: Option<String>,
+    timeout: Option<i32>,
+    max_retries: Option<i32>,
+    max_runs: Option<i32>,
+    desired_outcome: Option<String>,
+    trigger_at: Option<i64>,
+}
+
+async fn cmd_create(
+    pool: &sea_orm::DatabaseConnection,
+    clock: &SystemClock,
+    args: CreateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let schedule = schedules::create_schedule(schedules::CreateScheduleParams {
+        db: pool,
+        name: &args.name,
+        cron_expr: &args.cron,
+        trigger_at: args.trigger_at,
+        timezone: args.tz.as_deref(),
+        action_type: &args.action,
+        action_payload: &args.payload,
+        desired_outcome: args.desired_outcome.as_deref(),
+        max_retries: args.max_retries,
+        timeout_secs: args.timeout,
+        max_output_bytes: None,
+        max_runs: args.max_runs,
+        clock,
+    })
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&schedule)?);
+    Ok(())
+}
+
+struct ListArgs {
+    enabled: Option<bool>,
+    action: Option<String>,
+    limit: u32,
+    output: OutputFormat,
+}
+
+async fn cmd_list(
+    pool: &sea_orm::DatabaseConnection,
+    args: ListArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let list =
+        schedules::list_schedules(pool, args.enabled, args.action.as_deref(), Some(args.limit))
+            .await?;
+    let val = serde_json::to_value(&list)?;
+    print_list(
+        &val,
+        &args.output,
+        &["id", "name", "cron_expr", "action_type", "enabled", "next_run_at"],
+    );
+    Ok(())
+}
+
+struct UpdateArgs {
+    id: String,
+    name: Option<String>,
+    cron: Option<String>,
+    trigger_at: Option<i64>,
+    clear_trigger: bool,
+    enabled: Option<bool>,
+    action: Option<String>,
+    payload: Option<String>,
+    desired_outcome: Option<String>,
+    clear_desired_outcome: bool,
+    max_retries: Option<i32>,
+    timeout: Option<i32>,
+}
+
+async fn cmd_update(
+    pool: &sea_orm::DatabaseConnection,
+    clock: &SystemClock,
+    args: UpdateArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let timeout_opt = args.timeout.map(Some);
+    let trigger_at_opt = if args.clear_trigger {
+        Some(None)
+    } else {
+        args.trigger_at.map(Some)
+    };
+    let desired_outcome_opt = if args.clear_desired_outcome {
+        Some(None)
+    } else {
+        args.desired_outcome.as_deref().map(Some)
+    };
+    let schedule = schedules::update_schedule(schedules::UpdateScheduleParams {
+        db: pool,
+        id: &args.id,
+        name: args.name.as_deref(),
+        cron_expr: args.cron.as_deref(),
+        trigger_at: trigger_at_opt,
+        enabled: args.enabled,
+        action_type: args.action.as_deref(),
+        action_payload: args.payload.as_deref(),
+        desired_outcome: desired_outcome_opt,
+        max_retries: args.max_retries,
+        timeout_secs: timeout_opt,
+        max_runs: None,
+        clock,
+    })
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&schedule)?);
     Ok(())
 }

@@ -5,7 +5,8 @@ use nous_core::db::DatabaseConnection;
 use nous_core::db::VecPool;
 use nous_core::error::NousError;
 use nous_core::memory::{
-    self, ContextRequest, Embedder, MemoryType, SearchMemoryRequest, SimilarMemory,
+    self, ContextRequest, Embedder, MemoryType, SearchMemoryRequest, SearchSimilarParams,
+    SimilarMemory,
 };
 use rig::vector_store::request::Filter;
 use rig::vector_store::{VectorSearchRequest, VectorStoreError, VectorStoreIndex};
@@ -139,14 +140,14 @@ impl NousMemoryIndex {
                     NousError::Internal("embedder returned no vectors".to_string())
                 })?;
 
-                memory::search_similar(
-                    &self.fts_pool,
-                    &self.vec_pool,
-                    &embedding,
-                    limit as u32,
-                    ws,
-                    None,
-                )
+                memory::search_similar(SearchSimilarParams {
+                    db: &self.fts_pool,
+                    vec_pool: &self.vec_pool,
+                    query_embedding: &embedding,
+                    limit: limit as u32,
+                    workspace_id: ws,
+                    threshold: None,
+                })
                 .await
             }
             RetrievalStrategy::Recency => {
@@ -331,15 +332,27 @@ fn parse_header(line: &str) -> Option<(MemoryType, String, String)> {
     Some((mem_type?, importance, title?))
 }
 
+/// Parameters for `extract_and_save_memories`.
+pub struct ExtractAndSaveParams<'a> {
+    pub response: &'a str,
+    pub agent_id: &'a str,
+    pub workspace_id: &'a str,
+    pub allowed_types: &'a [MemoryType],
+    pub fts_pool: &'a DatabaseConnection,
+}
+
 /// Extract memories from agent response and save them based on `auto_save` config.
 /// Only saves memories whose type is in `allowed_types`.
 pub async fn extract_and_save_memories(
-    response: &str,
-    agent_id: &str,
-    workspace_id: &str,
-    allowed_types: &[MemoryType],
-    fts_pool: &DatabaseConnection,
+    params: ExtractAndSaveParams<'_>,
 ) -> Result<Vec<String>, NousError> {
+    let ExtractAndSaveParams {
+        response,
+        agent_id,
+        workspace_id,
+        allowed_types,
+        fts_pool,
+    } = params;
     let blocks = parse_memory_blocks(response);
     let mut saved_ids = Vec::new();
     for block in blocks {
@@ -602,10 +615,15 @@ Benchmarks show sub-millisecond queries.
 END_MEMORY"#;
 
             let allowed = vec![MemoryType::Decision];
-            let ids =
-                super::extract_and_save_memories(response, "agent-1", "ws-1", &allowed, &pools.fts)
-                    .await
-                    .unwrap();
+            let ids = super::extract_and_save_memories(super::ExtractAndSaveParams {
+                response,
+                agent_id: "agent-1",
+                workspace_id: "ws-1",
+                allowed_types: &allowed,
+                fts_pool: &pools.fts,
+            })
+            .await
+            .unwrap();
 
             assert_eq!(ids.len(), 1, "only Decision type should be saved");
 

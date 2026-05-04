@@ -89,15 +89,11 @@ pub async fn get_memory_by_id(db: &DatabaseConnection, id: &str) -> Result<Memor
     Ok(Memory::from_model(model))
 }
 
-pub async fn update_memory(
-    db: &DatabaseConnection,
-    req: UpdateMemoryRequest,
-) -> Result<Memory, NousError> {
-    let _existing = get_memory_by_id(db, &req.id).await?;
-
-    let mut sets: Vec<String> = Vec::new();
-    let mut params: Vec<sea_orm::Value> = Vec::new();
-
+fn build_memory_update_fields(
+    req: &UpdateMemoryRequest,
+    sets: &mut Vec<String>,
+    params: &mut Vec<sea_orm::Value>,
+) -> Result<(), NousError> {
     if let Some(ref title) = req.title {
         if title.trim().is_empty() {
             return Err(NousError::Validation("title cannot be empty".into()));
@@ -138,6 +134,20 @@ pub async fn update_memory(
         sets.push("archived = ?".to_string());
         params.push(archived.into());
     }
+
+    Ok(())
+}
+
+pub async fn update_memory(
+    db: &DatabaseConnection,
+    req: UpdateMemoryRequest,
+) -> Result<Memory, NousError> {
+    let _existing = get_memory_by_id(db, &req.id).await?;
+
+    let mut sets: Vec<String> = Vec::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
+
+    build_memory_update_fields(&req, &mut sets, &mut params)?;
 
     if sets.is_empty() {
         return get_memory_by_id(db, &req.id).await;
@@ -320,13 +330,23 @@ pub async fn session_end(
     get_session_by_id(db, session_id).await
 }
 
+pub struct SessionSummaryRequest<'a> {
+    pub session_id: &'a str,
+    pub summary: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub workspace_id: Option<&'a str>,
+}
+
 pub async fn session_summary(
     db: &DatabaseConnection,
-    session_id: &str,
-    summary: &str,
-    agent_id: Option<&str>,
-    workspace_id: Option<&str>,
+    req: SessionSummaryRequest<'_>,
 ) -> Result<MemorySession, NousError> {
+    let SessionSummaryRequest {
+        session_id,
+        summary,
+        agent_id,
+        workspace_id,
+    } = req;
     if summary.trim().is_empty() {
         return Err(NousError::Validation("summary cannot be empty".into()));
     }
@@ -359,13 +379,23 @@ pub async fn session_summary(
     get_session_by_id(db, session_id).await
 }
 
+pub struct SavePromptRequest<'a> {
+    pub session_id: Option<&'a str>,
+    pub agent_id: Option<&'a str>,
+    pub workspace_id: Option<&'a str>,
+    pub prompt: &'a str,
+}
+
 pub async fn save_prompt(
     db: &DatabaseConnection,
-    session_id: Option<&str>,
-    agent_id: Option<&str>,
-    workspace_id: Option<&str>,
-    prompt: &str,
+    req: SavePromptRequest<'_>,
 ) -> Result<Memory, NousError> {
+    let SavePromptRequest {
+        session_id,
+        agent_id,
+        workspace_id,
+        prompt,
+    } = req;
     if prompt.trim().is_empty() {
         return Err(NousError::Validation("prompt cannot be empty".into()));
     }
@@ -1040,10 +1070,12 @@ mod tests {
 
         let updated = session_summary(
             &db,
-            &session.id,
-            "Completed migration refactoring",
-            Some("agent-1"),
-            Some("ws-1"),
+            SessionSummaryRequest {
+                session_id: &session.id,
+                summary: "Completed migration refactoring",
+                agent_id: Some("agent-1"),
+                workspace_id: Some("ws-1"),
+            },
         )
         .await
         .unwrap();
@@ -1073,9 +1105,17 @@ mod tests {
 
         let session = session_start(&db, None, None).await.unwrap();
 
-        let err = session_summary(&db, &session.id, "   ", None, None)
-            .await
-            .unwrap_err();
+        let err = session_summary(
+            &db,
+            SessionSummaryRequest {
+                session_id: &session.id,
+                summary: "   ",
+                agent_id: None,
+                workspace_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
     }
 
@@ -1083,9 +1123,17 @@ mod tests {
     async fn session_summary_nonexistent_session_fails() {
         let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = session_summary(&db, "nonexistent-id", "some summary", None, None)
-            .await
-            .unwrap_err();
+        let err = session_summary(
+            &db,
+            SessionSummaryRequest {
+                session_id: "nonexistent-id",
+                summary: "some summary",
+                agent_id: None,
+                workspace_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, NousError::NotFound(_)));
     }
 
@@ -1095,10 +1143,12 @@ mod tests {
 
         let mem = save_prompt(
             &db,
-            None,
-            Some("agent-1"),
-            Some("ws-1"),
-            "Refactor the auth module",
+            SavePromptRequest {
+                session_id: None,
+                agent_id: Some("agent-1"),
+                workspace_id: Some("ws-1"),
+                prompt: "Refactor the auth module",
+            },
         )
         .await
         .unwrap();
@@ -1117,10 +1167,12 @@ mod tests {
 
         let mem = save_prompt(
             &db,
-            Some(&session.id),
-            Some("agent-1"),
-            None,
-            "Fix the login bug",
+            SavePromptRequest {
+                session_id: Some(&session.id),
+                agent_id: Some("agent-1"),
+                workspace_id: None,
+                prompt: "Fix the login bug",
+            },
         )
         .await
         .unwrap();
@@ -1133,7 +1185,17 @@ mod tests {
     async fn save_prompt_empty_fails() {
         let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&db, None, None, None, "   ").await.unwrap_err();
+        let err = save_prompt(
+            &db,
+            SavePromptRequest {
+                session_id: None,
+                agent_id: None,
+                workspace_id: None,
+                prompt: "   ",
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, NousError::Validation(_)));
     }
 
@@ -1141,9 +1203,17 @@ mod tests {
     async fn save_prompt_nonexistent_session_fails() {
         let (db, _vec_pool, _tmp) = setup().await;
 
-        let err = save_prompt(&db, Some("bad-session"), None, None, "a prompt")
-            .await
-            .unwrap_err();
+        let err = save_prompt(
+            &db,
+            SavePromptRequest {
+                session_id: Some("bad-session"),
+                agent_id: None,
+                workspace_id: None,
+                prompt: "a prompt",
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, NousError::NotFound(_)));
     }
 

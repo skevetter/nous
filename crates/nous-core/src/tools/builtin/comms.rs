@@ -72,12 +72,12 @@ impl AgentTool for RoomPostTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .post_to_room(
-                room.to_string(),
-                ctx.agent_id.clone(),
-                content.to_string(),
+            .post_to_room(crate::tools::PostToRoomParams {
+                room: room.to_string(),
+                sender_id: ctx.agent_id.clone(),
+                content: content.to_string(),
                 reply_to,
-            )
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -359,7 +359,12 @@ impl AgentTool for TaskCreateTool {
             .ok_or_else(|| ToolError::ExecutionFailed("no services configured".into()))?;
 
         let result = services
-            .create_task(title.to_string(), description, assignee, priority)
+            .create_task(crate::tools::ToolCreateTaskParams {
+                title: title.to_string(),
+                description,
+                assignee,
+                priority,
+            })
             .await?;
 
         Ok(ToolOutput {
@@ -455,45 +460,27 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolServices for MockToolServices {
-        async fn save_memory(
-            &self,
-            _workspace_id: Option<String>,
-            _agent_id: String,
-            _content: String,
-            _memory_type: String,
-            _importance: String,
-            _tags: Vec<String>,
-        ) -> Result<Value, ToolError> {
+        async fn save_memory(&self, _params: crate::tools::SaveMemoryParams) -> Result<Value, ToolError> {
             Ok(json!({}))
         }
 
         async fn search_memories(
             &self,
-            _query: String,
-            _agent_id: Option<String>,
-            _workspace_id: Option<String>,
-            _memory_type: Option<String>,
-            _limit: Option<u32>,
+            _params: crate::tools::SearchMemoriesParams,
         ) -> Result<Value, ToolError> {
             Ok(json!({}))
         }
 
         async fn search_memories_hybrid(
             &self,
-            _query: String,
-            _agent_id: Option<String>,
-            _limit: Option<u32>,
-            _fts_weight: Option<f64>,
+            _params: crate::tools::SearchMemoriesHybridParams,
         ) -> Result<Value, ToolError> {
             Ok(json!({}))
         }
 
         async fn get_memory_context(
             &self,
-            _agent_id: Option<String>,
-            _workspace_id: Option<String>,
-            _topic_key: Option<String>,
-            _limit: Option<u32>,
+            _params: crate::tools::GetMemoryContextParams,
         ) -> Result<Value, ToolError> {
             Ok(json!({}))
         }
@@ -518,11 +505,9 @@ mod tests {
 
         async fn post_to_room(
             &self,
-            room: String,
-            sender_id: String,
-            content: String,
-            reply_to: Option<String>,
+            params: crate::tools::PostToRoomParams,
         ) -> Result<Value, ToolError> {
+            let crate::tools::PostToRoomParams { room, sender_id, content, reply_to } = params;
             Ok(json!({
                 "id": "msg-001",
                 "room": room,
@@ -565,11 +550,10 @@ mod tests {
 
         async fn create_task(
             &self,
-            title: String,
-            description: Option<String>,
-            assignee: Option<String>,
-            priority: Option<String>,
+            params: crate::tools::ToolCreateTaskParams,
         ) -> Result<Value, ToolError> {
+            let crate::tools::ToolCreateTaskParams { title, description, assignee, priority } =
+                params;
             Ok(json!({
                 "id": "task-001",
                 "title": title,

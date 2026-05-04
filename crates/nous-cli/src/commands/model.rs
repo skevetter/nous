@@ -54,22 +54,27 @@ async fn download() {
     println!("\nDone. Models are ready at {}", models_dir.display());
 }
 
-async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size: u64) {
-    if dest.exists() {
-        if let Ok(meta) = fs::metadata(dest) {
-            if meta.len() >= expected_min_size {
-                println!("[SKIP] {name} already exists ({} bytes)", meta.len());
-                return;
-            }
+fn check_existing_file(dest: &PathBuf, name: &str, expected_min_size: u64) -> bool {
+    if !dest.exists() {
+        return false;
+    }
+    match fs::metadata(dest) {
+        Ok(meta) if meta.len() >= expected_min_size => {
+            println!("[SKIP] {name} already exists ({} bytes)", meta.len());
+            true
+        }
+        Ok(meta) => {
             println!(
                 "[WARN] {name} exists but is too small ({} bytes), re-downloading...",
                 meta.len()
             );
+            false
         }
+        Err(_) => false,
     }
+}
 
-    println!("[DOWNLOADING] {name} from HuggingFace...");
-
+async fn fetch_url(url: &str, name: &str) -> Vec<u8> {
     let response = match reqwest::get(url).await {
         Ok(resp) => resp,
         Err(e) => {
@@ -91,14 +96,16 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size:
         println!("       file size: {:.1} MB", mb + frac);
     }
 
-    let bytes = match response.bytes().await {
-        Ok(b) => b,
+    match response.bytes().await {
+        Ok(b) => b.to_vec(),
         Err(e) => {
             eprintln!("ERROR: failed to read response body for {name}: {e}");
             std::process::exit(1);
         }
-    };
+    }
+}
 
+fn write_file_atomic(dest: &PathBuf, name: &str, bytes: &[u8]) {
     let tmp_path = dest.with_extension("tmp");
     let mut file = match fs::File::create(&tmp_path) {
         Ok(f) => f,
@@ -108,7 +115,7 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size:
         }
     };
 
-    if let Err(e) = file.write_all(&bytes) {
+    if let Err(e) = file.write_all(bytes) {
         eprintln!("ERROR: failed to write {name}: {e}");
         let _ = fs::remove_file(&tmp_path);
         std::process::exit(1);
@@ -119,7 +126,16 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size:
         let _ = fs::remove_file(&tmp_path);
         std::process::exit(1);
     }
+}
 
+async fn download_file(url: &str, dest: &PathBuf, name: &str, expected_min_size: u64) {
+    if check_existing_file(dest, name, expected_min_size) {
+        return;
+    }
+
+    println!("[DOWNLOADING] {name} from HuggingFace...");
+    let bytes = fetch_url(url, name).await;
+    write_file_atomic(dest, name, &bytes);
     println!("[OK] {name} downloaded ({} bytes)", bytes.len());
 }
 

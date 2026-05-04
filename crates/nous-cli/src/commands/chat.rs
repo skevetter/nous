@@ -96,97 +96,178 @@ async fn execute(cmd: ChatCommands, port: Option<u16>) -> Result<(), Box<dyn std
     pools.run_migrations().await?;
     let pool = &pools.fts;
 
-    match cmd {
-        ChatCommands::Create { name, purpose } => {
-            let room = create_room(pool, &name, purpose.as_deref(), None).await?;
-            println!("{}", serde_json::to_string_pretty(&room)?);
-        }
-        ChatCommands::List { include_archived } => {
-            let rooms = list_rooms(pool, include_archived).await?;
-            println!("{}", serde_json::to_string_pretty(&rooms)?);
-        }
-        ChatCommands::Inspect { room } => {
-            let r = get_room(pool, &room).await?;
-            println!("{}", serde_json::to_string_pretty(&r)?);
-        }
-        ChatCommands::Delete { room, hard } => {
-            let r = get_room(pool, &room).await?;
-            delete_room(pool, &r.id, hard).await?;
-            let status = if hard { "hard-deleted" } else { "archived" };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "id": r.id,
-                    "name": r.name,
-                    "status": status,
-                }))?
-            );
-        }
-        ChatCommands::Post {
-            room,
-            sender,
-            content,
-            reply_to,
-        } => {
-            let r = get_room(pool, &room).await?;
-            let msg = post_message(
-                pool,
-                PostMessageRequest {
-                    room_id: r.id,
-                    sender_id: sender,
-                    content,
-                    reply_to,
-                    metadata: None,
-                    message_type: None,
-                },
-                None,
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&msg)?);
-        }
-        ChatCommands::Read {
-            room,
-            limit,
-            since,
-            before,
-        } => {
-            let r = get_room(pool, &room).await?;
-            let messages = read_messages(
-                pool,
-                ReadMessagesRequest {
-                    room_id: r.id,
-                    since,
-                    before,
-                    limit: Some(limit),
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&messages)?);
-        }
-        ChatCommands::Wait { room, timeout } => {
-            let r = get_room(pool, &room).await?;
-            let registry = NotificationRegistry::new();
-            let result = room_wait(&registry, &r.id, Some(timeout), None).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        ChatCommands::Search { query, room, limit } => {
-            let room_id = match room {
-                Some(ref name) => Some(get_room(pool, name).await?.id),
-                None => None,
-            };
-            let results = search_messages(
-                pool,
-                SearchMessagesRequest {
-                    query,
-                    room_id,
-                    limit: Some(limit),
-                },
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&results)?);
-        }
-    }
+    dispatch(pool, cmd).await?;
 
     pools.close().await;
+    Ok(())
+}
+
+async fn dispatch(
+    pool: &sea_orm::DatabaseConnection,
+    cmd: ChatCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ChatCommands::Create { name, purpose } => {
+            cmd_create(pool, name, purpose).await?;
+        }
+        ChatCommands::List { include_archived } => {
+            cmd_list(pool, include_archived).await?;
+        }
+        ChatCommands::Inspect { room } => {
+            cmd_inspect(pool, room).await?;
+        }
+        ChatCommands::Delete { room, hard } => {
+            cmd_delete(pool, room, hard).await?;
+        }
+        ChatCommands::Post { room, sender, content, reply_to } => {
+            cmd_post(pool, PostArgs { room, sender, content, reply_to }).await?;
+        }
+        ChatCommands::Read { room, limit, since, before } => {
+            cmd_read(pool, ReadArgs { room, limit, since, before }).await?;
+        }
+        ChatCommands::Wait { room, timeout } => {
+            cmd_wait(pool, room, timeout).await?;
+        }
+        ChatCommands::Search { query, room, limit } => {
+            cmd_search(pool, query, room, limit).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_create(
+    pool: &sea_orm::DatabaseConnection,
+    name: String,
+    purpose: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let room = create_room(pool, &name, purpose.as_deref(), None).await?;
+    println!("{}", serde_json::to_string_pretty(&room)?);
+    Ok(())
+}
+
+async fn cmd_list(
+    pool: &sea_orm::DatabaseConnection,
+    include_archived: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rooms = list_rooms(pool, include_archived).await?;
+    println!("{}", serde_json::to_string_pretty(&rooms)?);
+    Ok(())
+}
+
+async fn cmd_inspect(
+    pool: &sea_orm::DatabaseConnection,
+    room: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r = get_room(pool, &room).await?;
+    println!("{}", serde_json::to_string_pretty(&r)?);
+    Ok(())
+}
+
+async fn cmd_wait(
+    pool: &sea_orm::DatabaseConnection,
+    room: String,
+    timeout: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r = get_room(pool, &room).await?;
+    let registry = NotificationRegistry::new();
+    let result = room_wait(&registry, &r.id, Some(timeout), None).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn cmd_delete(
+    pool: &sea_orm::DatabaseConnection,
+    room: String,
+    hard: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r = get_room(pool, &room).await?;
+    delete_room(pool, &r.id, hard).await?;
+    let status = if hard { "hard-deleted" } else { "archived" };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "id": r.id,
+            "name": r.name,
+            "status": status,
+        }))?
+    );
+    Ok(())
+}
+
+struct PostArgs {
+    room: String,
+    sender: String,
+    content: String,
+    reply_to: Option<String>,
+}
+
+async fn cmd_post(
+    pool: &sea_orm::DatabaseConnection,
+    args: PostArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r = get_room(pool, &args.room).await?;
+    let msg = post_message(
+        pool,
+        PostMessageRequest {
+            room_id: r.id,
+            sender_id: args.sender,
+            content: args.content,
+            reply_to: args.reply_to,
+            metadata: None,
+            message_type: None,
+        },
+        None,
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&msg)?);
+    Ok(())
+}
+
+struct ReadArgs {
+    room: String,
+    limit: u32,
+    since: Option<String>,
+    before: Option<String>,
+}
+
+async fn cmd_read(
+    pool: &sea_orm::DatabaseConnection,
+    args: ReadArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r = get_room(pool, &args.room).await?;
+    let messages = read_messages(
+        pool,
+        ReadMessagesRequest {
+            room_id: r.id,
+            since: args.since,
+            before: args.before,
+            limit: Some(args.limit),
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&messages)?);
+    Ok(())
+}
+
+async fn cmd_search(
+    pool: &sea_orm::DatabaseConnection,
+    query: String,
+    room: Option<String>,
+    limit: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let room_id = match room {
+        Some(ref name) => Some(get_room(pool, name).await?.id),
+        None => None,
+    };
+    let results = search_messages(
+        pool,
+        SearchMessagesRequest {
+            query,
+            room_id,
+            limit: Some(limit),
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&results)?);
     Ok(())
 }

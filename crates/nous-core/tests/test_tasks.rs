@@ -33,12 +33,12 @@ async fn test_direct_cycle_detection_blocked_by() {
     .unwrap();
 
     // Create A -> B
-    tasks::link_tasks(&pools.fts, &task_a.id, &task_b.id, "blocked_by", None)
+    tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_a.id, target_id: &task_b.id, link_type: "blocked_by", actor_id: None })
         .await
         .unwrap();
 
     // Attempt B -> A (should fail with CyclicLink)
-    let result = tasks::link_tasks(&pools.fts, &task_b.id, &task_a.id, "blocked_by", None).await;
+    let result = tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_b.id, target_id: &task_a.id, link_type: "blocked_by", actor_id: None }).await;
     assert!(matches!(
         result,
         Err(nous_core::error::NousError::CyclicLink(_))
@@ -68,15 +68,15 @@ async fn test_indirect_cycle_detection_parent() {
     .unwrap();
 
     // Create A -> B -> C
-    tasks::link_tasks(&pools.fts, &task_a.id, &task_b.id, "parent", None)
+    tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_a.id, target_id: &task_b.id, link_type: "parent", actor_id: None })
         .await
         .unwrap();
-    tasks::link_tasks(&pools.fts, &task_b.id, &task_c.id, "parent", None)
+    tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_b.id, target_id: &task_c.id, link_type: "parent", actor_id: None })
         .await
         .unwrap();
 
     // Attempt C -> A (should fail with CyclicLink)
-    let result = tasks::link_tasks(&pools.fts, &task_c.id, &task_a.id, "parent", None).await;
+    let result = tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_c.id, target_id: &task_a.id, link_type: "parent", actor_id: None }).await;
     assert!(matches!(
         result,
         Err(nous_core::error::NousError::CyclicLink(_))
@@ -101,10 +101,10 @@ async fn test_related_to_allows_bidirectional() {
     .unwrap();
 
     // related_to should allow bidirectional links (no cycle detection)
-    tasks::link_tasks(&pools.fts, &task_a.id, &task_b.id, "related_to", None)
+    tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_a.id, target_id: &task_b.id, link_type: "related_to", actor_id: None })
         .await
         .unwrap();
-    tasks::link_tasks(&pools.fts, &task_b.id, &task_a.id, "related_to", None)
+    tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &task_b.id, target_id: &task_a.id, link_type: "related_to", actor_id: None })
         .await
         .unwrap();
 
@@ -753,7 +753,7 @@ async fn test_link_then_unlink() {
     .await
     .unwrap();
 
-    let link = tasks::link_tasks(&pools.fts, &t1.id, &t2.id, "blocked_by", None)
+    let link = tasks::link_tasks(tasks::LinkTasksParams { db: &pools.fts, source_id: &t1.id, target_id: &t2.id, link_type: "blocked_by", actor_id: None })
         .await
         .unwrap();
     assert_eq!(link.source_id, t1.id);
@@ -763,7 +763,7 @@ async fn test_link_then_unlink() {
     let links = tasks::list_links(&pools.fts, &t1.id).await.unwrap();
     assert_eq!(links.blocked_by.len(), 1);
 
-    tasks::unlink_tasks(&pools.fts, &t1.id, &t2.id, "blocked_by", None)
+    tasks::unlink_tasks(tasks::UnlinkTasksParams { db: &pools.fts, source_id: &t1.id, target_id: &t2.id, link_type: "blocked_by", actor_id: None })
         .await
         .unwrap();
 
@@ -788,7 +788,7 @@ async fn test_unlink_nonexistent_fails() {
     .await
     .unwrap();
 
-    let result = tasks::unlink_tasks(&pools.fts, &t1.id, &t2.id, "blocked_by", None).await;
+    let result = tasks::unlink_tasks(tasks::UnlinkTasksParams { db: &pools.fts, source_id: &t1.id, target_id: &t2.id, link_type: "blocked_by", actor_id: None }).await;
     assert!(matches!(result, Err(NousError::NotFound(_))));
 
     pools.close().await;

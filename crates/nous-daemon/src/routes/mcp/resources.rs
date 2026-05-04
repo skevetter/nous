@@ -9,6 +9,13 @@ use crate::state::AppState;
 use super::{require_str, ToolSchema};
 
 pub fn schemas() -> Vec<ToolSchema> {
+    let mut all = worktree_schemas();
+    all.extend(resource_schemas());
+    all.extend(schedule_schemas());
+    all
+}
+
+fn worktree_schemas() -> Vec<ToolSchema> {
     vec![
         ToolSchema {
             name: "worktree_create",
@@ -71,6 +78,17 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["id"]
             }),
         },
+    ]
+}
+
+fn resource_schemas() -> Vec<ToolSchema> {
+    let mut schemas = resource_crud_schemas();
+    schemas.extend(resource_lifecycle_schemas());
+    schemas
+}
+
+fn resource_crud_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "resource_register",
             description: "Register a new resource",
@@ -148,6 +166,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["tags"]
             }),
         },
+    ]
+}
+
+fn resource_lifecycle_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "resource_archive",
             description: "Archive an active resource (status: active -> archived)",
@@ -194,6 +217,11 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "required": ["from_agent_id"]
             }),
         },
+    ]
+}
+
+fn schedule_schemas() -> Vec<ToolSchema> {
+    vec![
         ToolSchema {
             name: "schedule_create",
             description: "Create a new schedule",
@@ -298,21 +326,76 @@ pub async fn dispatch(
     args: &Value,
     state: &AppState,
 ) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_worktrees(name, args, state).await {
+        return Some(r);
+    }
+    if let Some(r) = dispatch_resources(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_schedules(name, args, state).await
+}
+
+async fn dispatch_worktrees(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
     match name {
         "worktree_create" => Some(handle_worktree_create(args, state).await),
         "worktree_list" => Some(handle_worktree_list(args, state).await),
         "worktree_get" => Some(handle_worktree_get(args, state).await),
         "worktree_archive" => Some(handle_worktree_archive(args, state).await),
         "worktree_delete" => Some(handle_worktree_delete(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_resources(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    if let Some(r) = dispatch_resource_crud(name, args, state).await {
+        return Some(r);
+    }
+    dispatch_resource_lifecycle(name, args, state).await
+}
+
+async fn dispatch_resource_crud(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "resource_register" => Some(handle_resource_register(args, state).await),
         "resource_list" => Some(handle_resource_list(args, state).await),
         "resource_get" => Some(handle_resource_get(args, state).await),
         "resource_update" => Some(handle_resource_update(args, state).await),
         "resource_search" => Some(handle_resource_search(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_resource_lifecycle(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "resource_archive" => Some(handle_resource_archive(args, state).await),
         "resource_deregister" => Some(handle_resource_deregister(args, state).await),
         "resource_heartbeat" => Some(handle_resource_heartbeat(args, state).await),
         "resource_transfer" => Some(handle_resource_transfer(args, state).await),
+        _ => None,
+    }
+}
+
+async fn dispatch_schedules(
+    name: &str,
+    args: &Value,
+    state: &AppState,
+) -> Option<Result<Value, nous_core::error::NousError>> {
+    match name {
         "schedule_create" => Some(handle_schedule_create(args, state).await),
         "schedule_get" => Some(handle_schedule_get(args, state).await),
         "schedule_list" => Some(handle_schedule_list(args, state).await),

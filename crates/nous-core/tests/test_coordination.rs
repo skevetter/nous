@@ -1,4 +1,4 @@
-use nous_core::agents::coordination::{post_handoff, HandoffPayload};
+use nous_core::agents::coordination::{post_handoff, HandoffPayload, PostHandoffRequest};
 use nous_core::agents::{self, RegisterAgentRequest};
 use nous_core::db::DbPools;
 use sea_orm::ConnectionTrait;
@@ -170,9 +170,18 @@ async fn test_agent_handoff_e2e() {
         deadline: Some("2026-05-04".into()),
     };
 
-    let msg = post_handoff(pool, None, &room.id, &_manager.id, &_engineer.id, payload)
-        .await
-        .unwrap();
+    let msg = post_handoff(
+        pool,
+        None,
+        PostHandoffRequest {
+            room_id: &room.id,
+            from_agent: &_manager.id,
+            to_agent: &_engineer.id,
+            payload,
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(msg.message_type, MessageType::Handoff);
     assert_eq!(msg.room_id, room.id);

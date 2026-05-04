@@ -138,24 +138,15 @@ pub async fn list_resources(
     Ok(models.into_iter().map(Resource::from_model).collect())
 }
 
-pub async fn update_resource(
-    db: &DatabaseConnection,
-    req: UpdateResourceRequest,
-) -> Result<Resource, NousError> {
-    let existing = get_resource_by_id(db, &req.id).await?;
-
-    if existing.status == "deleted" {
-        return Err(NousError::Validation(
-            "cannot update a deleted resource".into(),
-        ));
-    }
-
+fn build_resource_update_sets(
+    req: &UpdateResourceRequest,
+) -> Result<(Vec<String>, Vec<sea_orm::Value>), crate::error::NousError> {
     let mut sets: Vec<String> = Vec::new();
     let mut params: Vec<sea_orm::Value> = Vec::new();
 
     if let Some(ref name) = req.name {
         if name.trim().is_empty() {
-            return Err(NousError::Validation("name cannot be empty".into()));
+            return Err(crate::error::NousError::Validation("name cannot be empty".into()));
         }
         sets.push("name = ?".to_string());
         params.push(name.trim().to_string().into());
@@ -168,7 +159,7 @@ pub async fn update_resource(
 
     if let Some(ref metadata) = req.metadata {
         serde_json::from_str::<serde_json::Value>(metadata)
-            .map_err(|e| NousError::Validation(format!("metadata must be valid JSON: {e}")))?;
+            .map_err(|e| crate::error::NousError::Validation(format!("metadata must be valid JSON: {e}")))?;
         sets.push("metadata = ?".to_string());
         params.push(metadata.clone().into());
     }
@@ -197,6 +188,23 @@ pub async fn update_resource(
         sets.push("ownership_policy = ?".to_string());
         params.push(policy.as_str().to_string().into());
     }
+
+    Ok((sets, params))
+}
+
+pub async fn update_resource(
+    db: &DatabaseConnection,
+    req: UpdateResourceRequest,
+) -> Result<Resource, NousError> {
+    let existing = get_resource_by_id(db, &req.id).await?;
+
+    if existing.status == "deleted" {
+        return Err(NousError::Validation(
+            "cannot update a deleted resource".into(),
+        ));
+    }
+
+    let (sets, mut params) = build_resource_update_sets(&req)?;
 
     if sets.is_empty() {
         return Ok(existing);

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nous_core::db::DatabaseConnection;
 use nous_core::memory::{EmbeddingConfig, MockEmbedder, VectorStoreConfig};
 use nous_core::notifications::NotificationRegistry;
-use nous_daemon::process_manager::{ProcessRegistry, SpawnParams};
+use nous_daemon::process_manager::{ProcessRegistry, SpawnParams, StopParams};
 use nous_daemon::sandbox::SandboxManager;
 use nous_daemon::state::AppState;
 use sea_orm::{ConnectionTrait, Statement};
@@ -116,7 +116,7 @@ async fn test_sandbox_spawn_and_stop() {
 
     let stopped = state
         .process_registry
-        .stop(&state, agent_id, false, 5)
+        .stop(StopParams { state: &state, agent_id, force: false, grace_secs: 5 })
         .await
         .unwrap();
     assert_eq!(stopped.status, "stopped");

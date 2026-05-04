@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
@@ -235,4 +237,39 @@ pub struct BatchResult {
 pub struct BatchError {
     pub id: String,
     pub error: String,
+}
+
+pub struct LinkTasksParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub source_id: &'a str,
+    pub target_id: &'a str,
+    pub link_type: &'a str,
+    pub actor_id: Option<&'a str>,
+}
+
+pub struct UnlinkTasksParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub source_id: &'a str,
+    pub target_id: &'a str,
+    pub link_type: &'a str,
+    pub actor_id: Option<&'a str>,
+}
+
+pub struct CreateTemplateParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub name: &'a str,
+    pub title_pattern: &'a str,
+    pub description_template: Option<&'a str>,
+    pub default_priority: Option<&'a str>,
+    pub default_labels: Option<&'a [String]>,
+    pub checklist: Option<&'a [String]>,
+}
+
+pub struct CreateFromTemplateParams<'a> {
+    pub db: &'a DatabaseConnection,
+    pub template_id: &'a str,
+    pub title_vars: Option<&'a HashMap<String, String>>,
+    pub overrides_description: Option<&'a str>,
+    pub overrides_assignee: Option<&'a str>,
+    pub overrides_labels: Option<&'a [String]>,
 }

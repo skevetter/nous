@@ -284,29 +284,45 @@ pub async fn get_latest_process(
     Ok(model.map(Process::from_model))
 }
 
+pub struct UpdateProcessStatusRequest<'a> {
+    pub process_id: &'a str,
+    pub status: &'a str,
+    pub exit_code: Option<i32>,
+    pub output: Option<&'a str>,
+    pub pid: Option<i64>,
+}
+
+fn process_status_timestamps(status: &str, now: &str) -> (Option<String>, Option<String>) {
+    let stopped_at = if matches!(status, "stopped" | "failed" | "crashed") {
+        Some(now.to_string())
+    } else {
+        None
+    };
+    let started_at = if status == "running" {
+        Some(now.to_string())
+    } else {
+        None
+    };
+    (started_at, stopped_at)
+}
+
 pub async fn update_process_status(
     db: &DatabaseConnection,
-    process_id: &str,
-    status: &str,
-    exit_code: Option<i32>,
-    output: Option<&str>,
-    pid: Option<i64>,
+    req: UpdateProcessStatusRequest<'_>,
 ) -> Result<Process, NousError> {
+    let UpdateProcessStatusRequest {
+        process_id,
+        status,
+        exit_code,
+        output,
+        pid,
+    } = req;
+
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
 
-    let stopped_at = if matches!(status, "stopped" | "failed" | "crashed") {
-        Some(now.clone())
-    } else {
-        None
-    };
-
-    let started_at = if status == "running" {
-        Some(now.clone())
-    } else {
-        None
-    };
+    let (started_at, stopped_at) = process_status_timestamps(status, &now);
 
     // Build update dynamically
     let mut sets = vec!["status = ?".to_string(), "updated_at = ?".to_string()];
@@ -448,14 +464,25 @@ pub async fn create_invocation(
     get_invocation(db, &id).await
 }
 
+pub struct UpdateInvocationRequest<'a> {
+    pub invocation_id: &'a str,
+    pub status: &'a str,
+    pub result: Option<&'a str>,
+    pub error: Option<&'a str>,
+    pub duration_ms: Option<i64>,
+}
+
 pub async fn update_invocation(
     db: &DatabaseConnection,
-    invocation_id: &str,
-    status: &str,
-    result: Option<&str>,
-    error: Option<&str>,
-    duration_ms: Option<i64>,
+    req: UpdateInvocationRequest<'_>,
 ) -> Result<Invocation, NousError> {
+    let UpdateInvocationRequest {
+        invocation_id,
+        status,
+        result,
+        error,
+        duration_ms,
+    } = req;
     let now = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
@@ -550,15 +577,27 @@ pub async fn cleanup_agent_processes(
 
 // --- Agent update (config fields) ---
 
+pub struct UpdateAgentRequest<'a> {
+    pub id: &'a str,
+    pub process_type: Option<&'a str>,
+    pub spawn_command: Option<&'a str>,
+    pub working_dir: Option<&'a str>,
+    pub auto_restart: Option<bool>,
+    pub metadata_json: Option<&'a str>,
+}
+
 pub async fn update_agent(
     db: &DatabaseConnection,
-    id: &str,
-    process_type: Option<&str>,
-    spawn_command: Option<&str>,
-    working_dir: Option<&str>,
-    auto_restart: Option<bool>,
-    metadata_json: Option<&str>,
+    req: UpdateAgentRequest<'_>,
 ) -> Result<super::Agent, NousError> {
+    let UpdateAgentRequest {
+        id,
+        process_type,
+        spawn_command,
+        working_dir,
+        auto_restart,
+        metadata_json,
+    } = req;
     let _existing = super::get_agent_by_id(db, id).await?;
 
     let mut sets: Vec<String> = Vec::new();

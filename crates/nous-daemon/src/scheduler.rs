@@ -53,93 +53,222 @@ impl Scheduler {
     }
 }
 
+async fn cleanup_stale_runs(pool: &DatabaseConnection) {
+    if let Err(e) = mark_stale_runs_failed(pool).await {
+        tracing::error!(error = %e, "failed to mark stale runs");
+    }
+}
+
+/// Waits until all in-flight schedule tasks have released their semaphore permits.
+async fn drain_semaphore(semaphore: &Arc<Semaphore>, max_concurrent: usize) {
+    let _ = semaphore.acquire_many(max_concurrent as u32).await;
+}
+
+fn log_scheduler_shutdown_start() {
+    tracing::info!("scheduler shutting down, waiting for in-flight tasks");
+}
+
+fn log_scheduler_shutdown_complete() {
+    tracing::info!("scheduler stopped");
+}
+
 async fn run_loop(
     state: AppState,
     config: SchedulerConfig,
     clock: Arc<dyn Clock>,
     shutdown: CancellationToken,
 ) {
-    if let Err(e) = mark_stale_runs_failed(&state.pool).await {
-        tracing::error!("failed to mark stale runs: {e}");
-    }
+    cleanup_stale_runs(&state.pool).await;
 
     let semaphore = Arc::new(Semaphore::new(config.max_concurrent));
     let active: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let config = Arc::new(config);
 
+    run_scheduler_loop(SchedulerLoopParams {
+        state: &state,
+        config: &config,
+        clock: &clock,
+        shutdown: &shutdown,
+        semaphore: &semaphore,
+        active: &active,
+    })
+    .await;
+
+    log_scheduler_shutdown_start();
+    drain_semaphore(&semaphore, config.max_concurrent).await;
+    log_scheduler_shutdown_complete();
+}
+
+struct SchedulerLoopParams<'a> {
+    state: &'a AppState,
+    config: &'a Arc<SchedulerConfig>,
+    clock: &'a Arc<dyn Clock>,
+    shutdown: &'a CancellationToken,
+    semaphore: &'a Arc<Semaphore>,
+    active: &'a Arc<Mutex<HashSet<String>>>,
+}
+
+async fn run_scheduler_loop(params: SchedulerLoopParams<'_>) {
+    let SchedulerLoopParams { state, config, clock, shutdown, semaphore, active } = params;
     loop {
         if shutdown.is_cancelled() {
             break;
         }
 
-        let sleep_dur = next_wake_duration(&state.pool, &*clock).await;
-
-        tokio::select! {
-            () = tokio::time::sleep(sleep_dur) => {}
-            () = state.schedule_notify.notified() => {}
-            () = shutdown.cancelled() => { break; }
-        }
+        wait_for_next_tick(state, clock, shutdown).await;
 
         if shutdown.is_cancelled() {
             break;
         }
 
-        let now = clock.now_utc();
-        let due = match list_due_schedules(&state.pool, now).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("failed to list due schedules: {e}");
-                continue;
-            }
-        };
+        dispatch_due_schedules(DispatchDueSchedulesParams {
+            state,
+            config,
+            clock,
+            semaphore,
+            active,
+        })
+        .await;
+    }
+}
 
-        for schedule in due {
-            let mut guard = active.lock().await;
-            if guard.contains(&schedule.id) {
-                continue;
-            }
-            guard.insert(schedule.id.clone());
-            drop(guard);
+async fn wait_for_next_tick(
+    state: &AppState,
+    clock: &Arc<dyn Clock>,
+    shutdown: &CancellationToken,
+) {
+    let sleep_dur = next_wake_duration(&state.pool, &**clock).await;
+    tokio::select! {
+        _ = tokio::time::sleep(sleep_dur) => {}
+        _ = state.schedule_notify.notified() => {}
+        _ = shutdown.cancelled() => {}
+    }
+}
 
-            let Ok(permit) = semaphore.clone().acquire_owned().await else {
-                break;
-            };
+struct DispatchDueSchedulesParams<'a> {
+    state: &'a AppState,
+    config: &'a Arc<SchedulerConfig>,
+    clock: &'a Arc<dyn Clock>,
+    semaphore: &'a Arc<Semaphore>,
+    active: &'a Arc<Mutex<HashSet<String>>>,
+}
 
-            let state = state.clone();
-            let clock = clock.clone();
-            let config = config.clone();
-            let active = active.clone();
-
-            let schedule_id = schedule.id.clone();
-            let schedule_name = schedule.name.clone();
-            tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(execute_schedule(
-                    &state, &schedule, &config, &clock,
-                ));
-                let outcome = futures::FutureExt::catch_unwind(result).await;
-                if let Err(panic_info) = outcome {
-                    let msg = panic_info
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| panic_info.downcast_ref::<String>().map(std::string::String::as_str))
-                        .unwrap_or("unknown panic");
-                    tracing::error!(
-                        schedule_id = %schedule.id,
-                        schedule_name = %schedule.name,
-                        panic = %msg,
-                        "schedule execution task panicked"
-                    );
-                }
-                active.lock().await.remove(&schedule.id);
-                drop(permit);
-            });
-            tracing::debug!(schedule_id = %schedule_id, schedule_name = %schedule_name, "spawned schedule execution task");
+async fn load_due_schedules(
+    pool: &DatabaseConnection,
+    now_utc: i64,
+) -> Option<Vec<Schedule>> {
+    match list_due_schedules(pool, now_utc).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list due schedules");
+            None
         }
     }
+}
 
-    tracing::info!("scheduler shutting down, waiting for in-flight tasks");
-    let _ = semaphore.acquire_many(config.max_concurrent as u32).await;
-    tracing::info!("scheduler stopped");
+async fn try_acquire_permit(
+    semaphore: &Arc<Semaphore>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    semaphore.clone().acquire_owned().await.ok()
+}
+
+async fn dispatch_due_schedules(params: DispatchDueSchedulesParams<'_>) {
+    let DispatchDueSchedulesParams { state, config, clock, semaphore, active } = params;
+    let Some(due) = load_due_schedules(&state.pool, clock.now_utc()).await else {
+        return;
+    };
+
+    for schedule in due {
+        if !try_claim_schedule(active, &schedule.id).await {
+            continue;
+        }
+        let Some(permit) = try_acquire_permit(semaphore).await else {
+            break;
+        };
+        spawn_schedule_task(SpawnScheduleTaskParams {
+            state: state.clone(),
+            clock: clock.clone(),
+            config: config.clone(),
+            active: active.clone(),
+            schedule,
+            permit,
+        });
+    }
+}
+
+/// Returns true if the schedule was successfully claimed (not already running).
+async fn try_claim_schedule(
+    active: &Arc<Mutex<HashSet<String>>>,
+    schedule_id: &str,
+) -> bool {
+    let mut guard = active.lock().await;
+    if guard.contains(schedule_id) {
+        return false;
+    }
+    guard.insert(schedule_id.to_string());
+    true
+}
+
+struct SpawnScheduleTaskParams {
+    state: AppState,
+    clock: Arc<dyn Clock>,
+    config: Arc<SchedulerConfig>,
+    active: Arc<Mutex<HashSet<String>>>,
+    schedule: Schedule,
+    permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+fn spawn_schedule_task(params: SpawnScheduleTaskParams) {
+    let schedule_id = params.schedule.id.clone();
+    let schedule_name = params.schedule.name.clone();
+    let SpawnScheduleTaskParams { state, clock, config, active, schedule, permit } = params;
+    tokio::spawn(async move {
+        let result = std::panic::AssertUnwindSafe(execute_schedule(
+            &state, &schedule, &config, &clock,
+        ));
+        let outcome = futures::FutureExt::catch_unwind(result).await;
+        if let Err(panic_info) = outcome {
+            log_schedule_panic(&schedule.id, &schedule.name, &panic_info);
+        }
+        active.lock().await.remove(&schedule.id);
+        drop(permit);
+    });
+    tracing::debug!(schedule_id = %schedule_id, schedule_name = %schedule_name, "spawned schedule execution task");
+}
+
+fn log_schedule_panic(
+    schedule_id: &str,
+    schedule_name: &str,
+    panic_info: &Box<dyn std::any::Any + Send>,
+) {
+    let msg = panic_info
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("unknown panic");
+    tracing::error!(
+        schedule_id = %schedule_id,
+        schedule_name = %schedule_name,
+        panic = %msg,
+        "schedule execution task panicked"
+    );
+}
+
+fn duration_until_timestamp(iso: &str, clock: &dyn Clock) -> Duration {
+    match nous_core::schedules::iso_to_ts(iso) {
+        Ok(ts) => {
+            let diff = ts - clock.now_utc();
+            if diff <= 0 {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_secs(diff as u64)
+            }
+        }
+        Err(e) => {
+            tracing::error!("failed to parse next_run_at ISO timestamp: {e}");
+            Duration::from_secs(60)
+        }
+    }
 }
 
 async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Duration {
@@ -155,25 +284,150 @@ async fn next_wake_duration(pool: &DatabaseConnection, clock: &dyn Clock) -> Dur
         String::try_get_by(&row, 0usize).ok()
     });
 
-    match next_iso {
-        Some(iso) => {
-            let ts = match nous_core::schedules::iso_to_ts(&iso) {
-                Ok(ts) => ts,
-                Err(e) => {
-                    tracing::error!("failed to parse next_run_at ISO timestamp: {e}");
-                    return Duration::from_mins(1);
-                }
-            };
-            let now = clock.now_utc();
-            let diff = ts - now;
-            if diff <= 0 {
-                Duration::from_secs(1)
-            } else {
-                // diff > 0 at this point; cast_unsigned() is safe
-                Duration::from_secs(diff.cast_unsigned())
-            }
+    next_iso
+        .map(|iso| duration_until_timestamp(&iso, clock))
+        .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+/// Convert a timed dispatch result into a `DispatchResult`.
+fn interpret_timed_result(
+    result: Result<Result<String, NousError>, tokio::time::error::Elapsed>,
+    schedule: &Schedule,
+) -> DispatchResult {
+    match result {
+        Ok(Ok(output)) => {
+            let truncated = truncate_output(&output, schedule.max_output_bytes as usize);
+            evaluate_outcome(truncated, &schedule.desired_outcome)
         }
-        None => Duration::from_mins(1),
+        Ok(Err(e)) => DispatchResult {
+            status: "failed".to_string(),
+            output: None,
+            error: Some(e.to_string()),
+            exit_code: None,
+        },
+        Err(_) => DispatchResult {
+            status: "timeout".to_string(),
+            output: None,
+            error: Some("execution timed out".to_string()),
+            exit_code: None,
+        },
+    }
+}
+
+struct RetryParams<'a> {
+    state: &'a AppState,
+    schedule: &'a Schedule,
+    config: &'a SchedulerConfig,
+    timeout_secs: u64,
+    max_retries: u32,
+}
+
+/// Run the schedule action with retries, returning the final result.
+async fn run_with_retries(params: RetryParams<'_>) -> DispatchResult {
+    let RetryParams { state, schedule, config, timeout_secs, max_retries } = params;
+    let mut last_result = DispatchResult {
+        status: "failed".to_string(),
+        output: None,
+        error: Some("no attempts made".to_string()),
+        exit_code: None,
+    };
+
+    for attempt in 0..=max_retries {
+        let timed = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            dispatch_action(state, schedule, config),
+        )
+        .await;
+
+        last_result = interpret_timed_result(timed, schedule);
+
+        if last_result.status == "completed" || last_result.status == "timeout" {
+            break;
+        }
+        if !should_retry(&schedule.action_type) || attempt == max_retries {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
+    }
+
+    last_result
+}
+
+/// Advance the next run time or disable the schedule if it was a one-shot.
+async fn advance_or_disable_schedule(
+    state: &AppState,
+    schedule: &Schedule,
+    clock: &Arc<dyn Clock>,
+) {
+    let advance_result = advance_next_run_at(&state.pool, &schedule.id, &**clock).await;
+    handle_advance_result(advance_result, state, schedule, clock).await;
+}
+
+async fn handle_advance_result(
+    result: Result<Option<String>, NousError>,
+    state: &AppState,
+    schedule: &Schedule,
+    clock: &Arc<dyn Clock>,
+) {
+    match result {
+        Ok(None) => disable_once_schedule(state, schedule, clock).await,
+        Ok(Some(_)) => {}
+        Err(e) => {
+            tracing::error!(schedule_id = %schedule.id, error = %e, "failed to advance next_run_at");
+        }
+    }
+}
+
+async fn disable_once_schedule(
+    state: &AppState,
+    schedule: &Schedule,
+    clock: &Arc<dyn Clock>,
+) {
+    if let Err(e) = update_schedule(UpdateScheduleParams {
+        db: &state.pool,
+        id: &schedule.id,
+        name: None,
+        cron_expr: None,
+        trigger_at: None,
+        enabled: Some(false),
+        action_type: None,
+        action_payload: None,
+        desired_outcome: None,
+        max_retries: None,
+        timeout_secs: None,
+        max_runs: None,
+        clock: &**clock,
+    })
+    .await
+    {
+        tracing::error!(schedule_id = %schedule.id, error = %e, "failed to disable @once schedule");
+    }
+}
+
+struct RecordScheduleRunParams<'a> {
+    state: &'a AppState,
+    schedule: &'a Schedule,
+    started_at: i64,
+    finished_at: i64,
+    result: &'a DispatchResult,
+}
+
+async fn record_schedule_run(params: RecordScheduleRunParams<'_>) {
+    let RecordScheduleRunParams { state, schedule, started_at, finished_at, result } = params;
+    if let Err(e) = record_run(RecordRunParams {
+        db: &state.pool,
+        schedule_id: &schedule.id,
+        started_at,
+        finished_at,
+        status: &result.status,
+        exit_code: result.exit_code,
+        output: result.output.as_deref(),
+        error: result.error.as_deref(),
+        attempt: 1,
+    })
+    .await
+    {
+        tracing::error!(schedule_id = %schedule.id, error = %e, "failed to record run");
     }
 }
 
@@ -189,101 +443,28 @@ async fn execute_schedule(
     let timeout_secs = schedule
         .timeout_secs
         .map_or(config.default_timeout_secs, |s| u64::from(s.cast_unsigned()));
-
     let max_retries = schedule.max_retries.max(0).cast_unsigned();
-    let mut last_result: DispatchResult = DispatchResult {
-        status: "failed".to_string(),
-        output: None,
-        error: Some("no attempts made".to_string()),
-        exit_code: None,
-    };
 
-    for attempt in 0..=max_retries {
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            dispatch_action(state, schedule, config),
-        )
-        .await;
-
-        last_result = match result {
-            Ok(Ok(output)) => {
-                // max_output_bytes is always non-negative; safe to cast
-                let truncated = truncate_output(
-                    &output,
-                    usize::try_from(schedule.max_output_bytes).unwrap_or(usize::MAX),
-                );
-                evaluate_outcome(truncated, schedule.desired_outcome.as_ref())
-            }
-            Ok(Err(e)) => DispatchResult {
-                status: "failed".to_string(),
-                output: None,
-                error: Some(e.to_string()),
-                exit_code: None,
-            },
-            Err(_) => DispatchResult {
-                status: "timeout".to_string(),
-                output: None,
-                error: Some("execution timed out".to_string()),
-                exit_code: None,
-            },
-        };
-
-        if last_result.status == "completed" || last_result.status == "timeout" {
-            break;
-        }
-
-        if !should_retry(&schedule.action_type) || attempt == max_retries {
-            break;
-        }
-
-        let backoff = Duration::from_secs(1u64 << attempt);
-        tokio::time::sleep(backoff).await;
-    }
+    let last_result = run_with_retries(RetryParams {
+        state,
+        schedule,
+        config,
+        timeout_secs,
+        max_retries,
+    })
+    .await;
 
     let finished_at = clock.now_utc();
-    if let Err(e) = record_run(RecordRunParams {
-        db: &state.pool,
-        schedule_id: &schedule.id,
+    record_schedule_run(RecordScheduleRunParams {
+        state,
+        schedule,
         started_at,
         finished_at,
-        status: &last_result.status,
-        exit_code: last_result.exit_code,
-        output: last_result.output.as_deref(),
-        error: last_result.error.as_deref(),
-        attempt: 1,
+        result: &last_result,
     })
-    .await
-    {
-        tracing::error!("failed to record run for {}: {e}", schedule.id);
-    }
+    .await;
 
-    match advance_next_run_at(&state.pool, &schedule.id, &**clock).await {
-        Ok(None) => {
-            if let Err(e) = update_schedule(UpdateScheduleParams {
-                db: &state.pool,
-                id: &schedule.id,
-                name: None,
-                cron_expr: None,
-                trigger_at: None,
-                enabled: Some(false),
-                action_type: None,
-                action_payload: None,
-                desired_outcome: None,
-                max_retries: None,
-                timeout_secs: None,
-                max_runs: None,
-                clock: &**clock,
-            })
-            .await
-            {
-                tracing::error!("failed to disable @once schedule {}: {e}", schedule.id);
-            }
-        }
-        Ok(Some(_)) => {}
-        Err(e) => {
-            tracing::error!("failed to advance next_run_at for {}: {e}", schedule.id);
-        }
-    }
+    advance_or_disable_schedule(state, schedule, clock).await;
 }
 
 fn should_retry(action_type: &str) -> bool {
@@ -439,14 +620,14 @@ async fn dispatch_agent_invoke(state: &AppState, payload: &str) -> Result<String
 
     let invocation = state
         .process_registry
-        .invoke(
+        .invoke(crate::process_manager::InvokeParams {
             state,
-            &parsed.agent_id,
-            &parsed.prompt,
-            parsed.timeout_secs,
-            None,
-            false, // synchronous for schedule actions
-        )
+            agent_id: &parsed.agent_id,
+            prompt: &parsed.prompt,
+            timeout_secs: parsed.timeout_secs,
+            metadata: None,
+            is_async: false, // synchronous for schedule actions
+        })
         .await?;
 
     Ok(serde_json::to_string(&invocation).unwrap_or_default())
@@ -464,33 +645,34 @@ fn truncate_output(output: &str, max_bytes: usize) -> String {
     }
 }
 
-fn evaluate_outcome(output: String, desired_outcome: Option<&String>) -> DispatchResult {
-    let Some(pattern) = desired_outcome else {
-        return DispatchResult {
-            status: "completed".to_string(),
-            output: Some(output),
-            error: None,
-            exit_code: None,
-        };
-    };
-
-    let matches = if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+fn output_matches_pattern(output: &str, pattern: &str) -> bool {
+    if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
         let re_pattern = &pattern[1..pattern.len() - 1];
         match regex::Regex::new(re_pattern) {
-            Ok(re) => re.is_match(&output),
-            Err(_) => output.contains(pattern.as_str()),
+            Ok(re) => re.is_match(output),
+            Err(_) => output.contains(pattern),
         }
     } else {
-        output.contains(pattern.as_str())
+        output.contains(pattern)
+    }
+}
+
+fn dispatch_result_completed(output: String) -> DispatchResult {
+    DispatchResult {
+        status: "completed".to_string(),
+        output: Some(output),
+        error: None,
+        exit_code: None,
+    }
+}
+
+fn evaluate_outcome(output: String, desired_outcome: &Option<String>) -> DispatchResult {
+    let Some(pattern) = desired_outcome else {
+        return dispatch_result_completed(output);
     };
 
-    if matches {
-        DispatchResult {
-            status: "completed".to_string(),
-            output: Some(output),
-            error: None,
-            exit_code: None,
-        }
+    if output_matches_pattern(&output, pattern) {
+        dispatch_result_completed(output)
     } else {
         DispatchResult {
             status: "failed".to_string(),
