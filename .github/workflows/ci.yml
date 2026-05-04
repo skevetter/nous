@@ -11,18 +11,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - uses: j178/prek-action@v2.0.3
+      - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Test
         run: cargo test --workspace
