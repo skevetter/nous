@@ -26,7 +26,7 @@ impl Default for EmbeddingConfig {
         Self {
             provider: EmbeddingProvider::Local,
             model: "all-MiniLM-L6-v2".to_string(),
-            dimensions: 384,
+            dimensions: crate::db::EMBEDDING_DIMENSION,
         }
     }
 }
@@ -341,7 +341,7 @@ mod tests {
         let config = EmbeddingConfig::default();
         assert_eq!(config.provider, EmbeddingProvider::Local);
         assert_eq!(config.model, "all-MiniLM-L6-v2");
-        assert_eq!(config.dimensions, 384);
+        assert_eq!(config.dimensions, crate::db::EMBEDDING_DIMENSION);
     }
 
     #[test]

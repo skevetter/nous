@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use nous_core::db::{read_vec_dimension, VecPool};
 use nous_core::error::NousError;
 use nous_core::memory::{
     Embedder, EmbeddingConfig, EmbeddingProvider, OnnxEmbeddingModel, RigEmbedderAdapter,
@@ -26,6 +27,36 @@ pub fn build_embedder(config: &EmbeddingConfig) -> Result<Arc<dyn Embedder>, Nou
                 .map_err(|e| NousError::Config(format!("failed to create OpenAI client: {e}")))?;
             let model = client.embedding_model_with_ndims(&config.model, config.dimensions);
             Ok(Arc::new(RigEmbedderAdapter::new(model, rt)))
+        }
+    }
+}
+
+/// Validates that `config.dimensions` matches the embedding dimension stored in the live vec0
+/// table. If the table doesn't exist yet (fresh DB) no validation is performed. Returns an error
+/// on mismatch so the daemon can fail fast with a clear message rather than silently inserting
+/// wrong-sized vectors.
+pub fn validate_embedding_dimensions(
+    config: &EmbeddingConfig,
+    vec_pool: &VecPool,
+) -> Result<(), NousError> {
+    match read_vec_dimension(vec_pool)? {
+        None => Ok(()),
+        Some(stored_dim) => {
+            if stored_dim != config.dimensions {
+                Err(NousError::Config(format!(
+                    "embedding dimension mismatch: vec0 table expects float[{stored_dim}] \
+                     but configured provider '{}' uses {} dimensions. \
+                     Re-create the database or set NOUS_EMBEDDING_DIMENSIONS={stored_dim}.",
+                    match config.provider {
+                        EmbeddingProvider::Local => "local",
+                        EmbeddingProvider::Bedrock => "bedrock",
+                        EmbeddingProvider::OpenAi => "openai",
+                    },
+                    config.dimensions,
+                )))
+            } else {
+                Ok(())
+            }
         }
     }
 }
@@ -105,7 +136,7 @@ mod tests {
                 let config = resolve_embedding_config(None, None, None);
                 assert_eq!(config.provider, EmbeddingProvider::Local);
                 assert_eq!(config.model, "all-MiniLM-L6-v2");
-                assert_eq!(config.dimensions, 384);
+                assert_eq!(config.dimensions, nous_core::db::EMBEDDING_DIMENSION);
             },
         );
     }
@@ -159,8 +190,54 @@ mod tests {
             vec![("NOUS_EMBEDDING_DIMENSIONS", Some("not-a-number"))],
             || {
                 let config = resolve_embedding_config(None, None, None);
-                assert_eq!(config.dimensions, 384);
+                assert_eq!(config.dimensions, nous_core::db::EMBEDDING_DIMENSION);
             },
         );
+    }
+
+    #[test]
+    fn validate_dimensions_passes_on_fresh_db() {
+        use nous_core::db::create_vec_pool;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pool = create_vec_pool(&tmp.path().join("vec.db")).unwrap();
+        let config = resolve_embedding_config(None, None, None);
+        assert!(validate_embedding_dimensions(&config, &pool).is_ok());
+    }
+
+    #[test]
+    fn validate_dimensions_passes_on_matching_table() {
+        use nous_core::db::{create_vec_pool, EMBEDDING_DIMENSION};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pool = create_vec_pool(&tmp.path().join("vec.db")).unwrap();
+        {
+            let conn = pool.lock().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE memory_embeddings USING vec0(\
+                 memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);"
+            ))
+            .unwrap();
+        }
+        let config = resolve_embedding_config(None, None, None);
+        assert!(validate_embedding_dimensions(&config, &pool).is_ok());
+    }
+
+    #[test]
+    fn validate_dimensions_fails_on_mismatch() {
+        use nous_core::db::create_vec_pool;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pool = create_vec_pool(&tmp.path().join("vec.db")).unwrap();
+        {
+            let conn = pool.lock().unwrap();
+            conn.execute_batch(
+                "CREATE VIRTUAL TABLE memory_embeddings USING vec0(\
+                 memory_id TEXT PRIMARY KEY, embedding float[384]);",
+            )
+            .unwrap();
+        }
+        let config = resolve_embedding_config(None, None, None);
+        let result = validate_embedding_dimensions(&config, &pool);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("384"), "error should mention stored dim: {msg}");
     }
 }
