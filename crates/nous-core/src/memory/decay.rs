@@ -14,6 +14,9 @@ pub async fn run_importance_decay(
     let moderate_cutoff = (now - chrono::Duration::days(moderate_to_low_days as i64))
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
+    let grace_cutoff = (now - chrono::Duration::hours(24))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
 
     // Run moderate->low first so that high->moderate in the same sweep
     // doesn't immediately cascade to low in one call.
@@ -22,10 +25,11 @@ pub async fn run_importance_decay(
             sea_orm::DbBackend::Sqlite,
             "UPDATE memories SET importance = 'low' \
              WHERE importance = 'moderate' AND archived = 0 \
+             AND created_at < ? \
              AND id NOT IN (\
                  SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
              )",
-            [moderate_cutoff.into()],
+            [grace_cutoff.clone().into(), moderate_cutoff.into()],
         ))
         .await?;
 
@@ -34,10 +38,11 @@ pub async fn run_importance_decay(
             sea_orm::DbBackend::Sqlite,
             "UPDATE memories SET importance = 'moderate' \
              WHERE importance = 'high' AND archived = 0 \
+             AND created_at < ? \
              AND id NOT IN (\
                  SELECT memory_id FROM memory_access_log WHERE accessed_at > ?\
              )",
-            [high_cutoff.into()],
+            [grace_cutoff.into(), high_cutoff.into()],
         ))
         .await?;
 
@@ -87,6 +92,18 @@ mod tests {
 
         assert_eq!(mem.importance, "high");
 
+        // Backdate to 48h ago so it clears the 24h grace period
+        let old_ts = (chrono::Utc::now() - chrono::Duration::hours(48))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET created_at = ? WHERE id = ?",
+            [old_ts.into(), mem.id.clone().into()],
+        ))
+        .await
+        .unwrap();
+
         let affected = run_importance_decay(&db, 0, 0).await.unwrap();
         assert!(affected > 0);
 
@@ -98,6 +115,69 @@ mod tests {
 
         let refreshed2 = get_memory_by_id(&db, &mem.id).await.unwrap();
         assert_eq!(refreshed2.importance, "low");
+    }
+
+    #[tokio::test]
+    async fn decay_grace_period_skips_new_memories() {
+        let (db, _vec_pool, _tmp) = setup().await;
+
+        // Create a fresh memory (within 24h grace period — should NOT decay)
+        let fresh = save_memory(
+            &db,
+            SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: None,
+                title: "Fresh memory".into(),
+                content: "Created just now".into(),
+                memory_type: MemoryType::Fact,
+                importance: Some(Importance::High),
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Backdate another memory to 48h ago (outside grace period — should decay)
+        let old = save_memory(
+            &db,
+            SaveMemoryRequest {
+                workspace_id: None,
+                agent_id: None,
+                title: "Old memory".into(),
+                content: "Created 48h ago".into(),
+                memory_type: MemoryType::Fact,
+                importance: Some(Importance::High),
+                topic_key: None,
+                valid_from: None,
+                valid_until: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let old_created = (chrono::Utc::now() - chrono::Duration::hours(48))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        db.execute(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Sqlite,
+            "UPDATE memories SET created_at = ? WHERE id = ?",
+            [old_created.into(), old.id.clone().into()],
+        ))
+        .await
+        .unwrap();
+
+        // Run decay with threshold 0 (everything eligible by age)
+        run_importance_decay(&db, 0, 0).await.unwrap();
+
+        // Fresh memory should still be high (grace period protects it)
+        let fresh_after = get_memory_by_id(&db, &fresh.id).await.unwrap();
+        assert_eq!(fresh_after.importance, "high");
+
+        // Old memory should have decayed to moderate
+        let old_after = get_memory_by_id(&db, &old.id).await.unwrap();
+        assert_eq!(old_after.importance, "moderate");
     }
 
     #[tokio::test]
