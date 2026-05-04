@@ -133,6 +133,10 @@ async fn main() {
             .local_addr()
             .expect("listener has no local address")
     );
+
+    let process_registry = state.process_registry.clone();
+    let shutdown_state = state.clone();
+
     axum::serve(
         listener,
         nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref()),
@@ -140,6 +144,10 @@ async fn main() {
     .with_graceful_shutdown(async move { shutdown.cancelled().await })
     .await
     .expect("axum server exited with error");
+
+    tracing::info!("HTTP server stopped, shutting down child processes");
+    process_registry.shutdown(&shutdown_state).await;
+
 
     scheduler_handle.await.expect("scheduler task panicked");
 }
