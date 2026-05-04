@@ -1,7 +1,7 @@
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace" },
+  { id = "trailing-whitespace", exclude = "^docs/" },
   { id = "end-of-file-fixer" },
   { id = "check-toml" },
   { id = "check-yaml" },
