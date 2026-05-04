@@ -2,6 +2,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
 use crate::db::VecPool;
 use crate::error::NousError;
+use crate::fts::sanitize_fts5_query;
 
 use super::rerank::rerank_rrf;
 use super::store::get_memory_by_id;
@@ -20,7 +21,7 @@ pub async fn search_memories(
     let mut conditions: Vec<String> = Vec::new();
     let mut params: Vec<sea_orm::Value> = Vec::new();
 
-    let sanitized = sanitize_fts_query(&req.query);
+    let sanitized = sanitize_fts5_query(&req.query);
     params.push(sanitized.into());
 
     if !req.include_archived {
@@ -80,22 +81,6 @@ pub async fn search_memories(
         .map_err(NousError::SeaOrm)
 }
 
-fn sanitize_fts_query(query: &str) -> String {
-    query
-        .split_whitespace()
-        .map(|token| {
-            if token
-                .chars()
-                .any(|c| matches!(c, '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+'))
-            {
-                format!("\"{}\"", token.replace('"', ""))
-            } else {
-                token.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 /// Store a pre-computed embedding vector for a memory.
 /// Writes to the vec0 virtual table for KNN search and also updates the legacy BLOB column.
@@ -493,10 +478,10 @@ mod tests {
 
     #[test]
     fn sanitize_fts_handles_special_chars() {
-        assert_eq!(sanitize_fts_query("INI-076"), "\"INI-076\"");
-        assert_eq!(sanitize_fts_query("simple query"), "simple query");
+        assert_eq!(sanitize_fts5_query("INI-076"), "\"INI-076\"");
+        assert_eq!(sanitize_fts5_query("simple query"), "simple query");
         assert_eq!(
-            sanitize_fts_query("fix auth@service"),
+            sanitize_fts5_query("fix auth@service"),
             "fix \"auth@service\""
         );
     }

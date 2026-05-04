@@ -1,6 +1,7 @@
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
 use crate::error::NousError;
+use crate::fts::sanitize_fts5_query;
 
 use super::{Message, SearchMessagesRequest};
 
@@ -14,6 +15,8 @@ pub async fn search_messages(
 
     let limit = request.limit.unwrap_or(20).min(100);
 
+    let sanitized = sanitize_fts5_query(&request.query);
+
     let (sql, binds): (&str, Vec<sea_orm::Value>) = if let Some(ref room_id) = request.room_id {
         (
             "SELECT rm.* FROM room_messages rm \
@@ -22,7 +25,7 @@ pub async fn search_messages(
              ORDER BY fts.rank \
              LIMIT ?",
             vec![
-                request.query.clone().into(),
+                sanitized.clone().into(),
                 room_id.clone().into(),
                 (limit as i64).into(),
             ],
@@ -34,7 +37,7 @@ pub async fn search_messages(
              WHERE room_messages_fts MATCH ? \
              ORDER BY fts.rank \
              LIMIT ?",
-            vec![request.query.clone().into(), (limit as i64).into()],
+            vec![sanitized.into(), (limit as i64).into()],
         )
     };
 

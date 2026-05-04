@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::entities::resources as res_entity;
 use crate::error::NousError;
+use crate::fts::sanitize_fts5_query;
 
 use super::types::{
     ListResourcesFilter, RegisterResourceRequest, Resource, ResourceStatus, SearchResourcesRequest,
@@ -357,6 +358,7 @@ pub async fn search_fts(
     }
 
     let limit = limit.unwrap_or(20).min(100);
+    let sanitized = sanitize_fts5_query(query_str);
 
     let (sql, params): (&str, Vec<sea_orm::Value>) = if let Some(ns) = namespace {
         (
@@ -364,7 +366,7 @@ pub async fn search_fts(
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? AND r.namespace = ? \
              LIMIT ?",
-            vec![query_str.into(), ns.into(), (limit as i32).into()],
+            vec![sanitized.clone().into(), ns.into(), (limit as i32).into()],
         )
     } else {
         (
@@ -372,7 +374,7 @@ pub async fn search_fts(
              INNER JOIN resources_fts f ON f.rowid = r.rowid \
              WHERE resources_fts MATCH ? \
              LIMIT ?",
-            vec![query_str.into(), (limit as i32).into()],
+            vec![sanitized.into(), (limit as i32).into()],
         )
     };
 

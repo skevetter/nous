@@ -2,6 +2,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
 use crate::entities::tasks as task_entity;
 use crate::error::NousError;
+use crate::fts::sanitize_fts5_query;
 
 use super::types::Task;
 
@@ -15,6 +16,7 @@ pub async fn search_tasks(
     }
 
     let limit = limit.unwrap_or(20).min(100);
+    let sanitized = sanitize_fts5_query(query);
 
     let rows = db
         .query_all(Statement::from_sql_and_values(
@@ -23,7 +25,7 @@ pub async fn search_tasks(
              JOIN tasks_fts fts ON t.rowid = fts.rowid \
              WHERE tasks_fts MATCH ?1 \
              LIMIT ?2",
-            [query.into(), (limit as i64).into()],
+            [sanitized.into(), (limit as i64).into()],
         ))
         .await?;
 
