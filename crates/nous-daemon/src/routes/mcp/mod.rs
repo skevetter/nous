@@ -73,6 +73,7 @@ pub async fn call_tool(
             is_error: None,
         })),
         Err(e) => {
+            tracing::error!(tool = %req.name, error = %e, "MCP tool call failed");
             let (_, msg) = error_to_parts(&e);
             Ok(Json(ToolCallResponse {
                 content: vec![ToolContent {

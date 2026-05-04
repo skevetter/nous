@@ -139,7 +139,8 @@ async fn main() {
 
     axum::serve(
         listener,
-        nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref()),
+        nous_daemon::app_with_options(state, Some(&config.rate_limit), api_key.as_deref())
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async move { shutdown.cancelled().await })
     .await

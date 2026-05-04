@@ -7,7 +7,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 
 use crate::error::NousError;
 
-pub const EMBEDDING_DIMENSION: usize = 384;
+pub const EMBEDDING_DIMENSION: usize = 1024;
 
 pub type VecPool = Arc<Mutex<Connection>>;
 
@@ -106,7 +106,7 @@ const VEC_MIGRATIONS: &[Migration] = &[
         name: "memory_embeddings_vec0",
         sql: "CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
               memory_id TEXT PRIMARY KEY, \
-              embedding float[384]\
+              embedding float[1024]\
               );",
     },
     Migration {

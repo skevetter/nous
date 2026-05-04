@@ -15,9 +15,15 @@ impl MigrationTrait for Migration {
              config_hash TEXT NOT NULL, \
              skills_json TEXT NOT NULL DEFAULT '[]', \
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
-             ); \
-             CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id); \
-             CREATE TABLE IF NOT EXISTS agent_templates (\
+             )",
+        )
+        .await?;
+        db.execute_unprepared(
+            "CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id)",
+        )
+        .await?;
+        db.execute_unprepared(
+            "CREATE TABLE IF NOT EXISTS agent_templates (\
              id TEXT NOT NULL PRIMARY KEY, \
              name TEXT NOT NULL UNIQUE, \
              template_type TEXT NOT NULL, \
@@ -25,12 +31,21 @@ impl MigrationTrait for Migration {
              skill_refs TEXT NOT NULL DEFAULT '[]', \
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), \
              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\
-             ); \
-             ALTER TABLE agents ADD COLUMN current_version_id TEXT REFERENCES agent_versions(id); \
-             ALTER TABLE agents ADD COLUMN upgrade_available INTEGER NOT NULL DEFAULT 0; \
-             ALTER TABLE agents ADD COLUMN template_id TEXT REFERENCES agent_templates(id);",
+             )",
         )
         .await?;
+        for alter in [
+            "ALTER TABLE agents ADD COLUMN current_version_id TEXT REFERENCES agent_versions(id)",
+            "ALTER TABLE agents ADD COLUMN upgrade_available INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE agents ADD COLUMN template_id TEXT REFERENCES agent_templates(id)",
+        ] {
+            if let Err(e) = db.execute_unprepared(alter).await {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(e);
+                }
+            }
+        }
         Ok(())
     }
 
