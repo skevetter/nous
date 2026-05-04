@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, QueryOrder, Set, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, NotSet, Set, Statement};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
@@ -303,16 +303,47 @@ pub async fn dequeue_notification(
     topics: Option<&[String]>,
 ) -> Result<Option<Notification>, NousError> {
     let model = {
-        let mut query = nq_entity::Entity::find()
-            .filter(nq_entity::Column::AgentId.eq(agent_id))
-            .filter(nq_entity::Column::Delivered.eq(false))
-            .order_by_asc(nq_entity::Column::CreatedAt);
+        let mut sql = String::from(
+            "SELECT * FROM notification_queue WHERE agent_id = ? AND delivered = 0",
+        );
+        let mut values: Vec<sea_orm::Value> = vec![agent_id.into()];
 
         if let Some(rid) = room_id {
-            query = query.filter(nq_entity::Column::RoomId.eq(rid));
+            sql.push_str(" AND room_id = ?");
+            values.push(rid.into());
         }
 
-        query.one(db).await?
+        if let Some(filter) = topics {
+            if !filter.is_empty() {
+                // Filter notifications that have at least one matching topic.
+                // Topics are stored as JSON arrays, so we use json_each to check membership.
+                let placeholders: Vec<&str> = filter.iter().map(|_| "?").collect();
+                sql.push_str(&format!(
+                    " AND EXISTS (SELECT 1 FROM json_each(notification_queue.topics) AS je WHERE je.value IN ({}))",
+                    placeholders.join(", ")
+                ));
+                for t in filter {
+                    values.push(t.clone().into());
+                }
+            }
+        }
+
+        sql.push_str(" ORDER BY created_at ASC LIMIT 1");
+
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                &sql,
+                values,
+            ))
+            .await?;
+
+        match row {
+            Some(r) => {
+                Some(<nq_entity::Model as sea_orm::FromQueryResult>::from_query_result(&r, "")?)
+            }
+            None => None,
+        }
     };
 
     let Some(model) = model else {
@@ -320,12 +351,6 @@ pub async fn dequeue_notification(
     };
 
     let notif_topics: Vec<String> = serde_json::from_str(&model.topics).unwrap_or_default();
-
-    if let Some(filter) = topics {
-        if !filter.is_empty() && !notif_topics.iter().any(|t| filter.contains(t)) {
-            return Ok(None);
-        }
-    }
 
     db.execute(Statement::from_sql_and_values(
         sea_orm::DbBackend::Sqlite,
