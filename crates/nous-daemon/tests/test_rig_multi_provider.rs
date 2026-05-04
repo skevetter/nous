@@ -18,6 +18,7 @@ async fn register_agent(state: &AppState, name: &str, process_type: Option<&str>
         &state.pool,
         RegisterAgentRequest {
             name: name.into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,

@@ -30,6 +30,7 @@ async fn agent_search_returns_matching_agents() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "uniquefindable".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("search-ns".into()),
             room: None,
@@ -67,6 +68,7 @@ async fn agent_search_no_match_returns_empty() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "existingagent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -104,6 +106,7 @@ async fn agent_stale_returns_agents_past_threshold() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "stale-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -145,6 +148,7 @@ async fn agent_inspect_returns_details() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "inspect-me".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -179,6 +183,7 @@ async fn agent_versioning_record_list_rollback() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "version-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -282,6 +287,7 @@ async fn agent_notify_upgrade_and_list_outdated() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "upgrade-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("upgrade-ns".into()),
             room: None,
@@ -773,6 +779,7 @@ async fn resource_transfer_ownership() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "from-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,
@@ -787,6 +794,7 @@ async fn resource_transfer_ownership() {
         &state.pool,
         nous_core::agents::RegisterAgentRequest {
             name: "to-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: None,
             room: None,

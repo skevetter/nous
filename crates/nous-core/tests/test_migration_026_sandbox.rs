@@ -50,6 +50,7 @@ async fn migration_026_runs_on_existing_db_with_data() {
         &pools.fts,
         RegisterAgentRequest {
             name: "existing-data-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -129,6 +130,7 @@ async fn process_struct_reads_and_writes_sandbox_fields() {
         &pools.fts,
         RegisterAgentRequest {
             name: "sandbox-test-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -186,6 +188,7 @@ async fn existing_process_types_still_work() {
         &pools.fts,
         RegisterAgentRequest {
             name: "legacy-test-agent".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
@@ -359,6 +362,7 @@ async fn create_sandbox_process_sets_correct_fields() {
         &pools.fts,
         RegisterAgentRequest {
             name: "create-sandbox-test".into(),
+            agent_type: None,
             parent_id: None,
             namespace: Some("default".into()),
             room: None,
