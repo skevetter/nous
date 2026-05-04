@@ -415,115 +415,161 @@ async fn execute(cmd: AgentCommands, port: Option<u16>) -> Result<(), Box<dyn st
     pools.run_migrations().await?;
     let pool = &pools.fts;
 
+    dispatch_db_cmd(pool, &config, cmd).await?;
+
+    pools.close().await;
+    Ok(())
+}
+
+async fn dispatch_db_cmd(
+    pool: &DatabaseConnection,
+    config: &Config,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        AgentCommands::Add { .. }
+        | AgentCommands::Delete { .. }
+        | AgentCommands::Remove { .. }
+        | AgentCommands::Register { .. }
+        | AgentCommands::Update { .. }
+        | AgentCommands::Deregister { .. }
+        | AgentCommands::Lookup { .. }
+        | AgentCommands::List { .. }
+        | AgentCommands::Tree { .. } => dispatch_membership_cmd(pool, cmd).await?,
+        AgentCommands::Heartbeat { .. }
+        | AgentCommands::Children { .. }
+        | AgentCommands::Ancestors { .. }
+        | AgentCommands::Search { .. }
+        | AgentCommands::Stale { .. }
+        | AgentCommands::Inspect { .. } => dispatch_query_cmd(pool, cmd).await?,
+        _ => dispatch_process_cmd(pool, config, cmd).await?,
+    }
+    Ok(())
+}
+
+async fn dispatch_membership_cmd(
+    pool: &DatabaseConnection,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         AgentCommands::Add { file } => cmd_add(pool, file).await?,
-        AgentCommands::Delete {
-            name_or_id,
-            namespace,
-            force,
+        AgentCommands::Delete { name_or_id, namespace, force }
+        | AgentCommands::Remove { name_or_id, namespace, force } => {
+            cmd_delete(pool, name_or_id, namespace, force).await?
         }
-        | AgentCommands::Remove {
-            name_or_id,
-            namespace,
-            force,
-        } => cmd_delete(pool, name_or_id, namespace, force).await?,
-        AgentCommands::Register {
-            name,
-            agent_type,
-            parent,
-            namespace,
-            room,
-            metadata,
-            status,
-        } => cmd_register(pool, name, agent_type, parent, namespace, room, metadata, status).await?,
-        AgentCommands::Update {
-            id,
-            process_type,
-            spawn_command,
-            working_dir,
-            auto_restart,
-            metadata,
-        } => cmd_update(pool, id, process_type, spawn_command, working_dir, auto_restart, metadata).await?,
+        AgentCommands::Register { name, agent_type, parent, namespace, room, metadata, status } => {
+            cmd_register(pool, RegisterArgs { name, agent_type, parent, namespace, room, metadata, status }).await?
+        }
+        AgentCommands::Update { id, process_type, spawn_command, working_dir, auto_restart, metadata } => {
+            cmd_update(pool, UpdateArgs { id, process_type, spawn_command, working_dir, auto_restart, metadata }).await?
+        }
         AgentCommands::Deregister { id, force } => cmd_deregister(pool, id, force).await?,
         AgentCommands::Lookup { name, namespace } => cmd_lookup(pool, name, namespace).await?,
-        AgentCommands::List {
-            status,
-            namespace,
-            limit,
-            output,
-        } => cmd_list(pool, status, namespace, limit, output).await?,
+        AgentCommands::List { status, namespace, limit, output } => {
+            cmd_list(pool, ListArgs { status, namespace, limit, output }).await?
+        }
         AgentCommands::Tree { root, namespace } => cmd_tree(pool, root, namespace).await?,
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+async fn dispatch_query_cmd(
+    pool: &DatabaseConnection,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
         AgentCommands::Heartbeat { id, status } => cmd_heartbeat(pool, id, status).await?,
         AgentCommands::Children { id, namespace } => cmd_children(pool, id, namespace).await?,
         AgentCommands::Ancestors { id, namespace } => cmd_ancestors(pool, id, namespace).await?,
-        AgentCommands::Search {
-            query,
-            namespace,
-            limit,
-        } => cmd_search(pool, query, namespace, limit).await?,
-        AgentCommands::Stale {
-            threshold,
-            namespace,
-        } => cmd_stale(pool, threshold, namespace).await?,
+        AgentCommands::Search { query, namespace, limit } => cmd_search(pool, query, namespace, limit).await?,
+        AgentCommands::Stale { threshold, namespace } => cmd_stale(pool, threshold, namespace).await?,
         AgentCommands::Inspect { id } => cmd_inspect(pool, id).await?,
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+async fn dispatch_process_cmd(
+    pool: &DatabaseConnection,
+    config: &Config,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        AgentCommands::Versions { .. }
+        | AgentCommands::RecordVersion { .. }
+        | AgentCommands::Rollback { .. }
+        | AgentCommands::Status { .. }
+        | AgentCommands::Outdated { .. }
+        | AgentCommands::NotifyUpgrade { .. }
+        | AgentCommands::Template { .. } => dispatch_version_cmd(pool, cmd).await?,
+        _ => dispatch_runtime_cmd(pool, config, cmd).await?,
+    }
+    Ok(())
+}
+
+async fn dispatch_version_cmd(
+    pool: &DatabaseConnection,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
         AgentCommands::Versions { id, limit } => cmd_versions(pool, id, limit).await?,
-        AgentCommands::RecordVersion {
-            agent_id,
-            skill_hash,
-            config_hash,
-            skills_json,
-        } => cmd_record_version(pool, agent_id, skill_hash, config_hash, skills_json).await?,
+        AgentCommands::RecordVersion { agent_id, skill_hash, config_hash, skills_json } => {
+            cmd_record_version(pool, agents::RecordVersionRequest { agent_id, skill_hash, config_hash, skills_json }).await?
+        }
         AgentCommands::Rollback { id, version } => cmd_rollback(pool, id, version).await?,
         AgentCommands::Status { id, status } => cmd_status(pool, id, status).await?,
         AgentCommands::Outdated { namespace, limit } => cmd_outdated(pool, namespace, limit).await?,
         AgentCommands::NotifyUpgrade { id } => cmd_notify_upgrade(pool, id).await?,
         AgentCommands::Template { command } => cmd_template(pool, command).await?,
-        AgentCommands::Spawn {
-            id,
-            command,
-            r#type,
-            working_dir,
-            timeout,
-            sandbox_image,
-            sandbox_cpus,
-            sandbox_memory,
-            sandbox_network,
-            sandbox_volume,
-        } => {
-            let args = SpawnArgs {
-                id,
-                command,
-                process_type: r#type,
-                working_dir,
-                timeout,
-                sandbox_image,
-                sandbox_cpus,
-                sandbox_memory,
-                sandbox_network,
-                sandbox_volume,
-            };
-            cmd_spawn(pool, args).await?;
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+async fn dispatch_runtime_cmd(
+    pool: &DatabaseConnection,
+    config: &Config,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        AgentCommands::Invoke { .. } | AgentCommands::InvokeResult { .. } | AgentCommands::Invocations { .. } => {
+            dispatch_invoke_cmd(pool, config, cmd).await?
         }
+        AgentCommands::Spawn { .. } => dispatch_spawn_cmd(pool, cmd).await?,
         AgentCommands::Stop { id, force: _, grace: _ } => cmd_stop(pool, id).await?,
         AgentCommands::Restart { id, command } => cmd_restart(pool, id, command).await?,
-        AgentCommands::Invoke {
-            id,
-            prompt,
-            timeout,
-            is_async,
-        } => cmd_invoke(&config, id, prompt, timeout, is_async).await?,
-        AgentCommands::InvokeResult { invocation_id } => {
-            cmd_invoke_result(&config, invocation_id).await?;
-        }
-        AgentCommands::Invocations { id, status, limit } => {
-            cmd_invocations(&config, id, status, limit).await?;
-        }
         AgentCommands::Ps => cmd_ps(pool).await?,
         AgentCommands::Logs { id, lines } => cmd_logs(pool, id, lines).await?,
         AgentCommands::Sandbox { command } => cmd_sandbox(pool, command).await?,
+        _ => unreachable!(),
     }
+    Ok(())
+}
 
-    pools.close().await;
+async fn dispatch_invoke_cmd(
+    _pool: &DatabaseConnection,
+    config: &Config,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        AgentCommands::Invoke { id, prompt, timeout, is_async } => {
+            cmd_invoke(config, InvokeArgs { id, prompt, timeout, is_async }).await?
+        }
+        AgentCommands::InvokeResult { invocation_id } => cmd_invoke_result(config, invocation_id).await?,
+        AgentCommands::Invocations { id, status, limit } => cmd_invocations(config, id, status, limit).await?,
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+async fn dispatch_spawn_cmd(
+    pool: &DatabaseConnection,
+    cmd: AgentCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let AgentCommands::Spawn { id, command, r#type, working_dir, timeout, sandbox_image, sandbox_cpus, sandbox_memory, sandbox_network, sandbox_volume } = cmd {
+        cmd_spawn(pool, SpawnArgs { id, command, process_type: r#type, working_dir, timeout, sandbox_image, sandbox_cpus, sandbox_memory, sandbox_network, sandbox_volume }).await?;
+    }
     Ok(())
 }
 
@@ -646,27 +692,22 @@ async fn cmd_delete(
 
 async fn cmd_register(
     pool: &DatabaseConnection,
-    name: String,
-    agent_type: Option<String>,
-    parent: Option<String>,
-    namespace: Option<String>,
-    room: Option<String>,
-    metadata: Option<String>,
-    status: Option<String>,
+    args: RegisterArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let agent_status = status
+    let agent_status = args
+        .status
         .as_deref()
         .map(|s| s.parse::<agents::AgentStatus>())
         .transpose()?;
     let agent = agents::register_agent(
         pool,
         agents::RegisterAgentRequest {
-            name,
-            agent_type,
-            parent_id: parent,
-            namespace,
-            room,
-            metadata,
+            name: args.name,
+            agent_type: args.agent_type,
+            parent_id: args.parent,
+            namespace: args.namespace,
+            room: args.room,
+            metadata: args.metadata,
             status: agent_status,
         },
     )
@@ -677,22 +718,17 @@ async fn cmd_register(
 
 async fn cmd_update(
     pool: &DatabaseConnection,
-    id: String,
-    process_type: Option<String>,
-    spawn_command: Option<String>,
-    working_dir: Option<String>,
-    auto_restart: Option<bool>,
-    metadata: Option<String>,
+    args: UpdateArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let agent = agents::processes::update_agent(
         pool,
         UpdateAgentRequest {
-            id: &id,
-            process_type: process_type.as_deref(),
-            spawn_command: spawn_command.as_deref(),
-            working_dir: working_dir.as_deref(),
-            auto_restart,
-            metadata_json: metadata.as_deref(),
+            id: &args.id,
+            process_type: args.process_type.as_deref(),
+            spawn_command: args.spawn_command.as_deref(),
+            working_dir: args.working_dir.as_deref(),
+            auto_restart: args.auto_restart,
+            metadata_json: args.metadata.as_deref(),
         },
     )
     .await?;
@@ -728,27 +764,25 @@ async fn cmd_lookup(
 
 async fn cmd_list(
     pool: &DatabaseConnection,
-    status: Option<String>,
-    namespace: Option<String>,
-    limit: u32,
-    output: OutputFormat,
+    args: ListArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let status_parsed = status
+    let status_parsed = args
+        .status
         .as_deref()
         .map(|s| s.parse::<agents::AgentStatus>())
         .transpose()?;
     let list = agents::list_agents(
         pool,
         &agents::ListAgentsFilter {
-            namespace,
+            namespace: args.namespace,
             status: status_parsed,
-            limit: Some(limit),
+            limit: Some(args.limit),
             ..Default::default()
         },
     )
     .await?;
     let val = serde_json::to_value(&list)?;
-    print_list(&val, &output, &["id", "name", "agent_type", "status", "namespace", "last_seen_at"]);
+    print_list(&val, &args.output, &["id", "name", "agent_type", "status", "namespace", "last_seen_at"]);
     Ok(())
 }
 
@@ -844,21 +878,9 @@ async fn cmd_versions(
 
 async fn cmd_record_version(
     pool: &DatabaseConnection,
-    agent_id: String,
-    skill_hash: String,
-    config_hash: String,
-    skills_json: Option<String>,
+    req: agents::RecordVersionRequest,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let version = agents::record_version(
-        pool,
-        agents::RecordVersionRequest {
-            agent_id,
-            skill_hash,
-            config_hash,
-            skills_json,
-        },
-    )
-    .await?;
+    let version = agents::record_version(pool, req).await?;
     println!("{}", serde_json::to_string_pretty(&version)?);
     Ok(())
 }
@@ -969,6 +991,39 @@ struct SpawnArgs {
     sandbox_memory: Option<u32>,
     sandbox_network: Option<String>,
     sandbox_volume: Vec<String>,
+}
+
+struct RegisterArgs {
+    name: String,
+    agent_type: Option<String>,
+    parent: Option<String>,
+    namespace: Option<String>,
+    room: Option<String>,
+    metadata: Option<String>,
+    status: Option<String>,
+}
+
+struct UpdateArgs {
+    id: String,
+    process_type: Option<String>,
+    spawn_command: Option<String>,
+    working_dir: Option<String>,
+    auto_restart: Option<bool>,
+    metadata: Option<String>,
+}
+
+struct ListArgs {
+    status: Option<String>,
+    namespace: Option<String>,
+    limit: u32,
+    output: OutputFormat,
+}
+
+struct InvokeArgs {
+    id: String,
+    prompt: String,
+    timeout: Option<i64>,
+    is_async: bool,
 }
 
 async fn cmd_spawn(
@@ -1125,20 +1180,17 @@ async fn cmd_restart(
 
 async fn cmd_invoke(
     config: &Config,
-    id: String,
-    prompt: String,
-    timeout: Option<i64>,
-    is_async: bool,
+    invoke: InvokeArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url = format!("http://{}:{}/mcp/call", config.host, config.port);
     let mut args = serde_json::json!({
-        "agent_id": id,
-        "prompt": prompt,
+        "agent_id": invoke.id,
+        "prompt": invoke.prompt,
     });
-    if let Some(t) = timeout {
+    if let Some(t) = invoke.timeout {
         args["timeout_secs"] = serde_json::json!(t);
     }
-    if is_async {
+    if invoke.is_async {
         args["async"] = serde_json::json!(true);
     }
     let body = serde_json::json!({

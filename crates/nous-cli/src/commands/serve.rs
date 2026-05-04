@@ -313,22 +313,24 @@ async fn setup_config_and_db(
     Ok((config, pools))
 }
 
-async fn run_server(
+struct RunServerParams {
     state: AppState,
     shutdown: CancellationToken,
     listener: TcpListener,
     process_registry: Arc<ProcessRegistry>,
     pools: DbPools,
     is_daemon: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    axum::serve(listener, nous_daemon::app(state.clone()))
-        .with_graceful_shutdown(async move { shutdown.cancelled().await })
+}
+
+async fn run_server(p: RunServerParams) -> Result<(), Box<dyn std::error::Error>> {
+    axum::serve(p.listener, nous_daemon::app(p.state.clone()))
+        .with_graceful_shutdown(async move { p.shutdown.cancelled().await })
         .await?;
 
-    process_registry.shutdown(&state).await;
-    pools.close().await;
+    p.process_registry.shutdown(&p.state).await;
+    p.pools.close().await;
 
-    if is_daemon {
+    if p.is_daemon {
         remove_pid_file();
     }
 
@@ -342,39 +344,48 @@ async fn execute(params: ExecuteParams) -> Result<(), Box<dyn std::error::Error>
         write_pid_file(std::process::id())?;
     }
 
-    let (config, pools) = setup_config_and_db(port).await?;
+    setup_and_run(SetupParams { model, region, profile, port, is_daemon }).await
+}
 
+struct SetupParams {
+    model: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
+    port: Option<u16>,
+    is_daemon: bool,
+}
+
+async fn setup_and_run(p: SetupParams) -> Result<(), Box<dyn std::error::Error>> {
+    let (config, pools) = setup_config_and_db(p.port).await?;
     let shutdown = CancellationToken::new();
     let process_registry = Arc::new(ProcessRegistry::new());
-
     let state = build_state(
         &pools,
-        BuildStateParams {
-            model,
-            region,
-            profile,
-            shutdown: shutdown.clone(),
-            process_registry: process_registry.clone(),
-        },
+        BuildStateParams { model: p.model, region: p.region, profile: p.profile, shutdown: shutdown.clone(), process_registry: process_registry.clone() },
     )
     .await?;
 
-    recover_sandboxes(&pools, &process_registry, &state).await;
-
-    let _scheduler_handle = Scheduler::spawn(
-        state.clone(),
-        SchedulerConfig::default(),
-        Arc::new(SystemClock),
-        shutdown.clone(),
-    );
-
-    spawn_signal_handler(shutdown.clone(), config.port);
+    start_background_services(BackgroundServicesParams { pools: &pools, process_registry: &process_registry, state: &state, shutdown: &shutdown, port: config.port }).await;
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
 
-    run_server(state, shutdown, listener, process_registry, pools, is_daemon).await
+    run_server(RunServerParams { state, shutdown, listener, process_registry, pools, is_daemon: p.is_daemon }).await
+}
+
+struct BackgroundServicesParams<'a> {
+    pools: &'a DbPools,
+    process_registry: &'a Arc<ProcessRegistry>,
+    state: &'a AppState,
+    shutdown: &'a CancellationToken,
+    port: u16,
+}
+
+async fn start_background_services(p: BackgroundServicesParams<'_>) {
+    recover_sandboxes(p.pools, p.process_registry, p.state).await;
+    Scheduler::spawn(p.state.clone(), SchedulerConfig::default(), Arc::new(SystemClock), p.shutdown.clone());
+    spawn_signal_handler(p.shutdown.clone(), p.port);
 }
 
 async fn recover_sandboxes(
