@@ -290,9 +290,7 @@ pub fn schemas() -> Vec<ToolSchema> {
                     "process_type": { "type": "string", "description": "Process type: claude, shell, http (default: shell)" },
                     "working_dir": { "type": "string", "description": "Working directory" },
                     "env": { "type": "object", "description": "Environment variables as key-value pairs" },
-                    "timeout_secs": { "type": "integer", "description": "Process timeout in seconds" },
-                    "restart_policy": { "type": "string", "description": "Restart policy: never, on-failure, always (default: never)" },
-                    "max_restarts": { "type": "integer", "description": "Max restart attempts (default: 3)" }
+                    "timeout_secs": { "type": "integer", "description": "Process timeout in seconds" }
                 },
                 "required": ["agent_id"]
             }),
@@ -858,19 +856,6 @@ async fn handle_spawn(
         .or(agent.working_dir.as_deref());
     let env = args.get("env").filter(|v| !v.is_null()).cloned();
     let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_i64());
-    let restart_policy = args
-        .get("restart_policy")
-        .and_then(|v| v.as_str())
-        .unwrap_or(if agent.auto_restart {
-            "on-failure"
-        } else {
-            "never"
-        });
-    let max_restarts = args
-        .get("max_restarts")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32)
-        .unwrap_or(3);
     let process = state
         .process_registry
         .spawn(SpawnParams {
@@ -881,8 +866,6 @@ async fn handle_spawn(
             working_dir,
             env,
             timeout_secs,
-            restart_policy,
-            max_restarts,
         })
         .await?;
     Ok(serde_json::to_value(process).unwrap())

@@ -18,6 +18,13 @@ use nous_core::error::NousError;
 
 use crate::state::AppState;
 
+/// Convert a potentially-negative i64 timeout to a Duration, falling back to
+/// `default` seconds when the value is negative or otherwise cannot be
+/// represented as u64.
+fn safe_timeout(secs: i64, default: u64) -> Duration {
+    Duration::from_secs(secs.try_into().unwrap_or(default))
+}
+
 pub struct ProcessHandle {
     pub process_id: String,
     pub agent_id: String,
@@ -417,7 +424,7 @@ impl ProcessRegistry {
             timeout_secs,
         } = params;
         // Wait for process exit or cancellation
-        let timeout_duration = timeout_secs.map(|s| Duration::from_secs(s as u64));
+        let timeout_duration = timeout_secs.map(|s| safe_timeout(s, 300));
 
         let result = if let Some(duration) = timeout_duration {
             tokio::select! {
@@ -735,7 +742,7 @@ impl ProcessRegistry {
         if is_async {
             let inv_id = invocation.id.clone();
             let prompt_owned = prompt.to_string();
-            let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+            let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
             let state_clone = state.clone();
             tokio::spawn(async move {
                 let start = std::time::Instant::now();
@@ -812,7 +819,7 @@ impl ProcessRegistry {
         }
 
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+        let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
 
         let result = tokio::time::timeout(timeout, async {
             let output = Command::new("sh")
@@ -917,7 +924,7 @@ impl ProcessRegistry {
         if is_async {
             let inv_id = invocation.id.clone();
             let prompt_owned = prompt.to_string();
-            let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+            let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
             let state_clone = state.clone();
             let client = client.clone();
             tokio::spawn(async move {
@@ -980,7 +987,7 @@ impl ProcessRegistry {
         };
 
         let start = std::time::Instant::now();
-        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300) as u64);
+        let timeout = safe_timeout(timeout_secs.unwrap_or(300), 300);
         let result = tokio::time::timeout(timeout, agent.prompt(prompt)).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
