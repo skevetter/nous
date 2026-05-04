@@ -7,18 +7,19 @@ pub fn sanitize_fts5_query(query: &str) -> String {
     let tokens: Vec<String> = query
         .split_whitespace()
         .map(|token| {
-            let upper = token.to_uppercase();
+            let stripped = token.replace('"', "");
+            let upper = stripped.to_uppercase();
             if matches!(upper.as_str(), "AND" | "OR" | "NOT" | "NEAR") {
-                format!("\"{}\"", token)
-            } else if token.chars().any(|c| {
+                format!("\"{}\"", stripped)
+            } else if stripped.chars().any(|c| {
                 matches!(
                     c,
                     '-' | ':' | '.' | '/' | '\\' | '@' | '#' | '!' | '+' | '(' | ')' | '*' | '^'
                 )
             }) {
-                format!("\"{}\"", token.replace('"', ""))
+                format!("\"{}\"", stripped)
             } else {
-                token.to_string()
+                stripped
             }
         })
         .collect();

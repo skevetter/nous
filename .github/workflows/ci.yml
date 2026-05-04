@@ -20,9 +20,6 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2.9.1
 
-      - name: Setup pre-commit
-        uses: pre-commit/action@v3.0.1
-
       - name: Build
         run: cargo build --workspace
 
