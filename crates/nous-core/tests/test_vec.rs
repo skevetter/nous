@@ -1,4 +1,6 @@
-use nous_core::db::{create_vec_pool, DbPools, VecPool, EMBEDDING_DIMENSION};
+use nous_core::db::{create_vec_pool, DbPools, VecPool};
+
+const DIM: usize = 1024;
 use nous_core::memory::{self, search::SearchSimilarParams, MemoryType, SaveMemoryRequest};
 use tempfile::TempDir;
 
@@ -49,13 +51,13 @@ fn insert_and_knn_roundtrip() {
         conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+             memory_id TEXT PRIMARY KEY, embedding float[{DIM}]);",
         ))
         .unwrap();
     }
 
     // Insert embeddings
-    let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut embedding = vec![0.0f32; DIM];
     embedding[0] = 1.0;
     let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -69,7 +71,7 @@ fn insert_and_knn_roundtrip() {
     }
 
     // Query KNN
-    let mut query_embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut query_embedding = vec![0.0f32; DIM];
     query_embedding[0] = 0.9;
     query_embedding[1] = 0.1;
     let query_bytes: Vec<u8> = query_embedding
@@ -108,16 +110,16 @@ fn upsert_replaces_embedding() {
         conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+             memory_id TEXT PRIMARY KEY, embedding float[{DIM}]);",
         ))
         .unwrap();
     }
 
-    let mut emb1 = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut emb1 = vec![0.0f32; DIM];
     emb1[0] = 1.0;
     let bytes1: Vec<u8> = emb1.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-    let mut emb2 = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut emb2 = vec![0.0f32; DIM];
     emb2[1] = 1.0;
     let bytes2: Vec<u8> = emb2.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -143,7 +145,7 @@ fn upsert_replaces_embedding() {
     }
 
     // Query with emb2-like vector — should find the updated embedding
-    let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut query = vec![0.0f32; DIM];
     query[1] = 1.0;
     let query_bytes: Vec<u8> = query.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -171,14 +173,14 @@ fn knn_returns_correct_top_k() {
         conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS vec_schema_version (id INTEGER PRIMARY KEY, version TEXT NOT NULL);\
              CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\
-             memory_id TEXT PRIMARY KEY, embedding float[{EMBEDDING_DIMENSION}]);",
+             memory_id TEXT PRIMARY KEY, embedding float[{DIM}]);",
         ))
         .unwrap();
     }
 
     // Insert 5 embeddings at different positions
     for i in 0..5u32 {
-        let mut emb = vec![0.0f32; EMBEDDING_DIMENSION];
+        let mut emb = vec![0.0f32; DIM];
         emb[i as usize] = 1.0;
         let bytes: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -191,7 +193,7 @@ fn knn_returns_correct_top_k() {
     }
 
     // Query close to mem-002 (index 2)
-    let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut query = vec![0.0f32; DIM];
     query[2] = 1.0;
     let query_bytes: Vec<u8> = query.iter().flat_map(|f| f.to_le_bytes()).collect();
 
@@ -242,14 +244,14 @@ async fn store_and_search_via_api() {
     .await
     .unwrap();
 
-    let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut embedding = vec![0.0f32; DIM];
     embedding[0] = 1.0;
 
     memory::store_embedding(&pools.fts, &pools.vec, &mem.id, &embedding)
         .await
         .unwrap();
 
-    let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+    let mut query = vec![0.0f32; DIM];
     query[0] = 0.9;
     query[1] = 0.1;
 

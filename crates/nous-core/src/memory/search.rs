@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_and_search_embedding() {
-        use crate::db::EMBEDDING_DIMENSION;
+        const DIM: usize = 1024;
         let (db, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
@@ -525,13 +525,13 @@ mod tests {
         .await
         .unwrap();
 
-        let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+        let mut embedding = vec![0.0f32; DIM];
         embedding[0] = 1.0;
         store_embedding(&db, &vec_pool, &mem.id, &embedding)
             .await
             .unwrap();
 
-        let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+        let mut query = vec![0.0f32; DIM];
         query[0] = 0.9;
         query[1] = 0.1;
         let results = search_similar(SearchSimilarParams {
@@ -551,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_similar_respects_threshold() {
-        use crate::db::EMBEDDING_DIMENSION;
+        const DIM: usize = 1024;
         let (db, vec_pool, _tmp) = setup().await;
 
         let mem = save_memory(
@@ -571,13 +571,13 @@ mod tests {
         .await
         .unwrap();
 
-        let mut embedding = vec![0.0f32; EMBEDDING_DIMENSION];
+        let mut embedding = vec![0.0f32; DIM];
         embedding[0] = 1.0;
         store_embedding(&db, &vec_pool, &mem.id, &embedding)
             .await
             .unwrap();
 
-        let mut query = vec![0.0f32; EMBEDDING_DIMENSION];
+        let mut query = vec![0.0f32; DIM];
         query[1] = 1.0;
         let results = search_similar(SearchSimilarParams {
             db: &db,

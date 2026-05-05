@@ -7,8 +7,6 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 
 use crate::error::NousError;
 
-pub const EMBEDDING_DIMENSION: usize = 1024;
-
 pub type VecPool = Arc<Mutex<Connection>>;
 
 pub struct DbPools {
