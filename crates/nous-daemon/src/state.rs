@@ -46,4 +46,34 @@ impl AppState {
     pub fn sandbox_manager(&self) -> Option<&Arc<tokio::sync::Mutex<SandboxManager>>> {
         self.sandbox_manager.as_ref()
     }
+
+    #[cfg(test)]
+    pub async fn for_testing(pool: DatabaseConnection, vec_pool: VecPool) -> Self {
+        use nous_core::memory::MockEmbedder;
+
+        let registry = Arc::new(NotificationRegistry::new());
+        let embedder: Option<Arc<dyn Embedder>> = Some(Arc::new(MockEmbedder::new()));
+        let tool_services = Self::build_tool_services(
+            pool.clone(),
+            vec_pool.clone(),
+            embedder.clone(),
+            registry.clone(),
+        );
+        Self {
+            pool,
+            vec_pool,
+            registry,
+            embedder,
+            embedding_config: EmbeddingConfig::default(),
+            vector_store_config: VectorStoreConfig::default(),
+            schedule_notify: Arc::new(Notify::new()),
+            shutdown: CancellationToken::new(),
+            process_registry: Arc::new(ProcessRegistry::new()),
+            llm_client: None,
+            default_model: "test-model".to_string(),
+            tool_services,
+            #[cfg(feature = "sandbox")]
+            sandbox_manager: None,
+        }
+    }
 }
