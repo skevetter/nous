@@ -640,3 +640,717 @@ pub async fn update_agent(
 
     super::get_agent_by_id(db, id).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DbPools;
+    use sea_orm::ConnectionTrait;
+    use tempfile::TempDir;
+
+    async fn setup() -> (DatabaseConnection, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let pools = DbPools::connect(tmp.path()).await.unwrap();
+        pools.run_migrations().await.unwrap();
+        let db = pools.fts.clone();
+        db.execute_unprepared(
+            "INSERT INTO agents (id, name, namespace, status) VALUES ('agent-1', 'Agent One', 'default', 'active')"
+        ).await.unwrap();
+        db.execute_unprepared(
+            "INSERT INTO agents (id, name, namespace, status) VALUES ('agent-2', 'Agent Two', 'default', 'active')"
+        ).await.unwrap();
+        (db, tmp)
+    }
+
+    async fn create_stopped_process(db: &DatabaseConnection, agent_id: &str, cmd: &str) -> Process {
+        let p = create_process(CreateProcessParams {
+            db,
+            agent_id,
+            process_type: "shell",
+            command: cmd,
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+        update_process_status(
+            db,
+            UpdateProcessStatusRequest {
+                process_id: &p.id,
+                status: "stopped",
+                exit_code: Some(0),
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    // --- Process CRUD ---
+
+    #[tokio::test]
+    async fn create_process_stores_record() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "echo hello",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(process.agent_id, "agent-1");
+        assert_eq!(process.process_type, "shell");
+        assert_eq!(process.command, "echo hello");
+        assert_eq!(process.status, "pending");
+        assert!(process.pid.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_process_fails_for_unknown_agent() {
+        let (db, _tmp) = setup().await;
+
+        let result = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "no-such-agent",
+            process_type: "shell",
+            command: "echo hi",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await;
+
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn get_process_by_id_returns_correct_record() {
+        let (db, _tmp) = setup().await;
+
+        let created = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "sleep 1",
+            working_dir: Some("/tmp"),
+            env_json: Some(r#"{"FOO":"bar"}"#),
+            timeout_secs: Some(30),
+        })
+        .await
+        .unwrap();
+
+        let fetched = get_process_by_id(&db, &created.id).await.unwrap();
+
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.working_dir, Some("/tmp".to_string()));
+        assert_eq!(fetched.timeout_secs, Some(30));
+    }
+
+    #[tokio::test]
+    async fn get_process_by_id_returns_not_found() {
+        let (db, _tmp) = setup().await;
+
+        let result = get_process_by_id(&db, "nonexistent-id").await;
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn list_processes_returns_agent_processes_newest_first() {
+        let (db, _tmp) = setup().await;
+
+        // Only one active process allowed per agent at a time; stop each before creating next.
+        for cmd in ["cmd-a", "cmd-b", "cmd-c"] {
+            create_stopped_process(&db, "agent-1", cmd).await;
+        }
+
+        let processes = list_processes(&db, "agent-1", None).await.unwrap();
+        assert_eq!(processes.len(), 3);
+        // Newest first
+        assert_eq!(processes[0].command, "cmd-c");
+    }
+
+    #[tokio::test]
+    async fn list_processes_respects_limit() {
+        let (db, _tmp) = setup().await;
+
+        for i in 0..5 {
+            create_stopped_process(&db, "agent-1", &format!("cmd-{i}")).await;
+        }
+
+        let processes = list_processes(&db, "agent-1", Some(2)).await.unwrap();
+        assert_eq!(processes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_processes_excludes_other_agents() {
+        let (db, _tmp) = setup().await;
+
+        create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "agent1-cmd",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-2",
+            process_type: "shell",
+            command: "agent2-cmd",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        let processes = list_processes(&db, "agent-1", None).await.unwrap();
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].command, "agent1-cmd");
+    }
+
+    #[tokio::test]
+    async fn update_process_status_updates_fields() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "echo test",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        let updated = update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "running",
+                exit_code: None,
+                output: Some("hello output"),
+                pid: Some(1234),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.status, "running");
+        assert_eq!(updated.pid, Some(1234));
+        assert_eq!(updated.last_output, Some("hello output".to_string()));
+        assert!(updated.started_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_process_status_sets_stopped_at_on_terminal_status() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "echo done",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        let updated = update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "stopped",
+                exit_code: Some(0),
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.status, "stopped");
+        assert_eq!(updated.exit_code, Some(0));
+        assert!(updated.stopped_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_process_status_returns_not_found_for_unknown_id() {
+        let (db, _tmp) = setup().await;
+
+        let result = update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: "ghost-process",
+                status: "running",
+                exit_code: None,
+                output: None,
+                pid: None,
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn get_active_process_returns_running_process() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "run-forever",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "running",
+                exit_code: None,
+                output: None,
+                pid: Some(999),
+            },
+        )
+        .await
+        .unwrap();
+
+        let active = get_active_process(&db, "agent-1").await.unwrap();
+        assert!(active.is_some());
+        assert_eq!(active.unwrap().id, process.id);
+    }
+
+    #[tokio::test]
+    async fn get_active_process_returns_none_when_all_stopped() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "finished",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "stopped",
+                exit_code: Some(0),
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let active = get_active_process(&db, "agent-1").await.unwrap();
+        assert!(active.is_none());
+    }
+
+    // --- Invocation CRUD ---
+
+    #[tokio::test]
+    async fn create_invocation_stores_record() {
+        let (db, _tmp) = setup().await;
+
+        let inv = create_invocation(&db, "agent-1", "do something", None)
+            .await
+            .unwrap();
+
+        assert_eq!(inv.agent_id, "agent-1");
+        assert_eq!(inv.prompt, "do something");
+        assert_eq!(inv.status, "pending");
+        assert!(inv.result.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_invocation_links_active_process() {
+        let (db, _tmp) = setup().await;
+
+        let process = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "daemon",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &process.id,
+                status: "running",
+                exit_code: None,
+                output: None,
+                pid: Some(42),
+            },
+        )
+        .await
+        .unwrap();
+
+        let inv = create_invocation(&db, "agent-1", "prompt", None)
+            .await
+            .unwrap();
+
+        assert_eq!(inv.process_id, Some(process.id));
+    }
+
+    #[tokio::test]
+    async fn create_invocation_fails_for_unknown_agent() {
+        let (db, _tmp) = setup().await;
+
+        let result = create_invocation(&db, "ghost-agent", "prompt", None).await;
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn get_invocation_returns_not_found() {
+        let (db, _tmp) = setup().await;
+
+        let result = get_invocation(&db, "no-such-inv").await;
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn update_invocation_sets_completed() {
+        let (db, _tmp) = setup().await;
+
+        let inv = create_invocation(&db, "agent-1", "task", None)
+            .await
+            .unwrap();
+
+        let updated = update_invocation(
+            &db,
+            UpdateInvocationRequest {
+                invocation_id: &inv.id,
+                status: "completed",
+                result: Some("all done"),
+                error: None,
+                duration_ms: Some(150),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.status, "completed");
+        assert_eq!(updated.result, Some("all done".to_string()));
+        assert_eq!(updated.duration_ms, Some(150));
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_invocation_sets_failed() {
+        let (db, _tmp) = setup().await;
+
+        let inv = create_invocation(&db, "agent-1", "risky task", None)
+            .await
+            .unwrap();
+
+        let updated = update_invocation(
+            &db,
+            UpdateInvocationRequest {
+                invocation_id: &inv.id,
+                status: "failed",
+                result: None,
+                error: Some("boom"),
+                duration_ms: Some(50),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.status, "failed");
+        assert_eq!(updated.error, Some("boom".to_string()));
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_invocations_returns_newest_first() {
+        let (db, _tmp) = setup().await;
+
+        for prompt in ["first", "second", "third"] {
+            create_invocation(&db, "agent-1", prompt, None)
+                .await
+                .unwrap();
+        }
+
+        let invocations = list_invocations(&db, "agent-1", None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(invocations.len(), 3);
+        assert_eq!(invocations[0].prompt, "third");
+    }
+
+    #[tokio::test]
+    async fn list_invocations_filters_by_status() {
+        let (db, _tmp) = setup().await;
+
+        let inv1 = create_invocation(&db, "agent-1", "p1", None).await.unwrap();
+        let inv2 = create_invocation(&db, "agent-1", "p2", None).await.unwrap();
+
+        update_invocation(
+            &db,
+            UpdateInvocationRequest {
+                invocation_id: &inv1.id,
+                status: "completed",
+                result: Some("ok"),
+                error: None,
+                duration_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let _ = inv2;
+
+        let pending = list_invocations(&db, "agent-1", Some("pending"), None)
+            .await
+            .unwrap();
+        let completed = list_invocations(&db, "agent-1", Some("completed"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(completed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_invocations_excludes_other_agents() {
+        let (db, _tmp) = setup().await;
+
+        create_invocation(&db, "agent-1", "for agent 1", None)
+            .await
+            .unwrap();
+        create_invocation(&db, "agent-2", "for agent 2", None)
+            .await
+            .unwrap();
+
+        let result = list_invocations(&db, "agent-1", None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].prompt, "for agent 1");
+    }
+
+    // --- cleanup_agent_processes + update_agent ---
+
+    #[tokio::test]
+    async fn cleanup_agent_processes_removes_all_processes() {
+        let (db, _tmp) = setup().await;
+
+        create_stopped_process(&db, "agent-1", "cmd-1").await;
+        create_stopped_process(&db, "agent-1", "cmd-2").await;
+
+        cleanup_agent_processes(&db, "agent-1").await.unwrap();
+
+        let remaining = list_processes(&db, "agent-1", None).await.unwrap();
+        assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_agent_processes_only_affects_target_agent() {
+        let (db, _tmp) = setup().await;
+
+        create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "agent1-proc",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-2",
+            process_type: "shell",
+            command: "agent2-proc",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        cleanup_agent_processes(&db, "agent-1").await.unwrap();
+
+        let agent2_procs = list_processes(&db, "agent-2", None).await.unwrap();
+        assert_eq!(agent2_procs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_is_idempotent_on_empty_agent() {
+        let (db, _tmp) = setup().await;
+
+        // No processes for agent-1; cleanup should still succeed
+        let result = cleanup_agent_processes(&db, "agent-1").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn update_agent_sets_process_fields() {
+        let (db, _tmp) = setup().await;
+
+        let updated = update_agent(
+            &db,
+            UpdateAgentRequest {
+                id: "agent-1",
+                process_type: Some("claude"),
+                spawn_command: Some("nous-agent start"),
+                working_dir: Some("/workspace"),
+                auto_restart: Some(true),
+                metadata_json: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.process_type, Some("claude".to_string()));
+        assert_eq!(
+            updated.spawn_command,
+            Some("nous-agent start".to_string())
+        );
+        assert_eq!(updated.working_dir, Some("/workspace".to_string()));
+        assert!(updated.auto_restart);
+    }
+
+    #[tokio::test]
+    async fn update_agent_with_no_fields_returns_unchanged() {
+        let (db, _tmp) = setup().await;
+
+        let original = super::super::get_agent_by_id(&db, "agent-1").await.unwrap();
+        let updated = update_agent(
+            &db,
+            UpdateAgentRequest {
+                id: "agent-1",
+                process_type: None,
+                spawn_command: None,
+                working_dir: None,
+                auto_restart: None,
+                metadata_json: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.id, original.id);
+        assert_eq!(updated.process_type, original.process_type);
+    }
+
+    #[tokio::test]
+    async fn update_agent_returns_not_found_for_unknown_id() {
+        let (db, _tmp) = setup().await;
+
+        let result = update_agent(
+            &db,
+            UpdateAgentRequest {
+                id: "ghost-agent",
+                process_type: Some("shell"),
+                spawn_command: None,
+                working_dir: None,
+                auto_restart: None,
+                metadata_json: None,
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(NousError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn list_all_active_processes_returns_only_active() {
+        let (db, _tmp) = setup().await;
+
+        let p1 = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-1",
+            process_type: "shell",
+            command: "running-cmd",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        let p2 = create_process(CreateProcessParams {
+            db: &db,
+            agent_id: "agent-2",
+            process_type: "shell",
+            command: "stopped-cmd",
+            working_dir: None,
+            env_json: None,
+            timeout_secs: None,
+        })
+        .await
+        .unwrap();
+
+        update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &p1.id,
+                status: "running",
+                exit_code: None,
+                output: None,
+                pid: Some(100),
+            },
+        )
+        .await
+        .unwrap();
+
+        update_process_status(
+            &db,
+            UpdateProcessStatusRequest {
+                process_id: &p2.id,
+                status: "stopped",
+                exit_code: Some(0),
+                output: None,
+                pid: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let active = list_all_active_processes(&db).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, p1.id);
+    }
+}
